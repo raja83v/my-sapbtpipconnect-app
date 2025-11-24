@@ -1,0 +1,136 @@
+---
+title: Your Blog Post Title Here
+categories: ["company"] # Options: company, marketing, newsroom, partners, engineering, press
+publishedAt: 2024-01-15 # Format: YYYY-MM-DD
+featured: false # Set to true to feature this post
+image: /images/blog/your-image.jpg
+author: codehagen # Author slug from content/authors
+summary: A compelling summary of your blog post that will appear in previews and SEO descriptions. Keep it concise and engaging.
+seoTitle: Optional custom SEO title (defaults to title)
+seoDescription: Optional custom SEO description (defaults to summary)
+seoKeywords: ["keyword1", "keyword2", "keyword3"]
+related: ["other-post-slug"] # Optional: related article slugs
+---
+
+## Introduction
+
+Start your blog post with an engaging introduction that hooks the reader and sets up what they'll learn.
+
+Use **bold** for emphasis and *italics* for subtle highlights.
+
+## Main Content Section
+
+Break your content into logical sections with H2 headings (##). This helps with:
+
+- Readability
+- SEO optimization
+- Table of contents generation
+
+### Subsections
+
+Use H3 headings (###) for subsections within your main sections.
+
+## Using MDX Components
+
+You can use various MDX components in your content:
+
+### Images
+
+<Image
+  src="/images/example.jpg"
+  alt="Description of the image"
+/>
+
+### Videos
+
+<Video
+  src="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  title="Video Title"
+  caption="Optional caption for the video"
+/>
+
+### Code Blocks
+
+```javascript
+const example = "Your code here"
+console.log(example)
+```
+
+### Call to Action
+
+<CTA
+  badge="New Feature"
+  title="Try it yourself"
+  description="Get started with our platform today"
+  primaryAction={{
+    label: "Sign Up",
+    href: "/signup"
+  }}
+  secondaryAction={{
+    label: "Learn More",
+    href: "/docs"
+  }}
+/>
+
+### Notes and Callouts
+
+<Note variant="info">
+This is an informational note. Use it to highlight important information.
+</Note>
+
+<Note variant="warning">
+This is a warning. Use it for cautionary information.
+</Note>
+
+<Note variant="success">
+This is a success message. Use it to highlight positive outcomes.
+</Note>
+
+### Diagrams
+
+<Mermaid
+  chart={`graph TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Result 1]
+    B -->|No| D[Result 2]`}
+  caption="Flow diagram example"
+/>
+
+### Code Playground
+
+<CodeSandbox
+  id="your-sandbox-id"
+  title="Interactive Example"
+  height={500}
+/>
+
+### Tabs for Multiple Options
+
+<Tabs
+  tabs={[
+    {
+      label: "JavaScript",
+      value: "js",
+      content: <pre>console.log("Hello")</pre>
+    },
+    {
+      label: "Python",
+      value: "py",
+      content: <pre>print("Hello")</pre>
+    }
+  ]}
+/>
+
+## Best Practices
+
+1. **Keep paragraphs short** - Easier to read on screens
+2. **Use headings liberally** - Helps with navigation
+3. **Include visuals** - Images, diagrams, and videos enhance understanding
+4. **Link to related content** - Use the `related` frontmatter field
+5. **Write for SEO** - Include relevant keywords naturally
+
+## Conclusion
+
+Wrap up your post with a clear conclusion that summarizes the key points and provides next steps for readers.
+
+<HelpArticles />

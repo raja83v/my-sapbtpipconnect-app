@@ -1,0 +1,105 @@
+---
+title: Your Help Article Title
+updatedAt: 2024-01-15 # Format: YYYY-MM-DD
+summary: A concise summary explaining what this help article covers.
+author: codehagen
+categories: ["getting-started"] # Options: overview, getting-started, terms, for-investors, analysis, valuation
+related: ["related-article-slug"]
+excludeHeadingsFromSearch: false # Set to true to exclude H2 headings from search
+seoTitle: Optional custom SEO title
+seoDescription: Optional custom SEO description
+seoKeywords: ["help", "tutorial", "guide"]
+---
+
+## Overview
+
+Start with a clear overview that explains what problem this article solves or what concept it explains.
+
+## Prerequisites
+
+<Prerequisites>
+- List any requirements or prerequisites
+- What users should know before starting
+- Required account settings or permissions
+</Prerequisites>
+
+## Step-by-Step Guide
+
+Break down complex processes into clear, numbered steps:
+
+<Stepper>
+  <Step title="First Step">
+    Explain the first action users need to take.
+
+    Include screenshots or examples where helpful.
+  </Step>
+
+  <Step title="Second Step">
+    Continue with the next action.
+
+    <Note variant="info">
+    Provide helpful tips or additional context.
+    </Note>
+  </Step>
+
+  <Step title="Final Step">
+    Complete the process.
+  </Step>
+</Stepper>
+
+## Common Use Cases
+
+### Use Case 1
+
+Describe a specific scenario where this feature is useful.
+
+<Example
+  title="Example Calculation"
+  steps={[
+    { label: "Starting value", value: 1000 },
+    { label: "Multiplier", value: 1.5, calculation: "1000 × 1.5" },
+    { label: "Result", value: 1500, isResult: true }
+  ]}
+/>
+
+### Use Case 2
+
+Another practical example of how to use this feature.
+
+## Tips and Best Practices
+
+<Summary
+  title="Key Takeaways"
+  points={[
+    {
+      title: "Best Practice 1",
+      description: "Explanation of why this matters",
+      iconName: "lightbulb"
+    },
+    {
+      title: "Best Practice 2",
+      description: "Another important tip",
+      iconName: "scales"
+    }
+  ]}
+/>
+
+## Troubleshooting
+
+### Problem: Common Issue 1
+
+**Solution:** Explain how to resolve this issue.
+
+### Problem: Common Issue 2
+
+**Solution:** Steps to fix this problem.
+
+## Related Articles
+
+<HelpArticles articles={["article-slug-1", "article-slug-2"]} />
+
+## Still Need Help?
+
+<Info>
+If you need further assistance, please contact our support team or visit our community forum.
+</Info>
