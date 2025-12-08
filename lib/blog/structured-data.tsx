@@ -1,7 +1,7 @@
 import type { BlogPost, HelpPost } from "content-collections"
 
-const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://hagenkit.com"
-const organizationName = "HagenKit"
+const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://cpiconnect.io"
+const organizationName = "CPI Connect"
 const organizationLogo = `${baseUrl}/logo.png`
 
 interface Author {

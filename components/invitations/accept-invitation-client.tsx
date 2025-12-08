@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { acceptInvitation } from "@/app/actions/workspace-invitations";
+import { acceptInvitation } from "@/app/actions/tenant-invitations";
 import { Button } from "@/components/ui/button";
 import {
   Card,

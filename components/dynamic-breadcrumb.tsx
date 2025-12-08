@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useMemo } from "react"
+import { Fragment, useMemo, useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Slash } from "lucide-react"
@@ -13,10 +13,12 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
+import { getIFlowDetails } from "@/app/actions/iflows"
 
 type BreadcrumbEntry = {
   label: string
   href?: string
+  isLoading?: boolean
 }
 
 
@@ -25,6 +27,7 @@ const SEGMENT_NAME_MAP: Record<string, string> = {
   admin: "Admin",
   "sign-in": "Sign In",
   "sign-up": "Sign Up",
+  iflows: "iFlows",
 }
 
 const formatSegment = (segment: string) => {
@@ -42,6 +45,22 @@ const formatSegment = (segment: string) => {
 
 export function DynamicBreadcrumb() {
   const pathname = usePathname()
+  const [iflowName, setIFlowName] = useState<string | null>(null)
+
+  // Check if we're on an iFlow detail page and fetch the name
+  useEffect(() => {
+    const match = pathname?.match(/^\/dashboard\/iflows\/([^/]+)$/)
+    if (match) {
+      const iflowId = match[1]
+      getIFlowDetails(iflowId).then((result) => {
+        if (result.success && result.data) {
+          setIFlowName(result.data.name)
+        }
+      })
+    } else {
+      setIFlowName(null)
+    }
+  }, [pathname])
 
   const breadcrumbs = useMemo((): BreadcrumbEntry[] => {
     if (!pathname) {
@@ -56,15 +75,25 @@ export function DynamicBreadcrumb() {
 
     return pathSegments.map((segment, index) => {
       const href = `/${pathSegments.slice(0, index + 1).join("/")}`
-      const label = formatSegment(segment)
+      let label = formatSegment(segment)
       const isLast = index === pathSegments.length - 1
+      
+      // Special handling for iFlow detail pages - show iFlow name instead of ID
+      const isIFlowDetailPage = pathSegments[0] === "dashboard" && 
+                                pathSegments[1] === "iflows" && 
+                                index === 2
+      
+      if (isIFlowDetailPage) {
+        label = iflowName || "Loading..."
+      }
 
       return {
         label,
         href: isLast ? undefined : href,
+        isLoading: isIFlowDetailPage && !iflowName,
       }
     })
-  }, [pathname])
+  }, [pathname, iflowName])
 
   if (breadcrumbs.length === 0) {
     return null

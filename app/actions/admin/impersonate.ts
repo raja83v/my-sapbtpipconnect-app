@@ -1,25 +1,22 @@
 "use server";
 
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import prisma from "@/lib/prisma";
+import { getCurrentUser } from "../user";
+import { convex, api } from "@/lib/convex";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types/actions";
+import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { role: true },
+    const user = await convex.query(api.users.getById, { 
+      id: currentUser.id as Id<"users">
     });
 
     if (user?.role !== "admin") {
@@ -51,11 +48,9 @@ export async function getImpersonationStatus(): Promise<
   }>
 > {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return {
         success: true,
         data: { isImpersonating: false },
@@ -63,45 +58,44 @@ export async function getImpersonationStatus(): Promise<
     }
 
     // Get the session from database to check impersonatedBy field
-    const dbSession = await prisma.session.findFirst({
-      where: { userId: session.user.id },
-      orderBy: { createdAt: "desc" },
-      select: {
-        impersonatedBy: true,
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-          },
-        },
-      },
+    const sessions = await convex.query(api.users.getActiveSessions, { 
+      userId: currentUser.id as Id<"users">
     });
 
-    if (!dbSession?.impersonatedBy) {
+    const latestSession = sessions[0];
+
+    if (!latestSession?.impersonatedBy) {
       return {
         success: true,
         data: { isImpersonating: false },
       };
     }
 
+    // Get user details
+    const user = await convex.query(api.users.getById, { 
+      id: currentUser.id as Id<"users">
+    });
+
     // Get admin user details
-    const adminUser = await prisma.user.findUnique({
-      where: { id: dbSession.impersonatedBy },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-      },
+    const adminUser = await convex.query(api.users.getById, { 
+      id: latestSession.impersonatedBy as Id<"users">
     });
 
     return {
       success: true,
       data: {
         isImpersonating: true,
-        impersonatedUser: dbSession.user,
-        adminUser: adminUser || undefined,
+        impersonatedUser: user ? {
+          id: user._id,
+          email: user.email,
+          name: user.name || null,
+          image: user.image || null,
+        } : undefined,
+        adminUser: adminUser ? {
+          id: adminUser._id,
+          email: adminUser.email,
+          name: adminUser.name || null,
+        } : undefined,
       },
     };
   } catch (error) {
@@ -117,14 +111,8 @@ export async function impersonateUser(userId: string): Promise<ActionResult> {
 
   try {
     // Check if target user exists
-    const targetUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        status: true,
-      },
+    const targetUser = await convex.query(api.users.getById, { 
+      id: userId as Id<"users">
     });
 
     if (!targetUser) {
@@ -138,36 +126,24 @@ export async function impersonateUser(userId: string): Promise<ActionResult> {
       };
     }
 
-    // Get current session to check if already impersonating
-    const currentSession = await auth.api.getSession({
-      headers: await headers(),
-    });
+    // Get current session user
+    const currentSessionUser = await getCurrentUser();
 
-    if (!currentSession?.user?.id) {
+    if (!currentSessionUser) {
       return { success: false, error: "No active session" };
     }
 
     // Prevent self-impersonation
-    if (currentSession.user.id === userId) {
+    if (currentSessionUser.id === userId) {
       return { success: false, error: "Cannot impersonate yourself" };
     }
 
-    // Call Better Auth admin API to impersonate user
-    const result = await auth.api.impersonateUser({
-      headers: await headers(),
-      body: {
-        userId: userId,
-      },
-    });
-
-    if (!result) {
-      return { success: false, error: "Failed to impersonate user" };
-    }
-
-    revalidatePath("/admin/impersonate");
-    revalidatePath("/dashboard");
-
-    return { success: true };
+    // Note: Impersonation requires auth provider integration
+    // This is a placeholder - actual implementation depends on Clerk impersonation feature
+    return { 
+      success: false, 
+      error: "Impersonation requires Clerk integration - feature not yet implemented" 
+    };
   } catch (error: any) {
     console.error("Error impersonating user:", error);
     return {
@@ -186,15 +162,11 @@ export async function stopImpersonating(): Promise<ActionResult> {
       return { success: false, error: "Not currently impersonating" };
     }
 
-    // Call Better Auth admin API to stop impersonating
-    await auth.api.stopImpersonating({
-      headers: await headers(),
-    });
-
-    revalidatePath("/admin/impersonate");
-    revalidatePath("/dashboard");
-
-    return { success: true };
+    // Note: Requires auth provider integration
+    return { 
+      success: false, 
+      error: "Stop impersonation requires Clerk integration - feature not yet implemented" 
+    };
   } catch (error: any) {
     console.error("Error stopping impersonation:", error);
     return {

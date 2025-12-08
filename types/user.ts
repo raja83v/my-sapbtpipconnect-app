@@ -1,11 +1,11 @@
-import { Prisma } from "@/generated/prisma/client";
+import { Id } from "@/convex/_generated/dataModel";
 
 /**
  * User type returned from getCurrentUser() action
  * Matches the select fields from the user query
  */
 export type CurrentUser = {
-  id: string;
+  id: Id<"users">;
   email: string;
   name: string | null;
   image: string | null;

@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
-import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
+import { OnboardingFlowCpi } from "@/components/onboarding/onboarding-flow-cpi";
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +17,7 @@ export default async function OnboardingPage() {
   }
 
   return (
-    <OnboardingFlow
+    <OnboardingFlowCpi
       userName={user.name}
       userEmail={user.email}
     />

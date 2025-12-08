@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { inviteMember } from "@/app/actions/workspace-invitations";
+import { inviteMember } from "@/app/actions/tenant-invitations";
 import type { InviteMemberInput } from "@/lib/validations/workspace";
 import type { WorkspaceRole } from "@/types/workspace";
 import { z } from "zod";

@@ -25,12 +25,13 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { deleteUserAccount } from "@/app/actions/user-settings";
-import { signOut } from "@/lib/auth-client";
+import { useClerk } from "@clerk/nextjs";
 
 export function AccountTab() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const router = useRouter();
+  const { signOut } = useClerk();
 
   async function handleDeleteAccount() {
     setIsDeleting(true);
@@ -41,13 +42,8 @@ export function AccountTab() {
         toast.success("Account deleted successfully");
 
         // Sign out and redirect to home page
-        await signOut({
-          fetchOptions: {
-            onSuccess: () => {
-              window.location.href = "/";
-            },
-          },
-        });
+        await signOut();
+        router.push("/");
       } else {
         toast.error(result.error || "Failed to delete account");
         setIsDeleting(false);

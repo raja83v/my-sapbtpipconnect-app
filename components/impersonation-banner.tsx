@@ -49,7 +49,7 @@ export function ImpersonationBanner({
   return (
     <div className="sticky top-0 z-50 border-b bg-yellow-50 dark:bg-yellow-950/20">
       <Alert className="rounded-none border-0 border-b border-yellow-200 bg-yellow-50 text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950/20 dark:text-yellow-200">
-        <IconAlertTriangle className="!text-yellow-600 dark:!text-yellow-400" />
+        <IconAlertTriangle className="text-yellow-600! dark:text-yellow-400!" />
         <AlertTitle className="flex items-center justify-between">
           <span>Impersonating User</span>
           <Button

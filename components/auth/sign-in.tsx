@@ -6,40 +6,33 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useMemo, useState } from "react";
-import { authClient, signIn } from "@/lib/auth-client";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
-import { IconInnerShadowTop } from "@tabler/icons-react";
+import { IconCloud } from "@tabler/icons-react";
 import { buttonVariants } from "@/components/ui/button";
-
-function formatLoginMethod(method: string | null) {
-  if (!method) {
-    return null;
-  }
-
-  if (method === "email") {
-    return "Email";
-  }
-
-  return method
-    .split("-")
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
+import { useSignIn, useAuth } from "@clerk/nextjs";
+import type { EmailCodeFactor, SignInResource } from "@clerk/types";
 
 export default function SignInAuth() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { isLoaded, signIn, setActive } = useSignIn();
+  const { isSignedIn } = useAuth();
+  const [mounted, setMounted] = useState(false);
+  
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [pendingEmailCode, setPendingEmailCode] = useState(false);
 
   // Extract callbackURL from query parameters for post-login redirect
-  const searchParams = useSearchParams();
   const rawCallbackUrl = searchParams.get("callbackUrl");
 
   // Prevent open redirects - only allow same-origin paths
@@ -54,13 +47,137 @@ export default function SignInAuth() {
     ? `/sign-up?callbackUrl=${encodeURIComponent(rawCallbackUrl)}`
     : "/sign-up";
 
-  const lastMethod = useMemo(() => authClient.getLastUsedLoginMethod(), []);
-  const formattedMethod = formatLoginMethod(lastMethod);
-  const hasLastMethod = Boolean(lastMethod);
-  const emailIsLast = lastMethod === "email";
-  const googleIsLast = lastMethod === "google";
-  const emailVariant = emailIsLast || !hasLastMethod ? "default" : "outline";
-  const googleVariant = googleIsLast ? "default" : "outline";
+  // Prevent hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Redirect authenticated users to dashboard
+  useEffect(() => {
+    if (isLoaded && isSignedIn) {
+      router.push(callbackURL);
+    }
+  }, [isLoaded, isSignedIn, router, callbackURL]);
+
+  if (!mounted || (isLoaded && isSignedIn)) {
+    return (
+      <div className="container relative hidden h-screen flex-col items-center justify-center md:grid lg:max-w-none lg:grid-cols-2 lg:px-0">
+        <div className="lg:p-8">
+          <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
+            <div className="flex items-center justify-center">
+              <Spinner className="size-8" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle password sign-in
+  const handlePasswordSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isLoaded || isRedirecting) return;
+
+    setLoading(true);
+
+    try {
+      const signInAttempt = await signIn.create({
+        identifier: email,
+        password,
+      });
+
+      if (signInAttempt.status === "complete") {
+        await setActive({ session: signInAttempt.createdSessionId });
+        setIsRedirecting(true);
+        router.push(callbackURL);
+      } else {
+        toast.error("Sign-in incomplete. Please try again.");
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setLoading(false);
+      if (err.errors?.[0]?.code === "form_identifier_not_found") {
+        toast.error("Account not found", {
+          description: "We couldn't find an account with that email.",
+          action: {
+            label: "Sign Up",
+            onClick: () => router.push(signUpUrl),
+          },
+        });
+      } else {
+        toast.error(err.errors?.[0]?.message || "Failed to sign in");
+      }
+    }
+  };
+
+  // Handle email code sign-in (magic link alternative)
+  const handleEmailCodeSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isLoaded || isRedirecting) return;
+
+    setLoading(true);
+
+    try {
+      if (!pendingEmailCode) {
+        // Step 1: Create sign-in with email code strategy
+        const signInAttempt = await signIn.create({
+          identifier: email,
+          strategy: "email_code",
+        });
+
+        const emailCodeFactor = signInAttempt.supportedFirstFactors.find(
+          (factor): factor is EmailCodeFactor => factor.strategy === "email_code"
+        );
+
+        if (emailCodeFactor) {
+          await signIn.prepareFirstFactor({
+            strategy: "email_code",
+            emailAddressId: emailCodeFactor.emailAddressId,
+          });
+          setPendingEmailCode(true);
+          toast.success("Check your email for the verification code!");
+        }
+        setLoading(false);
+      } else {
+        // Step 2: Verify the email code
+        const signInAttempt = await signIn.attemptFirstFactor({
+          strategy: "email_code",
+          code: emailCode,
+        });
+
+        if (signInAttempt.status === "complete") {
+          await setActive({ session: signInAttempt.createdSessionId });
+          setIsRedirecting(true);
+          router.push(callbackURL);
+        } else {
+          toast.error("Verification incomplete. Please try again.");
+          setLoading(false);
+        }
+      }
+    } catch (err: any) {
+      setLoading(false);
+      toast.error(err.errors?.[0]?.message || "Failed to sign in");
+    }
+  };
+
+  // Handle Google OAuth
+  const handleGoogleSignIn = async () => {
+    if (!isLoaded || isRedirecting) return;
+    
+    setLoading(true);
+
+    try {
+      await signIn.authenticateWithRedirect({
+        strategy: "oauth_google",
+        redirectUrl: "/sso-callback",
+        redirectUrlComplete: callbackURL,
+      });
+      setIsRedirecting(true);
+    } catch (err: any) {
+      setLoading(false);
+      toast.error(err.errors?.[0]?.message || "Failed to sign in with Google");
+    }
+  };
 
   return (
     <>
@@ -76,19 +193,19 @@ export default function SignInAuth() {
         </Link>
         <div className="relative hidden h-full flex-col bg-muted p-10 text-white dark:border-r lg:flex">
           <div className="absolute inset-0 bg-zinc-900" />
-          <div className="relative z-20 flex items-center text-lg font-medium">
-            <IconInnerShadowTop className="mr-2 h-6 w-6" />
-            HagenKit
-          </div>
+          <Link href="/" className="relative z-20 flex items-center text-lg font-medium hover:opacity-80 transition-opacity">
+            <IconCloud className="mr-2 h-6 w-6" />
+            CPI Connect
+          </Link>
           <div className="relative z-20 mt-auto">
             <blockquote className="space-y-2">
               <p className="text-lg">
-                &ldquo;HagenKit gave us launch-ready auth, billing, and UI in a
-                single weekend. Our team shipped features instead of scaffolding
-                infrastructure.&rdquo;
+                &ldquo;CPI Connect transformed how we monitor our SAP integrations.
+                Real-time visibility into iFlows and instant error alerts have
+                reduced our mean time to resolution by 75%.&rdquo;
               </p>
               <footer className="text-sm">
-                — Sarah Mitchell, Principal Product Designer
+                — Michael Torres, Integration Lead at Global Manufacturing Corp
               </footer>
             </blockquote>
           </div>
@@ -107,54 +224,15 @@ export default function SignInAuth() {
                   Please sign in to accept your invitation.
                 </div>
               )}
-              {formattedMethod && !isInvitation && (
-                <p className="text-xs text-muted-foreground" aria-live="polite">
-                  Last signed in with {formattedMethod}.
-                </p>
-              )}
             </div>
             <div className="grid gap-6">
               <Tabs defaultValue="password" className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="password">Login</TabsTrigger>
-                  <TabsTrigger value="magic-link">Magic Link</TabsTrigger>
+                  <TabsTrigger value="email-code">Email Code</TabsTrigger>
                 </TabsList>
                 <TabsContent value="password">
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      await signIn.email(
-                        {
-                          email,
-                          password,
-                          callbackURL,
-                          rememberMe,
-                        },
-                        {
-                          onRequest: () => {
-                            setLoading(true);
-                          },
-                          onResponse: () => {
-                            setLoading(false);
-                          },
-                          onError: (ctx) => {
-                            setLoading(false);
-                            if (ctx.error.message.includes("User not found") || ctx.error.status === 401) {
-                                toast.error("Account not found", {
-                                    description: "We couldn't find an account with that email.",
-                                    action: {
-                                        label: "Sign Up",
-                                        onClick: () => router.push("/sign-up"),
-                                    },
-                                });
-                            } else {
-                                toast.error(ctx.error.message);
-                            }
-                          },
-                        }
-                      );
-                    }}
-                  >
+                  <form onSubmit={handlePasswordSignIn}>
                     <div className="grid gap-4 py-4">
                       <div className="grid gap-2">
                         <Label htmlFor="email-password">Email</Label>
@@ -171,12 +249,14 @@ export default function SignInAuth() {
                       <div className="grid gap-2">
                         <div className="flex items-center">
                           <Label htmlFor="password">Password</Label>
-                          <Link
-                            href="/forgot-password"
+                          <a
+                            href="https://accounts.clerk.com/sign-in"
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="ml-auto inline-block text-sm underline"
                           >
                             Forgot password?
-                          </Link>
+                          </a>
                         </div>
                         <Input
                           id="password"
@@ -207,85 +287,73 @@ export default function SignInAuth() {
                       <Button
                         type="submit"
                         className="w-full justify-center"
-                        variant={emailVariant}
-                        disabled={loading}
+                        disabled={loading || isRedirecting}
                       >
-                        {loading && (
+                        {(loading || isRedirecting) && (
                           <Spinner className="mr-2 size-4" aria-hidden="true" />
                         )}
-                        <span>Sign in with Password</span>
-                        {emailIsLast && (
-                          <>
-                            <Badge className="ml-2" variant="secondary">
-                              Last used
-                            </Badge>
-                            <span className="sr-only">Last used login method</span>
-                          </>
-                        )}
+                        <span>{isRedirecting ? "Redirecting..." : "Sign in with Password"}</span>
                       </Button>
                     </div>
                   </form>
                 </TabsContent>
-                <TabsContent value="magic-link">
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      await signIn.magicLink(
-                        {
-                          email,
-                          callbackURL,
-                        },
-                        {
-                          onRequest: () => {
-                            setLoading(true);
-                          },
-                          onResponse: () => {
-                            setLoading(false);
-                          },
-                          onSuccess: () => {
-                            setLoading(false);
-                            toast.success("Check your email for the magic link!");
-                          },
-                          onError: (ctx) => {
-                            setLoading(false);
-                            toast.error(ctx.error.message);
-                          },
-                        }
-                      );
-                    }}
-                  >
+                <TabsContent value="email-code">
+                  <form onSubmit={handleEmailCodeSignIn}>
                     <div className="grid gap-4 py-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="email-magic">Email</Label>
-                        <Input
-                          id="email-magic"
-                          type="email"
-                          placeholder="name@example.com"
-                          required
-                          onChange={(e) => setEmail(e.target.value)}
-                          value={email}
-                          disabled={loading}
-                        />
-                      </div>
+                      {!pendingEmailCode ? (
+                        <div className="grid gap-2">
+                          <Label htmlFor="email-code">Email</Label>
+                          <Input
+                            id="email-code"
+                            type="email"
+                            placeholder="name@example.com"
+                            required
+                            onChange={(e) => setEmail(e.target.value)}
+                            value={email}
+                            disabled={loading}
+                          />
+                        </div>
+                      ) : (
+                        <div className="grid gap-2">
+                          <Label htmlFor="code">Verification Code</Label>
+                          <Input
+                            id="code"
+                            type="text"
+                            placeholder="Enter code from email"
+                            required
+                            onChange={(e) => setEmailCode(e.target.value)}
+                            value={emailCode}
+                            disabled={loading}
+                            autoComplete="one-time-code"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Check your email for the verification code
+                          </p>
+                        </div>
+                      )}
                       <Button
                         type="submit"
                         className="w-full justify-center"
-                        variant={emailVariant}
-                        disabled={loading}
+                        disabled={loading || isRedirecting}
                       >
                         {loading && (
                           <Spinner className="mr-2 size-4" aria-hidden="true" />
                         )}
-                        <span>Sign in with Magic Link</span>
-                        {emailIsLast && (
-                          <>
-                            <Badge className="ml-2" variant="secondary">
-                              Last used
-                            </Badge>
-                            <span className="sr-only">Last used login method</span>
-                          </>
-                        )}
+                        <span>{pendingEmailCode ? "Verify Code" : "Send Verification Code"}</span>
                       </Button>
+                      {pendingEmailCode && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="w-full"
+                          onClick={() => {
+                            setPendingEmailCode(false);
+                            setEmailCode("");
+                          }}
+                        >
+                          Use a different email
+                        </Button>
+                      )}
                     </div>
                   </form>
                 </TabsContent>
@@ -301,25 +369,10 @@ export default function SignInAuth() {
                 </div>
               </div>
               <Button
-                variant={googleVariant}
+                variant="outline"
                 className="w-full justify-center"
-                disabled={loading}
-                onClick={async () => {
-                  await signIn.social(
-                    {
-                      provider: "google",
-                      callbackURL,
-                    },
-                    {
-                      onRequest: () => {
-                        setLoading(true);
-                      },
-                      onResponse: () => {
-                        setLoading(false);
-                      },
-                    }
-                  );
-                }}
+                disabled={loading || isRedirecting}
+                onClick={handleGoogleSignIn}
               >
                 {loading ? (
                   <Spinner className="mr-2 size-4" aria-hidden="true" />
@@ -349,14 +402,6 @@ export default function SignInAuth() {
                   </svg>
                 )}
                 <span>Google</span>
-                {googleIsLast && (
-                  <>
-                    <Badge className="ml-2" variant="secondary">
-                      Last used
-                    </Badge>
-                    <span className="sr-only">Last used login method</span>
-                  </>
-                )}
               </Button>
             </div>
             <p className="px-8 text-center text-sm text-muted-foreground">

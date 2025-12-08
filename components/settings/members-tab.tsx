@@ -16,22 +16,22 @@ import { Separator } from "@/components/ui/separator";
 import { MemberInviteDialog } from "./member-invite-dialog";
 import { MembersDataTable } from "./members-data-table";
 import {
-  getWorkspaceMembers,
-} from "@/app/actions/workspace-members";
+  getTenantMembers,
+} from "@/app/actions/tenant-members";
 import {
   getPendingInvitations,
   cancelInvitation,
-} from "@/app/actions/workspace-invitations";
-import type { WorkspaceMemberWithUser, PendingInvitation } from "@/types/workspace";
+} from "@/app/actions/tenant-invitations";
+import type { TenantMemberWithUser, PendingInvitation } from "@/types/workspace";
 import { formatDate } from "@/lib/format";
 
 interface MembersTabProps {
-  workspaceId: string;
+  tenantId: string;
   currentUserId: string;
 }
 
-export function MembersTab({ workspaceId, currentUserId }: MembersTabProps) {
-  const [members, setMembers] = useState<WorkspaceMemberWithUser[]>([]);
+export function MembersTab({ tenantId, currentUserId }: MembersTabProps) {
+  const [members, setMembers] = useState<TenantMemberWithUser[]>([]);
   const [invitations, setInvitations] = useState<PendingInvitation[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(true);
   const [isLoadingInvitations, setIsLoadingInvitations] = useState(true);
@@ -41,7 +41,7 @@ export function MembersTab({ workspaceId, currentUserId }: MembersTabProps) {
   async function loadMembers() {
     setIsLoadingMembers(true);
     try {
-      const result = await getWorkspaceMembers(workspaceId);
+      const result = await getTenantMembers(tenantId);
       if (result.success && result.data) {
         setMembers(result.data);
       } else {
@@ -58,7 +58,7 @@ export function MembersTab({ workspaceId, currentUserId }: MembersTabProps) {
   async function loadInvitations() {
     setIsLoadingInvitations(true);
     try {
-      const result = await getPendingInvitations(workspaceId);
+      const result = await getPendingInvitations(tenantId);
       if (result.success && result.data) {
         setInvitations(result.data);
       } else {
@@ -117,7 +117,7 @@ export function MembersTab({ workspaceId, currentUserId }: MembersTabProps) {
   useEffect(() => {
     loadMembers();
     loadInvitations();
-  }, [workspaceId]);
+  }, [tenantId]);
 
   return (
     <div className="space-y-6">
@@ -132,7 +132,7 @@ export function MembersTab({ workspaceId, currentUserId }: MembersTabProps) {
               </CardDescription>
             </div>
             <MemberInviteDialog
-              workspaceId={workspaceId}
+              workspaceId={tenantId}
               onInviteSent={handleRefresh}
             />
           </div>

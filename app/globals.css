@@ -120,3 +120,45 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* AI Agent Chat Overflow Fixes */
+@layer components {
+  /* Ensure prose content respects container width */
+  .prose {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  
+  .prose pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  
+  .prose code {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  
+  .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  
+  .prose p {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  
+  /* Ensure mermaid diagrams scale properly */
+  .prose svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+  
+  /* Prevent tables from overflowing */
+  .prose table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}

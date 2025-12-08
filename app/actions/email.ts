@@ -1,7 +1,6 @@
 "use server";
 
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { getCurrentUser } from "./user";
 import { sendTemplateEmail, isValidEmail } from "@/lib/notifications/email-service";
 import { EmailTemplateId } from "@/lib/notifications/types";
 import type { ActionResult } from "@/types/actions";
@@ -12,11 +11,9 @@ import type { EmailTemplateData, SendEmailOptions } from "@/lib/notifications/ty
  */
 async function checkAuthentication(): Promise<ActionResult<boolean>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
@@ -72,7 +69,7 @@ export async function sendWelcomeEmail(
 }
 
 /**
- * Send workspace invitation email
+ * Send workspace invitation email (legacy alias for tenant invitation)
  *
  * @param data - Workspace invitation template data
  * @param to - Recipient email address
@@ -116,6 +113,28 @@ export async function sendWorkspaceInvitationEmail(
           : "Failed to send workspace invitation email",
     };
   }
+}
+
+/**
+ * Send tenant invitation email
+ *
+ * @param data - Tenant invitation template data (maps to workspace invitation)
+ * @param to - Recipient email address
+ * @returns Promise with action result containing email ID
+ */
+export async function sendTenantInvitationEmail(
+  data: { inviterName: string; tenantName: string; inviteeEmail: string; acceptUrl: string },
+  to: string
+): Promise<ActionResult<{ emailId: string }>> {
+  // Map tenant fields to workspace invitation template
+  const mappedData = {
+    inviterName: data.inviterName,
+    workspaceName: data.tenantName, // Map tenantName to workspaceName for template
+    inviteeEmail: data.inviteeEmail,
+    acceptUrl: data.acceptUrl,
+  };
+  
+  return sendWorkspaceInvitationEmail(mappedData, to);
 }
 
 /**

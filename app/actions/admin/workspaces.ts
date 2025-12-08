@@ -1,8 +1,7 @@
 "use server";
 
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import prisma from "@/lib/prisma";
+import { getCurrentUser } from "../user";
+import { convex, api } from "@/lib/convex";
 import {
   createWorkspaceSchema,
   updateWorkspaceSchema,
@@ -13,24 +12,18 @@ import {
 } from "@/lib/validations/workspace";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types/actions";
+import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { role: true },
-    });
-
-    if (user?.role !== "admin") {
+    if (currentUser.role !== "admin") {
       return { success: false, error: "Unauthorized - Admin access required" };
     }
 
@@ -41,7 +34,7 @@ async function checkAdmin(): Promise<ActionResult<boolean>> {
   }
 }
 
-// Get paginated workspaces with search, sort, and filters
+// Get paginated tenants (formerly workspaces) with search, sort, and filters
 export async function getWorkspaces(params?: {
   page?: number;
   pageSize?: number;
@@ -55,107 +48,116 @@ export async function getWorkspaces(params?: {
   try {
     const page = params?.page ?? 1;
     const pageSize = params?.pageSize ?? 10;
-    const skip = (page - 1) * pageSize;
 
-    // Build where clause
-    const where: any = {};
+    // Get all tenants
+    let tenants = await convex.query(api.tenants.listAll, { limit: 1000 });
 
+    // Apply search filter
     if (params?.search) {
-      where.OR = [
-        { name: { contains: params.search, mode: "insensitive" } },
-        { slug: { contains: params.search, mode: "insensitive" } },
-      ];
+      const searchLower = params.search.toLowerCase();
+      tenants = tenants.filter(
+        (t) =>
+          t.name.toLowerCase().includes(searchLower) ||
+          t.slug.toLowerCase().includes(searchLower)
+      );
     }
 
-    // Get total count
-    const total = await prisma.workspace.count({ where });
+    // Apply sorting
+    if (params?.sortBy) {
+      tenants.sort((a, b) => {
+        const aVal = a[params.sortBy as keyof typeof a];
+        const bVal = b[params.sortBy as keyof typeof b];
+        if (aVal === bVal) return 0;
+        if (aVal === null || aVal === undefined) return 1;
+        if (bVal === null || bVal === undefined) return -1;
+        const comparison = aVal < bVal ? -1 : 1;
+        return params.sortOrder === "desc" ? -comparison : comparison;
+      });
+    } else {
+      tenants.sort((a, b) => b._creationTime - a._creationTime);
+    }
 
-    // Get workspaces with pagination
-    const workspaces = await prisma.workspace.findMany({
-      where,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        createdAt: true,
-        updatedAt: true,
-        _count: {
-          select: {
-            members: true,
-            invitations: true,
-          },
-        },
-      },
-      skip,
-      take: pageSize,
-      orderBy: params?.sortBy
-        ? { [params.sortBy]: params.sortOrder ?? "asc" }
-        : { createdAt: "desc" },
-    });
-
+    const total = tenants.length;
     const pageCount = Math.ceil(total / pageSize);
+
+    // Apply pagination
+    const skip = (page - 1) * pageSize;
+    const paginatedTenants = tenants.slice(skip, skip + pageSize);
+
+    // Get member and invitation counts
+    const workspacesWithCounts = await Promise.all(
+      paginatedTenants.map(async (tenant) => {
+        const members = await convex.query(api.tenants.getMembers, { 
+          tenantId: tenant._id 
+        });
+        const invitations = await convex.query(api.tenants.getPendingInvitations, { 
+          tenantId: tenant._id 
+        });
+        return {
+          id: tenant._id,
+          name: tenant.name,
+          slug: tenant.slug,
+          image: null, // Tenants don't have images in this schema
+          createdAt: new Date(tenant._creationTime),
+          updatedAt: new Date(tenant._creationTime),
+          _count: {
+            members: members.length,
+            invitations: invitations.length,
+          },
+        };
+      })
+    );
 
     return {
       success: true,
-      data: { workspaces, total, pageCount },
+      data: { workspaces: workspacesWithCounts, total, pageCount },
     };
   } catch (error) {
-    console.error("Error fetching workspaces:", error);
-    return { success: false, error: "Failed to fetch workspaces" };
+    console.error("Error fetching tenants:", error);
+    return { success: false, error: "Failed to fetch tenants" };
   }
 }
 
-// Get single workspace by ID
+// Get single tenant by ID
 export async function getWorkspaceById(id: string): Promise<ActionResult<any>> {
   const authCheck = await checkAdmin();
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const workspace = await prisma.workspace.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        createdAt: true,
-        updatedAt: true,
-        members: {
-          select: {
-            id: true,
-            role: true,
-            joinedAt: true,
-            user: {
-              select: {
-                id: true,
-                email: true,
-                name: true,
-                image: true,
-              },
-            },
-          },
-        },
-        _count: {
-          select: {
-            invitations: true,
-          },
-        },
-      },
+    const tenant = await convex.query(api.tenants.getWithMembers, { 
+      tenantId: id as Id<"cpiTenants">
     });
 
-    if (!workspace) {
-      return { success: false, error: "Workspace not found" };
+    if (!tenant) {
+      return { success: false, error: "Tenant not found" };
     }
 
-    return { success: true, data: workspace };
+    const invitations = await convex.query(api.tenants.getPendingInvitations, { 
+      tenantId: id as Id<"cpiTenants">
+    });
+
+    return { 
+      success: true, 
+      data: {
+        id: tenant._id,
+        name: tenant.name,
+        slug: tenant.slug,
+        image: null,
+        createdAt: new Date(tenant._creationTime),
+        updatedAt: new Date(tenant._creationTime),
+        members: tenant.members,
+        _count: {
+          invitations: invitations.length,
+        },
+      }
+    };
   } catch (error) {
-    console.error("Error fetching workspace:", error);
-    return { success: false, error: "Failed to fetch workspace" };
+    console.error("Error fetching tenant:", error);
+    return { success: false, error: "Failed to fetch tenant" };
   }
 }
 
-// Create a new workspace
+// Create a new tenant (formerly workspace)
 export async function createWorkspace(input: CreateWorkspaceInput): Promise<ActionResult<any>> {
   const authCheck = await checkAdmin();
   if (!authCheck.success) return { success: false, error: authCheck.error };
@@ -164,66 +166,61 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Acti
     // Validate input
     const validatedData = createWorkspaceSchema.parse(input);
 
-    // Check if workspace with slug already exists
-    const existingWorkspace = await prisma.workspace.findUnique({
-      where: { slug: validatedData.slug },
+    // Check if tenant with slug already exists
+    const existingTenant = await convex.query(api.tenants.getBySlug, { 
+      slug: validatedData.slug 
     });
 
-    if (existingWorkspace) {
-      return { success: false, error: "Workspace with this slug already exists" };
+    if (existingTenant) {
+      return { success: false, error: "Tenant with this slug already exists" };
     }
 
     // Get current user to add as owner
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "User session not found" };
     }
 
-    // Create workspace with creator as owner
-    const workspace = await prisma.workspace.create({
-      data: {
-        name: validatedData.name,
-        slug: validatedData.slug,
-        image: validatedData.image || null,
-        members: {
-          create: {
-            userId: session.user.id,
-            role: "OWNER",
-          },
-        },
-      },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        createdAt: true,
-        _count: {
-          select: {
-            members: true,
-          },
-        },
-      },
+    // Create tenant with creator as owner
+    // Note: This requires tenant URL and auth type - for admin creation, use defaults
+    const tenantId = await convex.mutation(api.tenantMutations.create, {
+      name: validatedData.name,
+      slug: validatedData.slug,
+      tenantUrl: "https://placeholder.example.com", // Admin-created tenants need manual configuration
+      authType: "OAUTH",
+      ownerId: currentUser.id as Id<"users">,
     });
+
+    const tenant = await convex.query(api.tenants.getById, { id: tenantId });
 
     revalidatePath("/admin/workspaces");
 
-    return { success: true, data: workspace };
+    return { 
+      success: true, 
+      data: {
+        id: tenant?._id,
+        name: tenant?.name,
+        slug: tenant?.slug,
+        image: null,
+        createdAt: tenant ? new Date(tenant._creationTime) : new Date(),
+        _count: {
+          members: 1,
+        },
+      }
+    };
   } catch (error: any) {
-    console.error("Error creating workspace:", error);
+    console.error("Error creating tenant:", error);
 
     if (error.name === "ZodError") {
       return { success: false, error: error.errors[0]?.message ?? "Validation failed" };
     }
 
-    return { success: false, error: "Failed to create workspace" };
+    return { success: false, error: "Failed to create tenant" };
   }
 }
 
-// Update a workspace
+// Update a tenant
 export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<ActionResult<any>> {
   const authCheck = await checkAdmin();
   if (!authCheck.success) return { success: false, error: authCheck.error };
@@ -232,19 +229,19 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
     // Validate input
     const validatedData = updateWorkspaceSchema.parse(input);
 
-    // Check if workspace exists
-    const existingWorkspace = await prisma.workspace.findUnique({
-      where: { id: validatedData.id },
+    // Check if tenant exists
+    const existingTenant = await convex.query(api.tenants.getById, { 
+      id: validatedData.id as Id<"cpiTenants">
     });
 
-    if (!existingWorkspace) {
-      return { success: false, error: "Workspace not found" };
+    if (!existingTenant) {
+      return { success: false, error: "Tenant not found" };
     }
 
     // If slug is being updated, check for conflicts
-    if (validatedData.slug && validatedData.slug !== existingWorkspace.slug) {
-      const slugConflict = await prisma.workspace.findUnique({
-        where: { slug: validatedData.slug },
+    if (validatedData.slug && validatedData.slug !== existingTenant.slug) {
+      const slugConflict = await convex.query(api.tenants.getBySlug, { 
+        slug: validatedData.slug 
       });
 
       if (slugConflict) {
@@ -252,46 +249,49 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
       }
     }
 
-    // Build update data
-    const updateData: any = {};
-    if (validatedData.name !== undefined) updateData.name = validatedData.name;
-    if (validatedData.slug !== undefined) updateData.slug = validatedData.slug;
-    if (validatedData.image !== undefined) updateData.image = validatedData.image || null;
+    // Update tenant
+    await convex.mutation(api.tenantMutations.update, {
+      id: validatedData.id as Id<"cpiTenants">,
+      name: validatedData.name,
+      slug: validatedData.slug,
+    });
 
-    // Update workspace
-    const workspace = await prisma.workspace.update({
-      where: { id: validatedData.id },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        updatedAt: true,
-        _count: {
-          select: {
-            members: true,
-          },
-        },
-      },
+    const members = await convex.query(api.tenants.getMembers, { 
+      tenantId: validatedData.id as Id<"cpiTenants">
+    });
+
+    const tenant = await convex.query(api.tenants.getById, { 
+      id: validatedData.id as Id<"cpiTenants">
     });
 
     revalidatePath("/admin/workspaces");
     revalidatePath(`/admin/workspaces/${validatedData.id}`);
 
-    return { success: true, data: workspace };
+    return { 
+      success: true, 
+      data: {
+        id: tenant?._id,
+        name: tenant?.name,
+        slug: tenant?.slug,
+        image: null,
+        updatedAt: new Date(),
+        _count: {
+          members: members.length,
+        },
+      }
+    };
   } catch (error: any) {
-    console.error("Error updating workspace:", error);
+    console.error("Error updating tenant:", error);
 
     if (error.name === "ZodError") {
       return { success: false, error: error.errors[0]?.message ?? "Validation failed" };
     }
 
-    return { success: false, error: "Failed to update workspace" };
+    return { success: false, error: "Failed to update tenant" };
   }
 }
 
-// Delete a workspace
+// Delete a tenant
 export async function deleteWorkspace(input: DeleteWorkspaceInput): Promise<ActionResult> {
   const authCheck = await checkAdmin();
   if (!authCheck.success) return { success: false, error: authCheck.error };
@@ -300,38 +300,30 @@ export async function deleteWorkspace(input: DeleteWorkspaceInput): Promise<Acti
     // Validate input
     const validatedData = deleteWorkspaceSchema.parse(input);
 
-    // Check if workspace exists
-    const existingWorkspace = await prisma.workspace.findUnique({
-      where: { id: validatedData.id },
-      include: {
-        _count: {
-          select: {
-            members: true,
-            invitations: true,
-          },
-        },
-      },
+    // Check if tenant exists
+    const existingTenant = await convex.query(api.tenants.getById, { 
+      id: validatedData.id as Id<"cpiTenants">
     });
 
-    if (!existingWorkspace) {
-      return { success: false, error: "Workspace not found" };
+    if (!existingTenant) {
+      return { success: false, error: "Tenant not found" };
     }
 
-    // Delete workspace (cascade will handle related records)
-    await prisma.workspace.delete({
-      where: { id: validatedData.id },
+    // Delete tenant (this will cascade delete members, invitations, iflows, etc.)
+    await convex.mutation(api.tenantMutations.deleteTenant, { 
+      id: validatedData.id as Id<"cpiTenants">
     });
 
     revalidatePath("/admin/workspaces");
 
     return { success: true };
   } catch (error: any) {
-    console.error("Error deleting workspace:", error);
+    console.error("Error deleting tenant:", error);
 
     if (error.name === "ZodError") {
       return { success: false, error: error.errors[0]?.message ?? "Validation failed" };
     }
 
-    return { success: false, error: "Failed to delete workspace" };
+    return { success: false, error: "Failed to delete tenant" };
   }
 }

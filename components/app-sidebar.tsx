@@ -2,28 +2,18 @@
 
 import * as React from "react";
 import {
-  IconCamera,
   IconChartBar,
+  IconCloud,
   IconDashboard,
-  IconDatabase,
-  IconFileAi,
-  IconFileDescription,
-  IconFileWord,
-  IconFolder,
-  IconHelp,
-  IconInnerShadowTop,
-  IconListDetails,
-  IconReport,
-  IconSearch,
-  IconSettings,
-  IconUsers,
+  IconFileText,
+  IconRobot,
+  IconRoute,
 } from "@tabler/icons-react";
 import type { SidebarUser } from "@/types/user";
 
-import { NavDocuments } from "@/components/nav-documents";
 import { NavMain } from "@/components/nav-main";
-import { NavSecondary } from "@/components/nav-secondary";
 import { NavUser } from "@/components/nav-user";
+import { TenantSelector, type TenantOption } from "@/components/tenant-selector";
 import {
   Sidebar,
   SidebarContent,
@@ -32,6 +22,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
 } from "@/components/ui/sidebar";
 
 const data = {
@@ -48,9 +39,14 @@ const data = {
       match: "exact" as const,
     },
     {
-      title: "Lifecycle",
-      url: "/dashboard/lifecycle",
-      icon: IconListDetails,
+      title: "iFlows",
+      url: "/dashboard/iflows",
+      icon: IconRoute,
+    },
+    {
+      title: "Message Logs",
+      url: "/dashboard/message-logs",
+      icon: IconFileText,
     },
     {
       title: "Analytics",
@@ -58,105 +54,22 @@ const data = {
       icon: IconChartBar,
     },
     {
-      title: "Projects",
-      url: "/dashboard/projects",
-      icon: IconFolder,
-    },
-    {
-      title: "Team",
-      url: "/dashboard/team",
-      icon: IconUsers,
-    },
-  ],
-  navClouds: [
-    {
-      title: "Capture",
-      icon: IconCamera,
-      isActive: true,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Proposal",
-      icon: IconFileDescription,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Prompts",
-      icon: IconFileAi,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-  ],
-  navSecondary: [
-    {
-      title: "Settings",
-      url: "/dashboard/settings",
-      icon: IconSettings,
-    },
-    {
-      title: "Get Help",
-      url: "/dashboard/help",
-      icon: IconHelp,
-    },
-    {
-      title: "Search",
-      url: "/dashboard/search",
-      icon: IconSearch,
-    },
-  ],
-  admin: [
-    {
-      name: "Dashboard",
-      url: "/admin",
-      icon: IconDashboard,
-    },
-    {
-      name: "Users",
-      url: "/admin/users",
-      icon: IconUsers,
-    },
-    {
-      name: "Workspaces",
-      url: "/admin/workspaces",
-      icon: IconInnerShadowTop,
+      title: "AI Agents",
+      url: "/dashboard/ai-agents",
+      icon: IconRobot,
     },
   ],
 };
 
 export function AppSidebar({
   user,
+  tenants = [],
+  currentTenantId = null,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   user: SidebarUser;
+  tenants?: TenantOption[];
+  currentTenantId?: string | null;
 }) {
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -165,20 +78,19 @@ export function AppSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
-              className="data-[slot=sidebar-menu-button]:!p-1.5"
+              className="data-[slot=sidebar-menu-button]:p-1.5!"
             >
-              <a href="/" aria-label="HagenKit home">
-                <IconInnerShadowTop className="!size-5" />
-                <span className="text-base font-semibold">HagenKit</span>
+              <a href="/" aria-label="CPI Connect home">
+                <IconCloud className="size-5!" />
+                <span className="text-base font-semibold">CPI Connect</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        <TenantSelector tenants={tenants} currentTenantId={currentTenantId} />
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={data.navMain} />
-        {user?.role === "admin" && <NavDocuments items={data.admin} />}
-        <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>{user && <NavUser user={user} />}</SidebarFooter>
     </Sidebar>

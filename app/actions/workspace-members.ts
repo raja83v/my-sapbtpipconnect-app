@@ -1,9 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import prisma from "@/lib/prisma";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { convex, api } from "@/lib/convex";
+import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { WorkspaceMemberWithUser } from "@/types/workspace";
 import {
@@ -12,22 +11,18 @@ import {
   type UpdateMemberRoleInput,
   type RemoveMemberInput,
 } from "@/lib/validations/workspace";
+import type { Id } from "@/convex/_generated/dataModel";
 
 /**
  * Check if user is workspace admin (OWNER or ADMIN)
  */
 async function checkWorkspaceAdmin(
-  userId: string,
-  workspaceId: string
+  userId: Id<"users">,
+  tenantId: Id<"cpiTenants">
 ): Promise<ActionResult<boolean>> {
-  const member = await prisma.workspaceMember.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId,
-        workspaceId,
-      },
-    },
-    select: { role: true },
+  const member = await convex.query(api.tenants.getMembership, {
+    userId,
+    tenantId,
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -41,28 +36,24 @@ async function checkWorkspaceAdmin(
 }
 
 /**
- * Get all members of a workspace
+ * Get all members of a workspace (tenant)
  */
 export async function getWorkspaceMembers(
   workspaceId: string
 ): Promise<ActionResult<WorkspaceMemberWithUser[]>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized" };
     }
 
-    // Check if user is a member of the workspace
-    const isMember = await prisma.workspaceMember.findUnique({
-      where: {
-        userId_workspaceId: {
-          userId: session.user.id,
-          workspaceId,
-        },
-      },
+    const tenantId = workspaceId as Id<"cpiTenants">;
+
+    // Check if user is a member of the tenant
+    const isMember = await convex.query(api.tenants.getMembership, {
+      userId: currentUser.id,
+      tenantId,
     });
 
     if (!isMember) {
@@ -70,25 +61,14 @@ export async function getWorkspaceMembers(
     }
 
     // Get all members
-    const members = await prisma.workspaceMember.findMany({
-      where: { workspaceId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-          },
-        },
-      },
-      orderBy: [{ role: "asc" }, { joinedAt: "asc" }],
+    const members = await convex.query(api.tenants.getMembers, {
+      tenantId,
     });
 
-    const membersWithUser: WorkspaceMemberWithUser[] = members.map((member) => ({
+    const membersWithUser: WorkspaceMemberWithUser[] = members.map((member: any) => ({
       id: member.id,
       role: member.role as WorkspaceMemberWithUser["role"],
-      joinedAt: member.joinedAt,
+      joinedAt: new Date(member.joinedAt),
       user: member.user,
     }));
 
@@ -110,11 +90,9 @@ export async function updateMemberRole(
   input: UpdateMemberRoleInput
 ): Promise<ActionResult<WorkspaceMemberWithUser>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized" };
     }
 
@@ -122,14 +100,8 @@ export async function updateMemberRole(
     const validatedData = updateMemberRoleSchema.parse(input);
 
     // Get member info
-    const member = await prisma.workspaceMember.findUnique({
-      where: { id: validatedData.memberId },
-      select: {
-        id: true,
-        workspaceId: true,
-        userId: true,
-        role: true,
-      },
+    const member = await convex.query(api.tenants.getMemberById, {
+      memberId: validatedData.memberId as Id<"tenantMembers">,
     });
 
     if (!member) {
@@ -138,15 +110,15 @@ export async function updateMemberRole(
 
     // Check workspace admin permission
     const adminCheck = await checkWorkspaceAdmin(
-      session.user.id,
-      member.workspaceId
+      currentUser.id,
+      member.tenantId
     );
     if (!adminCheck.success) {
       return { success: false, error: adminCheck.error };
     }
 
     // Prevent changing own role
-    if (member.userId === session.user.id) {
+    if (member.userId === currentUser.id) {
       return {
         success: false,
         error: "You cannot change your own role",
@@ -155,12 +127,10 @@ export async function updateMemberRole(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER" && validatedData.role !== "OWNER") {
-      const ownerCount = await prisma.workspaceMember.count({
-        where: {
-          workspaceId: member.workspaceId,
-          role: "OWNER",
-        },
+      const allMembers = await convex.query(api.tenants.getMembers, {
+        tenantId: member.tenantId,
       });
+      const ownerCount = allMembers.filter((m: any) => m.role === "OWNER").length;
 
       if (ownerCount <= 1) {
         return {
@@ -171,20 +141,19 @@ export async function updateMemberRole(
     }
 
     // Update role
-    const updatedMember = await prisma.workspaceMember.update({
-      where: { id: validatedData.memberId },
-      data: { role: validatedData.role },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-          },
-        },
-      },
+    await convex.mutation(api.tenantMutations.updateMemberRole, {
+      memberId: validatedData.memberId as Id<"tenantMembers">,
+      role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
     });
+
+    // Get updated member
+    const updatedMember = await convex.query(api.tenants.getMemberById, {
+      memberId: validatedData.memberId as Id<"tenantMembers">,
+    });
+
+    if (!updatedMember) {
+      return { success: false, error: "Failed to update member" };
+    }
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -192,7 +161,7 @@ export async function updateMemberRole(
     const memberWithUser: WorkspaceMemberWithUser = {
       id: updatedMember.id,
       role: updatedMember.role as WorkspaceMemberWithUser["role"],
-      joinedAt: updatedMember.joinedAt,
+      joinedAt: new Date(updatedMember.joinedAt),
       user: updatedMember.user,
     };
 
@@ -207,18 +176,16 @@ export async function updateMemberRole(
 }
 
 /**
- * Remove a member from the workspace
+ * Remove a member from the workspace (tenant)
  * Requires OWNER or ADMIN permission
  */
 export async function removeMember(
   input: RemoveMemberInput
 ): Promise<ActionResult<void>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized" };
     }
 
@@ -226,14 +193,8 @@ export async function removeMember(
     const validatedData = removeMemberSchema.parse(input);
 
     // Get member info
-    const member = await prisma.workspaceMember.findUnique({
-      where: { id: validatedData.memberId },
-      select: {
-        id: true,
-        workspaceId: true,
-        userId: true,
-        role: true,
-      },
+    const member = await convex.query(api.tenants.getMemberById, {
+      memberId: validatedData.memberId as Id<"tenantMembers">,
     });
 
     if (!member) {
@@ -242,15 +203,15 @@ export async function removeMember(
 
     // Check workspace admin permission
     const adminCheck = await checkWorkspaceAdmin(
-      session.user.id,
-      member.workspaceId
+      currentUser.id,
+      member.tenantId
     );
     if (!adminCheck.success) {
       return { success: false, error: adminCheck.error };
     }
 
     // Prevent removing self
-    if (member.userId === session.user.id) {
+    if (member.userId === currentUser.id) {
       return {
         success: false,
         error: "You cannot remove yourself from the workspace",
@@ -259,12 +220,10 @@ export async function removeMember(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER") {
-      const ownerCount = await prisma.workspaceMember.count({
-        where: {
-          workspaceId: member.workspaceId,
-          role: "OWNER",
-        },
+      const allMembers = await convex.query(api.tenants.getMembers, {
+        tenantId: member.tenantId,
       });
+      const ownerCount = allMembers.filter((m: any) => m.role === "OWNER").length;
 
       if (ownerCount <= 1) {
         return {
@@ -275,8 +234,8 @@ export async function removeMember(
     }
 
     // Remove member
-    await prisma.workspaceMember.delete({
-      where: { id: validatedData.memberId },
+    await convex.mutation(api.tenantMutations.removeMember, {
+      memberId: validatedData.memberId as Id<"tenantMembers">,
     });
 
     // Revalidate paths

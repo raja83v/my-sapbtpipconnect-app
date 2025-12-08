@@ -1,39 +1,59 @@
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import prisma from "@/lib/prisma";
+import { auth, clerkClient } from "@clerk/nextjs/server";
+import { convex } from "@/lib/convex";
+import { api } from "@/convex/_generated/api";
 import type { CurrentUser } from "@/types/user";
+import { cache } from "react";
 
-export async function getCurrentUser(): Promise<CurrentUser> {
+export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const { userId } = await auth();
 
-    if (!session?.user?.id) {
+    if (!userId) {
       return null;
     }
 
-    const user = await prisma.user.findUnique({
-      where: {
-        id: session.user.id,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        image: true,
-        phone: true,
-        role: true,
-        status: true,
-        emailVerified: true,
-        onboardingCompleted: true,
-        createdAt: true,
-      },
-    });
+    // Try to get user from Convex
+    let user = await convex.query(api.users.getByClerkId, { clerkId: userId });
 
-    return user;
+    // If user doesn't exist in our database, create them
+    // This handles cases where webhook failed or wasn't configured
+    if (!user) {
+      try {
+        const client = await clerkClient();
+        const clerkUser = await client.users.getUser(userId);
+
+        const convexUserId = await convex.mutation(api.userMutations.findOrCreateByClerkId, {
+          clerkId: userId,
+          email: clerkUser.emailAddresses[0].emailAddress,
+          name: `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim() || undefined,
+          emailVerified: clerkUser.emailAddresses[0].verification?.status === "verified",
+          image: clerkUser.imageUrl || undefined,
+        });
+
+        user = await convex.query(api.users.get, { id: convexUserId });
+      } catch (createError) {
+        console.error("[getCurrentUser] Failed to create user:", createError);
+        return null;
+      }
+    }
+
+    if (!user) return null;
+
+    // Transform Convex user to CurrentUser type
+    return {
+      id: user._id,
+      email: user.email,
+      name: user.name ?? null,
+      image: user.image ?? null,
+      phone: user.phone ?? null,
+      role: user.role,
+      status: user.status,
+      emailVerified: user.emailVerified,
+      onboardingCompleted: user.onboardingCompleted,
+      createdAt: new Date(user._creationTime),
+    };
   } catch (error) {
     console.error("Error fetching current user:", error);
     return null;
   }
-}
+});

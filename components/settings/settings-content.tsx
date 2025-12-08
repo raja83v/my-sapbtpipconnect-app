@@ -1,7 +1,7 @@
 "use client";
 
 import { parseAsStringEnum, useQueryState } from "nuqs";
-import { IconBuilding, IconUsers } from "@tabler/icons-react";
+import { IconServer, IconUsers } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -16,13 +16,13 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { ProfileTab } from "./profile-tab";
-import { WorkspaceTab } from "./workspace-tab";
+import { TenantsTab } from "./tenants-tab";
 import { MembersTab } from "./members-tab";
 import { AccountTab } from "./account-tab";
-import { UserWorkspaceCreateDialog } from "./user-workspace-create-dialog";
-import type { WorkspaceWithRole } from "@/types/workspace";
+import { AddTenantDialog } from "./add-tenant-dialog";
+import type { TenantWithRole } from "@/app/actions/tenant";
 
-const SECTION_VALUES = ["profile", "workspace", "members", "account"];
+const SECTION_VALUES = ["profile", "tenants", "members", "account"];
 
 interface SettingsContentProps {
   user: {
@@ -32,11 +32,11 @@ interface SettingsContentProps {
     phone: string | null;
     image: string | null;
   };
-  workspace: WorkspaceWithRole | null;
+  tenants: TenantWithRole[];
   isAdmin: boolean;
 }
 
-export function SettingsContent({ user, workspace, isAdmin }: SettingsContentProps) {
+export function SettingsContent({ user, tenants, isAdmin }: SettingsContentProps) {
   const [activeSection] = useQueryState(
     "section",
     parseAsStringEnum(SECTION_VALUES as string[])
@@ -61,36 +61,13 @@ export function SettingsContent({ user, workspace, isAdmin }: SettingsContentPro
         />
       )}
 
-      {activeSection === "workspace" && isAdmin && (
-        workspace ? (
-          <WorkspaceTab workspace={workspace} />
-        ) : (
-          <Card>
-            <CardContent className="p-6">
-              <Empty>
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <IconBuilding />
-                  </EmptyMedia>
-                  <EmptyTitle>No Workspace</EmptyTitle>
-                  <EmptyDescription>
-                    Create a workspace to manage your team and settings.
-                  </EmptyDescription>
-                </EmptyHeader>
-                <EmptyContent>
-                  <UserWorkspaceCreateDialog>
-                    <Button>Create Workspace</Button>
-                  </UserWorkspaceCreateDialog>
-                </EmptyContent>
-              </Empty>
-            </CardContent>
-          </Card>
-        )
+      {activeSection === "tenants" && isAdmin && (
+        <TenantsTab tenants={tenants} />
       )}
 
       {activeSection === "members" && isAdmin && (
-        workspace ? (
-          <MembersTab workspaceId={workspace.id} currentUserId={user.id} />
+        tenants.length > 0 ? (
+          <MembersTab tenantId={tenants[0].id} currentUserId={user.id} />
         ) : (
           <Card>
             <CardContent className="p-6">
@@ -99,9 +76,9 @@ export function SettingsContent({ user, workspace, isAdmin }: SettingsContentPro
                   <EmptyMedia variant="icon">
                     <IconUsers />
                   </EmptyMedia>
-                  <EmptyTitle>No Workspace</EmptyTitle>
+                  <EmptyTitle>No Tenants</EmptyTitle>
                   <EmptyDescription>
-                    You need a workspace before you can invite team members.
+                    You need to add a tenant before you can invite team members.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>

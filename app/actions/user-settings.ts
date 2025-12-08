@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import prisma from "@/lib/prisma";
+import { convex } from "@/lib/convex";
+import { api } from "@/convex/_generated/api";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import {
@@ -26,16 +27,11 @@ export async function updateUserProfile(
     const validatedData = updateProfileSchema.parse(input);
 
     // Update user profile
-    const updatedUser = await prisma.user.update({
-      where: { id: currentUser.id },
+    await convex.mutation(api.userMutations.update, {
+      userId: currentUser.id as any,
       data: {
         name: validatedData.name,
-        phone: validatedData.phone === "" ? null : validatedData.phone,
-        updatedAt: new Date(),
-      },
-      select: {
-        name: true,
-        phone: true,
+        phone: validatedData.phone === "" ? undefined : validatedData.phone,
       },
     });
 
@@ -45,7 +41,10 @@ export async function updateUserProfile(
 
     return {
       success: true,
-      data: updatedUser,
+      data: {
+        name: validatedData.name,
+        phone: validatedData.phone || null,
+      },
     };
   } catch (error) {
     console.error("Error updating user profile:", error);
@@ -68,11 +67,10 @@ export async function deleteUserAccount(): Promise<ActionResult<void>> {
     }
 
     // Soft delete by setting status to DELETED
-    await prisma.user.update({
-      where: { id: currentUser.id },
+    await convex.mutation(api.userMutations.update, {
+      userId: currentUser.id as any,
       data: {
         status: "DELETED",
-        updatedAt: new Date(),
       },
     });
 

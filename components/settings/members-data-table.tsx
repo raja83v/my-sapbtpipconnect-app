@@ -33,12 +33,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { updateMemberRole, removeMember } from "@/app/actions/workspace-members";
-import type { WorkspaceMemberWithUser, WorkspaceRole } from "@/types/workspace";
+import { updateMemberRole, removeMember } from "@/app/actions/tenant-members";
+import type { TenantMemberWithUser, WorkspaceRole } from "@/types/workspace";
 import { formatDate } from "@/lib/format";
 
 interface MembersDataTableProps {
-  members: WorkspaceMemberWithUser[];
+  members: TenantMemberWithUser[];
   currentUserId: string;
   onUpdate?: () => void;
 }

@@ -1,47 +1,47 @@
-// For now, we're using the simpler approach:
-// 1. Sign-up redirects to /onboarding (components/auth/sign-up.tsx)
-// 2. Dashboard layout checks onboardingCompleted (app/dashboard/layout.tsx)
-// This works well for our current use case and is easier to maintain.
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-import { NextRequest, NextResponse } from "next/server";
-import { getSessionCookie } from "better-auth/cookies";
+// Define protected routes that require authentication
+const isProtectedRoute = createRouteMatcher([
+  "/dashboard(.*)",
+  "/admin(.*)",
+  "/onboarding(.*)",
+]);
 
-export async function proxy(request: NextRequest) {
-  const sessionCookie = getSessionCookie(request);
-  const { pathname } = request.nextUrl;
+// Define auth routes (sign-in, sign-up) that authenticated users should not access
+const isAuthRoute = createRouteMatcher([
+  "/sign-in(.*)",
+  "/sign-up(.*)",
+]);
+
+export default clerkMiddleware(async (auth, req) => {
+  const { userId } = await auth();
+  const { pathname } = req.nextUrl;
 
   // Redirect authenticated users away from auth pages
-  if (sessionCookie && ["/sign-in", "/sign-up"].includes(pathname)) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+  if (userId && isAuthRoute(req)) {
+    // Check if user needs onboarding (this will be handled by SSO callback or direct check)
+    return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
-  // Quick redirect for unauthenticated users (cookie check only)
-  // Note: This only checks cookie existence, not validity
-  // Actual authentication verification happens in server components
-  if (!sessionCookie) {
-    // Protected routes that require authentication
-    const protectedPaths = ["/dashboard", "/admin", "/onboarding"];
-
-    const isProtectedPath = protectedPaths.some((path) =>
-      pathname.startsWith(path)
-    );
-
-    if (isProtectedPath) {
-      return NextResponse.redirect(new URL("/sign-in", request.url));
+  // Redirect unauthenticated users from protected routes to sign-in
+  if (!userId && isProtectedRoute(req)) {
+    const signInUrl = new URL("/sign-in", req.url);
+    // Preserve the intended destination for post-login redirect
+    if (pathname !== "/dashboard") {
+      signInUrl.searchParams.set("callbackUrl", pathname);
     }
+    return NextResponse.redirect(signInUrl);
   }
 
   return NextResponse.next();
-}
+});
 
 export const config = {
   matcher: [
-    "/dashboard/:path*",
-    "/admin/:path*",
-    "/onboarding",
-    "/settings/:path*",
-    "/app-ideas/:path*",
-    "/sign-in",
-    "/sign-up",
+    // Skip Next.js internals and all static files, unless found in search params
+    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // Always run for API routes
+    "/(api|trpc)(.*)",
   ],
 };

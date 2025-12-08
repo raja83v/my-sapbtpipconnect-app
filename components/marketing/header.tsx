@@ -22,6 +22,7 @@ import {
   Notebook,
   Croissant,
   Smartphone,
+  Cloud,
 } from "lucide-react";
 import { useMedia } from "@/hooks/use-media";
 import {
@@ -174,9 +175,12 @@ export function Header() {
                 aria-label="home"
                 className="flex items-center space-x-2"
               >
-                <span className="h-5 flex items-center text-foreground font-semibold">
-                  {siteConfig.name}
-                </span>
+                <div className="flex items-center gap-2">
+                  <Cloud className="h-6 w-6 text-indigo-600" strokeWidth={1.5} />
+                  <span className="text-lg font-bold bg-linear-to-r from-indigo-600 to-blue-600 bg-clip-text text-transparent">
+                    CPI Connect
+                  </span>
+                </div>
               </Link>
 
               <button

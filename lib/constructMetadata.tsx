@@ -55,7 +55,7 @@ export function constructMetadata({
 
 export const HOME_DOMAIN =
   process.env.NEXT_PUBLIC_VERCEL_ENV === "production"
-    ? "https://www.prismstack.com/hagenkit"
+    ? "https://www.cpiconnect.io"
     : process.env.NEXT_PUBLIC_VERCEL_ENV === "preview"
     ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
     : "http://localhost:3000";

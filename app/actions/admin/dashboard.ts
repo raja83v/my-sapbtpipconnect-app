@@ -1,24 +1,21 @@
 "use server";
 
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import prisma from "@/lib/prisma";
+import { getCurrentUser } from "../user";
+import { convex, api } from "@/lib/convex";
 import type { ActionResult } from "@/types/actions";
+import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const currentUser = await getCurrentUser();
 
-    if (!session?.user?.id) {
+    if (!currentUser) {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { role: true },
+    const user = await convex.query(api.users.getById, { 
+      userId: currentUser.id as Id<"users"> 
     });
 
     if (user?.role !== "admin") {
@@ -56,7 +53,7 @@ export interface RecentUser {
 
 export interface ActivityItem {
   id: string;
-  type: "user_registered" | "workspace_created" | "user_status_changed";
+  type: "user_registered" | "tenant_created" | "user_status_changed";
   description: string;
   timestamp: Date;
   metadata?: any;
@@ -70,47 +67,7 @@ export async function getDashboardStats(): Promise<
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const now = new Date();
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
-
-    // User statistics
-    const [
-      totalUsers,
-      newUsersLast30Days,
-      newUsersPrevious30Days,
-      activeUsers,
-    ] = await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({
-        where: { createdAt: { gte: thirtyDaysAgo } },
-      }),
-      prisma.user.count({
-        where: {
-          createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
-        },
-      }),
-      prisma.user.count({
-        where: { lastLoginAt: { gte: thirtyDaysAgo } },
-      }),
-    ]);
-
-    // Calculate user trend
-    const userTrend =
-      newUsersPrevious30Days === 0
-        ? 100
-        : ((newUsersLast30Days - newUsersPrevious30Days) /
-            newUsersPrevious30Days) *
-          100;
-
-    const stats: DashboardStats = {
-      users: {
-        total: totalUsers,
-        new: newUsersLast30Days,
-        active: activeUsers,
-        trend: Math.round(userTrend * 10) / 10,
-      },
-    };
+    const stats = await convex.query(api.users.getAdminStats, {});
 
     return { success: true, data: stats };
   } catch (error) {
@@ -125,21 +82,20 @@ export async function getRecentUsers(): Promise<ActionResult<RecentUser[]>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        image: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    });
+    const users = await convex.query(api.users.listRecent, { limit: 5 });
 
-    return { success: true, data: users };
+    return { 
+      success: true, 
+      data: users.map(u => ({
+        id: u._id,
+        email: u.email,
+        name: u.name || null,
+        image: u.image || null,
+        role: u.role,
+        status: u.status,
+        createdAt: new Date(u._creationTime),
+      }))
+    };
   } catch (error) {
     console.error("Error fetching recent users:", error);
     return { success: false, error: "Failed to fetch recent users" };
@@ -155,41 +111,24 @@ export async function getRecentActivity(): Promise<
 
   try {
     // Get recent users
-    const recentUsers = await prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-    });
+    const recentUsers = await convex.query(api.users.listRecent, { limit: 3 });
 
-    // Get recent workspaces
-    const recentWorkspaces = await prisma.workspace.findMany({
-      select: {
-        id: true,
-        name: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-    });
+    // Get recent tenants
+    const recentTenants = await convex.query(api.tenants.listRecent, { limit: 3 });
 
     // Combine and format activities
     const activities: ActivityItem[] = [
       ...recentUsers.map((user) => ({
-        id: `user-${user.id}`,
+        id: `user-${user._id}`,
         type: "user_registered" as const,
         description: `User "${user.name || user.email}" registered`,
-        timestamp: user.createdAt,
+        timestamp: new Date(user._creationTime),
       })),
-      ...recentWorkspaces.map((workspace) => ({
-        id: `workspace-${workspace.id}`,
-        type: "workspace_created" as const,
-        description: `Workspace "${workspace.name}" created`,
-        timestamp: workspace.createdAt,
+      ...recentTenants.map((tenant) => ({
+        id: `tenant-${tenant._id}`,
+        type: "tenant_created" as const,
+        description: `Tenant "${tenant.name}" created`,
+        timestamp: new Date(tenant._creationTime),
       })),
     ];
 

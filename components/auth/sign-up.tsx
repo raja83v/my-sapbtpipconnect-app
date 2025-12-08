@@ -4,40 +4,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useMemo, useState } from "react";
-import { authClient, signUp, signIn } from "@/lib/auth-client";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 import Link from "next/link";
-import { IconInnerShadowTop } from "@tabler/icons-react";
+import { IconCloud } from "@tabler/icons-react";
 import { buttonVariants } from "@/components/ui/button";
 import { useRouter, useSearchParams } from "next/navigation";
-
-function formatLoginMethod(method: string | null) {
-  if (!method) {
-    return null;
-  }
-
-  if (method === "email") {
-    return "Email";
-  }
-
-  return method
-    .split("-")
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
+import { useSignUp, useAuth } from "@clerk/nextjs";
 
 export default function SignUpAuth() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { isLoaded, signUp, setActive } = useSignUp();
+  const { isSignedIn } = useAuth();
+  
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingVerification, setPendingVerification] = useState(false);
 
   // Extract callbackURL from query parameters
-  const searchParams = useSearchParams();
   const rawCallbackUrl = searchParams.get("callbackUrl");
   const callbackURL =
     rawCallbackUrl && rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//")
@@ -50,13 +40,88 @@ export default function SignUpAuth() {
     ? `/sign-in?callbackUrl=${encodeURIComponent(rawCallbackUrl)}`
     : "/sign-in";
 
-  const lastMethod = useMemo(() => authClient.getLastUsedLoginMethod(), []);
-  const formattedMethod = formatLoginMethod(lastMethod);
-  const hasLastMethod = Boolean(lastMethod);
-  const emailIsLast = lastMethod === "email";
-  const googleIsLast = lastMethod === "google";
-  const emailVariant = emailIsLast || !hasLastMethod ? "default" : "outline";
-  const googleVariant = googleIsLast ? "default" : "outline";
+  // Redirect authenticated users to dashboard
+  useEffect(() => {
+    if (isLoaded && isSignedIn) {
+      router.push("/dashboard");
+    }
+  }, [isLoaded, isSignedIn, router]);
+
+  // Show loading state while checking auth or if already signed in
+  if (!isLoaded || isSignedIn) {
+    return (
+      <div className="container relative hidden h-screen flex-col items-center justify-center md:grid lg:max-w-none lg:grid-cols-2 lg:px-0">
+        <div className="lg:p-8">
+          <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
+            <div className="flex items-center justify-center">
+              <Spinner className="size-8" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle form submission
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isLoaded) return;
+
+    setLoading(true);
+
+    try {
+      if (!pendingVerification) {
+        // Step 1: Create the sign-up
+        await signUp.create({
+          emailAddress: email,
+          password,
+          firstName: name.split(" ")[0],
+          lastName: name.split(" ").slice(1).join(" ") || undefined,
+        });
+
+        // Step 2: Send email verification code
+        await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+
+        setPendingVerification(true);
+        toast.success("Check your email for a verification code");
+        setLoading(false);
+      } else {
+        // Step 3: Verify the email code
+        const completeSignUp = await signUp.attemptEmailAddressVerification({
+          code: emailCode,
+        });
+
+        if (completeSignUp.status === "complete") {
+          await setActive({ session: completeSignUp.createdSessionId });
+          router.push("/onboarding");
+        } else {
+          toast.error("Verification incomplete. Please try again.");
+          setLoading(false);
+        }
+      }
+    } catch (err: any) {
+      setLoading(false);
+      toast.error(err.errors?.[0]?.message || "Failed to sign up");
+    }
+  };
+
+  // Handle Google OAuth
+  const handleGoogleSignUp = async () => {
+    if (!isLoaded) return;
+
+    setLoading(true);
+
+    try {
+      await signUp.authenticateWithRedirect({
+        strategy: "oauth_google",
+        redirectUrl: "/sso-callback",
+        redirectUrlComplete: callbackURL,
+      });
+    } catch (err: any) {
+      setLoading(false);
+      toast.error(err.errors?.[0]?.message || "Failed to sign up with Google");
+    }
+  };
 
   return (
     <>
@@ -72,19 +137,19 @@ export default function SignUpAuth() {
         </Link>
         <div className="relative hidden h-full flex-col bg-muted p-10 text-white dark:border-r lg:flex">
           <div className="absolute inset-0 bg-zinc-900" />
-          <div className="relative z-20 flex items-center text-lg font-medium">
-            <IconInnerShadowTop className="mr-2 h-6 w-6" />
-            HagenKit
-          </div>
+          <Link href="/" className="relative z-20 flex items-center text-lg font-medium hover:opacity-80 transition-opacity">
+            <IconCloud className="mr-2 h-6 w-6" />
+            CPI Connect
+          </Link>
           <div className="relative z-20 mt-auto">
             <blockquote className="space-y-2">
               <p className="text-lg">
-                &ldquo;HagenKit transformed onboarding for our SaaS studio. We
-                now start every client with robust scaffolding and focus on the
-                differentiators.&rdquo;
+                &ldquo;Managing 8 different CPI tenants was a nightmare until we
+                found CPI Connect. The unified dashboard makes it effortless to
+                monitor all our SAP integrations from one place.&rdquo;
               </p>
               <footer className="text-sm">
-                — Michael Chen, Founder, Parallel Launch Lab
+                — James Anderson, Head of IT Operations at Retail Enterprise
               </footer>
             </blockquote>
           </div>
@@ -103,94 +168,90 @@ export default function SignUpAuth() {
                   Create an account to accept your invitation.
                 </div>
               )}
-              {formattedMethod && !isInvitation && (
-                <p className="text-xs text-muted-foreground" aria-live="polite">
-                  Last signed in with {formattedMethod}.
-                </p>
-              )}
             </div>
             <div className="grid gap-6">
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  await signUp.email({
-                    email,
-                    password,
-                    name,
-                    callbackURL,
-                    fetchOptions: {
-                      onResponse: () => {
-                        setLoading(false);
-                      },
-                      onRequest: () => {
-                        setLoading(true);
-                      },
-                      onSuccess: () => {
-                        router.push(callbackURL);
-                      },
-                      onError: (ctx) => {
-                        toast.error(ctx.error.message);
-                      },
-                    },
-                  });
-                }}
-              >
+              <form onSubmit={handleSubmit}>
                 <div className="grid gap-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="name">Name</Label>
-                    <Input
-                      id="name"
-                      placeholder="John Doe"
-                      required
-                      onChange={(e) => setName(e.target.value)}
-                      value={name}
-                      disabled={loading}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="email">Email</Label>
-                    <Input
-                      id="email"
-                      type="email"
-                      placeholder="name@example.com"
-                      required
-                      onChange={(e) => setEmail(e.target.value)}
-                      value={email}
-                      disabled={loading}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="password">Password</Label>
-                    <Input
-                      id="password"
-                      type="password"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      autoComplete="new-password"
-                      required
-                      disabled={loading}
-                    />
-                  </div>
+                  {!pendingVerification ? (
+                    <>
+                      <div className="grid gap-2">
+                        <Label htmlFor="name">Name</Label>
+                        <Input
+                          id="name"
+                          placeholder="John Doe"
+                          required
+                          onChange={(e) => setName(e.target.value)}
+                          value={name}
+                          disabled={loading}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="email">Email</Label>
+                        <Input
+                          id="email"
+                          type="email"
+                          placeholder="name@example.com"
+                          required
+                          onChange={(e) => setEmail(e.target.value)}
+                          value={email}
+                          disabled={loading}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="password">Password</Label>
+                        <Input
+                          id="password"
+                          type="password"
+                          placeholder="••••••••"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          autoComplete="new-password"
+                          required
+                          disabled={loading}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="grid gap-2">
+                      <Label htmlFor="code">Verification Code</Label>
+                      <Input
+                        id="code"
+                        type="text"
+                        placeholder="Enter code from email"
+                        required
+                        onChange={(e) => setEmailCode(e.target.value)}
+                        value={emailCode}
+                        disabled={loading}
+                        autoComplete="one-time-code"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        We sent a verification code to {email}
+                      </p>
+                    </div>
+                  )}
                   <Button
                     type="submit"
                     className="w-full justify-center"
-                    variant={emailVariant}
                     disabled={loading}
                   >
                     {loading && (
                       <Spinner className="mr-2 size-4" aria-hidden="true" />
                     )}
-                    <span>Create account</span>
-                    {emailIsLast && (
-                      <>
-                        <Badge className="ml-2" variant="secondary">
-                          Last used
-                        </Badge>
-                        <span className="sr-only">Last used login method</span>
-                      </>
-                    )}
+                    <span>{pendingVerification ? "Verify Email" : "Create account"}</span>
                   </Button>
+                  {pendingVerification && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-full"
+                      onClick={() => {
+                        setPendingVerification(false);
+                        setEmailCode("");
+                      }}
+                    >
+                      Use a different email
+                    </Button>
+                  )}
                 </div>
               </form>
               <div className="relative">
@@ -204,25 +265,10 @@ export default function SignUpAuth() {
                 </div>
               </div>
               <Button
-                variant={googleVariant}
+                variant="outline"
                 className="w-full justify-center"
-                disabled={loading}
-                onClick={async () => {
-                  await signIn.social(
-                    {
-                      provider: "google",
-                      callbackURL,
-                    },
-                    {
-                      onRequest: () => {
-                        setLoading(true);
-                      },
-                      onResponse: () => {
-                        setLoading(false);
-                      },
-                    }
-                  );
-                }}
+                disabled={loading || pendingVerification}
+                onClick={handleGoogleSignUp}
               >
                 {loading ? (
                   <Spinner className="mr-2 size-4" aria-hidden="true" />
@@ -252,14 +298,6 @@ export default function SignUpAuth() {
                   </svg>
                 )}
                 <span>Google</span>
-                {googleIsLast && (
-                  <>
-                    <Badge className="ml-2" variant="secondary">
-                      Last used
-                    </Badge>
-                    <span className="sr-only">Last used login method</span>
-                  </>
-                )}
               </Button>
             </div>
             <p className="px-8 text-center text-sm text-muted-foreground">

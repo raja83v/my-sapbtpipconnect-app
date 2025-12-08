@@ -1,11 +1,15 @@
 "use client";
 
 import {
+  IconCreditCard,
   IconDotsVertical,
   IconLogout,
+  IconMoon,
   IconSettings,
+  IconSun,
   IconUserCircle,
 } from "@tabler/icons-react";
+import { useTheme } from "next-themes";
 import Link from "next/link";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -23,7 +27,8 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { signOut } from "@/lib/auth-client";
+import { useClerk } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 
 export function NavUser({
   user,
@@ -35,6 +40,9 @@ export function NavUser({
   };
 }) {
   const { isMobile } = useSidebar();
+  const { signOut } = useClerk();
+  const { theme, setTheme } = useTheme();
+  const router = useRouter();
 
   const initials =
     user.name
@@ -44,13 +52,8 @@ export function NavUser({
       .toUpperCase() || "U";
 
   const handleSignOut = async () => {
-    await signOut({
-      fetchOptions: {
-        onSuccess: () => {
-          window.location.href = "/";
-        },
-      },
-    });
+    await signOut();
+    router.push("/");
   };
 
   return (
@@ -111,6 +114,23 @@ export function NavUser({
                 <IconSettings className="mr-2 h-4 w-4" />
                 Settings
               </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/dashboard/settings/billing" className="cursor-pointer">
+                <IconCreditCard className="mr-2 h-4 w-4" />
+                Billing
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? (
+                <IconSun className="mr-2 h-4 w-4" />
+              ) : (
+                <IconMoon className="mr-2 h-4 w-4" />
+              )}
+              {theme === "dark" ? "Light Mode" : "Dark Mode"}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

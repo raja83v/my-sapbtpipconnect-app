@@ -1,12 +1,14 @@
 /**
- * Workspace-related type definitions
+ * Workspace and Tenant related type definitions
+ * Note: "Workspace" is now a legacy alias for "Tenant" (CpiTenant)
  */
 
 export type WorkspaceRole = "OWNER" | "ADMIN" | "MEMBER" | "VIEWER";
+export type TenantRole = WorkspaceRole; // Alias
 
-export interface WorkspaceMemberWithUser {
+export interface TenantMemberWithUser {
   id: string;
-  role: WorkspaceRole;
+  role: TenantRole;
   joinedAt: Date;
   user: {
     id: string;
@@ -15,6 +17,9 @@ export interface WorkspaceMemberWithUser {
     image: string | null;
   };
 }
+
+// Legacy alias
+export type WorkspaceMemberWithUser = TenantMemberWithUser;
 
 export interface PendingInvitation {
   id: string;
@@ -30,6 +35,23 @@ export interface PendingInvitation {
   };
 }
 
+export interface TenantWithRole {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  tenantUrl: string;
+  authType: string;
+  status: string;
+  isConnected: boolean;
+  lastSyncAt: Date | null;
+  connectionTestAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  memberRole: WorkspaceRole;
+}
+
+// Legacy workspace type - maps to tenant
 export interface WorkspaceWithRole {
   id: string;
   name: string;
@@ -38,4 +60,17 @@ export interface WorkspaceWithRole {
   memberRole: WorkspaceRole;
   createdAt: Date;
   updatedAt: Date;
+}
+
+// Helper to convert TenantWithRole to WorkspaceWithRole for legacy components
+export function tenantToWorkspace(tenant: TenantWithRole): WorkspaceWithRole {
+  return {
+    id: tenant.id,
+    name: tenant.name,
+    slug: tenant.slug,
+    image: null, // Tenants don't have images
+    memberRole: tenant.memberRole,
+    createdAt: tenant.createdAt,
+    updatedAt: tenant.updatedAt,
+  };
 }
