@@ -73,6 +73,82 @@ export async function getUserTenants(): Promise<ActionResult<TenantWithRole[]>> 
 }
 
 /**
+ * Get a tenant by ID (with user access check)
+ */
+export async function getTenantById(tenantId: string): Promise<ActionResult<{
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  tenantUrl: string;
+  tmUrl: string;
+  authType: string;
+  authenticationUrl?: string;
+  clientId?: string;
+  username?: string;
+  password?: string;
+  status: string;
+  isConnected: boolean;
+}>> {
+  try {
+    const currentUser = await getCurrentUser();
+
+    if (!currentUser) {
+      return { success: false, error: "Not authenticated" };
+    }
+
+    // Check if user has access to this tenant
+    const membership = await convex.query(api.tenants.getMembership, {
+      userId: currentUser.id as any,
+      tenantId: tenantId as any,
+    });
+
+    if (!membership) {
+      return { success: false, error: "You don't have access to this tenant" };
+    }
+
+    // Get tenant details
+    const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+
+    if (!tenant) {
+      return { success: false, error: "Tenant not found" };
+    }
+
+    // Decrypt credentials if needed
+    let decryptedPassword: string | undefined;
+    if (tenant.password) {
+      try {
+        decryptedPassword = await decrypt(tenant.password);
+      } catch {
+        // Ignore decryption errors
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        id: tenant._id,
+        name: tenant.name,
+        slug: tenant.slug,
+        description: tenant.description ?? null,
+        tenantUrl: tenant.tenantUrl,
+        tmUrl: tenant.tenantUrl, // tmUrl is the same as tenantUrl for SAP CPI
+        authType: tenant.authType,
+        authenticationUrl: tenant.authenticationUrl,
+        clientId: tenant.clientId,
+        username: tenant.username,
+        password: decryptedPassword,
+        status: tenant.status,
+        isConnected: tenant.isConnected,
+      }
+    };
+  } catch (error) {
+    console.error("Error fetching tenant:", error);
+    return { success: false, error: "Failed to fetch tenant" };
+  }
+}
+
+/**
  * Set the default tenant for the current user
  */
 export async function setDefaultTenant(tenantId: string): Promise<ActionResult<void>> {
@@ -603,11 +679,11 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
 
     // Map iFlow ID to package ID
     const packageMap = new Map<string, string>();
-    
+
     if (packagesResponse.ok) {
       const packagesData = await packagesResponse.json();
       const packages = packagesData.d?.results || [];
-      
+
       // For each package, fetch its design-time artifacts
       for (const pkg of packages) {
         try {
@@ -619,11 +695,11 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
               "Accept": "application/json",
             },
           });
-          
+
           if (artifactsResponse.ok) {
             const artifactsData = await artifactsResponse.json();
             const artifacts = artifactsData.d?.results || [];
-            
+
             for (const artifact of artifacts) {
               packageMap.set(artifact.Id, pkg.Id);
             }
@@ -760,7 +836,7 @@ export async function syncTenantIFlows(
     // Fetch packages to get PackageId for each iFlow
     const packagesUrl = `${tenant.tenantUrl}/api/v1/IntegrationPackages`;
     const packageMap = new Map<string, string>();
-    
+
     try {
       const packagesResponse = await fetch(packagesUrl, {
         method: "GET",
@@ -773,9 +849,9 @@ export async function syncTenantIFlows(
       if (packagesResponse.ok) {
         const packagesData = await packagesResponse.json();
         const packages = packagesData.d?.results || [];
-        
+
         console.log(`[Sync] Found ${packages.length} packages, fetching artifacts...`);
-        
+
         // For each package, fetch its design-time artifacts
         for (const pkg of packages) {
           try {
@@ -787,11 +863,11 @@ export async function syncTenantIFlows(
                 "Accept": "application/json",
               },
             });
-            
+
             if (artifactsResponse.ok) {
               const artifactsData = await artifactsResponse.json();
               const artifacts = artifactsData.d?.results || [];
-              
+
               for (const artifact of artifacts) {
                 packageMap.set(artifact.Id, pkg.Id);
               }
@@ -800,7 +876,7 @@ export async function syncTenantIFlows(
             console.warn(`[Sync] Failed to fetch artifacts for package ${pkg.Id}:`, err);
           }
         }
-        
+
         console.log(`[Sync] Mapped ${packageMap.size} iFlows to packages`);
       }
     } catch (err) {
