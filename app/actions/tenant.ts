@@ -172,7 +172,7 @@ export async function setDefaultTenant(tenantId: string): Promise<ActionResult<v
     // Update user's default tenant
     await convex.mutation(api.userMutations.update, {
       id: currentUser.id as any,
-      defaultTenantId: tenantId,
+      defaultTenantId: tenantId as any,
     });
 
     revalidatePath("/dashboard");

@@ -2,6 +2,9 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/app/actions/user";
 import { AcceptInvitationClient } from "@/components/invitations/accept-invitation-client";
 
+// Force dynamic rendering since this page uses authentication
+export const dynamic = 'force-dynamic';
+
 interface AcceptInvitationPageProps {
   searchParams: Promise<{ token?: string }>;
 }

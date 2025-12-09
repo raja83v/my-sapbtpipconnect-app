@@ -14,6 +14,7 @@ export type CurrentUser = {
   status: "ACTIVE" | "SUSPENDED" | "DELETED";
   emailVerified: boolean;
   onboardingCompleted: boolean;
+  defaultTenantId: Id<"cpiTenants"> | null;
   createdAt: Date;
 } | null;
 

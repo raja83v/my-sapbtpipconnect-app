@@ -30,7 +30,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
           image: clerkUser.imageUrl || undefined,
         });
 
-        user = await convex.query(api.users.get, { id: convexUserId });
+        user = await convex.query(api.users.getById, { id: convexUserId });
       } catch (createError) {
         console.error("[getCurrentUser] Failed to create user:", createError);
         return null;
@@ -50,6 +50,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
       status: user.status,
       emailVerified: user.emailVerified,
       onboardingCompleted: user.onboardingCompleted,
+      defaultTenantId: user.defaultTenantId ?? null,
       createdAt: new Date(user._creationTime),
     };
   } catch (error) {

@@ -10,6 +10,9 @@ import { TenantProvider } from "@/components/tenant-context";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
+// Force dynamic rendering for all dashboard routes since they require authentication
+export const dynamic = 'force-dynamic';
+
 async function DashboardContent({
   children,
 }: {
@@ -40,11 +43,11 @@ async function DashboardContent({
   // Transform tenants for the selector
   const tenants = tenantsResult.success && tenantsResult.data
     ? tenantsResult.data.map((t) => ({
-        id: t.id,
-        name: t.name,
-        slug: t.slug,
-        isConnected: t.isConnected,
-      }))
+      id: t.id,
+      name: t.name,
+      slug: t.slug,
+      isConnected: t.isConnected,
+    }))
     : [];
 
   return (
@@ -57,9 +60,9 @@ async function DashboardContent({
           } as React.CSSProperties
         }
       >
-        <AppSidebar 
-          variant="inset" 
-          user={user} 
+        <AppSidebar
+          variant="inset"
+          user={user}
           tenants={tenants}
           currentTenantId={currentUser.defaultTenantId}
         />
