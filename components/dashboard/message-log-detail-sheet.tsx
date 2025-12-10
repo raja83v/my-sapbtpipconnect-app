@@ -526,54 +526,127 @@ export function MessageLogDetailSheet({
                                             </CardContent>
                                         </Card>
 
-                                        {/* Error Details */}
-                                        {errorInfo && (
-                                            <Card className="border-red-200 dark:border-red-900">
-                                                <CardHeader className="pb-2">
-                                                    <CardTitle className="text-sm font-medium text-red-500">
-                                                        Error Information
-                                                    </CardTitle>
-                                                </CardHeader>
-                                                <CardContent className="space-y-3">
-                                                    <DetailRow
-                                                        label="Error Type"
-                                                        value={errorInfo.Type}
-                                                    />
-                                                    <div className="space-y-1">
-                                                        <p className="text-xs text-muted-foreground">Message</p>
-                                                        <p className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-2 rounded">
-                                                            {errorInfo.Message}
-                                                        </p>
-                                                    </div>
-                                                </CardContent>
-                                            </Card>
-                                        )}
+                                        {/* Error Details - Parse and display error information */}
+                                        {(() => {
+                                            // Parse error text to extract structured information
+                                            const parseErrorText = (text: string | null) => {
+                                                if (!text) return { message: null, stackTrace: null };
 
-                                        {/* Error Stack Trace */}
-                                        {errorText && (
-                                            <Card>
-                                                <CardHeader className="pb-2">
-                                                    <div className="flex items-center justify-between">
-                                                        <CardTitle className="text-sm font-medium">
-                                                            Stack Trace
-                                                        </CardTitle>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            onClick={() => copyToClipboard(errorText, "Stack trace")}
-                                                        >
-                                                            <IconCopy className="h-3 w-3 mr-1" />
-                                                            Copy
-                                                        </Button>
-                                                    </div>
-                                                </CardHeader>
-                                                <CardContent>
-                                                    <pre className="text-xs bg-muted p-3 rounded overflow-x-auto whitespace-pre-wrap max-h-96">
-                                                        {errorText}
-                                                    </pre>
-                                                </CardContent>
-                                            </Card>
-                                        )}
+                                                // Check if it contains a Java stack trace pattern
+                                                const stackTracePattern = /\s+at\s+[\w.$]+\([\w.:]+\)/;
+                                                const hasStackTrace = stackTracePattern.test(text);
+
+                                                if (hasStackTrace) {
+                                                    // Split at the first "at " that looks like a stack trace
+                                                    const lines = text.split('\n');
+                                                    const messageLines: string[] = [];
+                                                    const stackLines: string[] = [];
+                                                    let inStackTrace = false;
+
+                                                    for (const line of lines) {
+                                                        if (!inStackTrace && /^\s+at\s+/.test(line)) {
+                                                            inStackTrace = true;
+                                                        }
+                                                        if (inStackTrace) {
+                                                            stackLines.push(line);
+                                                        } else {
+                                                            messageLines.push(line);
+                                                        }
+                                                    }
+
+                                                    return {
+                                                        message: messageLines.join('\n').trim() || null,
+                                                        stackTrace: stackLines.join('\n').trim() || null,
+                                                    };
+                                                }
+
+                                                // No stack trace, treat entire text as error message
+                                                return { message: text.trim(), stackTrace: null };
+                                            };
+
+                                            const parsed = parseErrorText(errorText);
+
+                                            // Determine if errorInfo has meaningful data
+                                            // SAP CPI often returns Type: "text/plain" with empty Message
+                                            const hasValidErrorInfo = errorInfo &&
+                                                errorInfo.Message &&
+                                                errorInfo.Message.trim().length > 0;
+
+                                            // Get the best error message to display
+                                            const errorMessage = hasValidErrorInfo
+                                                ? errorInfo.Message
+                                                : parsed.message;
+
+                                            // Get error type - prefer meaningful type over "text/plain"
+                                            const errorType = hasValidErrorInfo && errorInfo.Type !== 'text/plain'
+                                                ? errorInfo.Type
+                                                : null;
+
+                                            return (
+                                                <>
+                                                    {/* Error Message Card */}
+                                                    {errorMessage && (
+                                                        <Card className="border-red-200 dark:border-red-900">
+                                                            <CardHeader className="pb-2">
+                                                                <div className="flex items-center justify-between">
+                                                                    <CardTitle className="text-sm font-medium text-red-500">
+                                                                        Error Information
+                                                                    </CardTitle>
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="sm"
+                                                                        onClick={() => copyToClipboard(errorMessage, "Error message")}
+                                                                    >
+                                                                        <IconCopy className="h-3 w-3 mr-1" />
+                                                                        Copy
+                                                                    </Button>
+                                                                </div>
+                                                            </CardHeader>
+                                                            <CardContent className="space-y-3">
+                                                                {errorType && (
+                                                                    <DetailRow
+                                                                        label="Error Type"
+                                                                        value={errorType}
+                                                                    />
+                                                                )}
+                                                                <div className="space-y-1">
+                                                                    <p className="text-xs text-muted-foreground">Message</p>
+                                                                    <pre className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-3 rounded whitespace-pre-wrap overflow-x-auto max-h-64">
+                                                                        {errorMessage}
+                                                                    </pre>
+                                                                </div>
+                                                            </CardContent>
+                                                        </Card>
+                                                    )}
+
+                                                    {/* Stack Trace Card - Only show if there's an actual Java stack trace */}
+                                                    {parsed.stackTrace && (
+                                                        <Card>
+                                                            <CardHeader className="pb-2">
+                                                                <div className="flex items-center justify-between">
+                                                                    <CardTitle className="text-sm font-medium">
+                                                                        Stack Trace
+                                                                    </CardTitle>
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="sm"
+                                                                        onClick={() => copyToClipboard(parsed.stackTrace!, "Stack trace")}
+                                                                    >
+                                                                        <IconCopy className="h-3 w-3 mr-1" />
+                                                                        Copy
+                                                                    </Button>
+                                                                </div>
+                                                            </CardHeader>
+                                                            <CardContent>
+                                                                <pre className="text-xs bg-muted p-3 rounded overflow-x-auto whitespace-pre-wrap max-h-96 font-mono">
+                                                                    {parsed.stackTrace}
+                                                                </pre>
+                                                            </CardContent>
+                                                        </Card>
+                                                    )}
+                                                </>
+                                            );
+                                        })()}
 
                                         {!errorInfo && !errorText && (
                                             <div className="text-center py-8 text-muted-foreground">
