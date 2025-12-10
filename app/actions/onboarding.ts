@@ -52,8 +52,8 @@ export async function completeOnboarding(data: OnboardingData) {
       }
 
       // Encrypt sensitive data
-      const encryptedClientSecret = data.clientSecret ? encrypt(data.clientSecret) : undefined;
-      const encryptedPassword = data.password ? encrypt(data.password) : undefined;
+      const encryptedClientSecret = data.clientSecret ? await encrypt(data.clientSecret) : undefined;
+      const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
 
       // Create CPI tenant with owner
       const tenantId = await convex.mutation(api.tenantMutations.create, {

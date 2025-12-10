@@ -26,8 +26,8 @@ import {
     IconFile,
     IconBrain,
 } from "@tabler/icons-react";
-import { 
-    getMessageLogDetail, 
+import {
+    getMessageLogDetail,
     downloadMessageAttachment,
     diagnoseMessageLogError,
     type GlobalMessageLog,
@@ -83,7 +83,7 @@ export function MessageLogDetailSheet({
     const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
     const [errorInfo, setErrorInfo] = useState<MessageErrorInfo | null>(null);
     const [errorText, setErrorText] = useState<string | null>(null);
-    
+
     // AI diagnosis state
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [diagnosis, setDiagnosis] = useState<string | null>(null);
@@ -103,7 +103,7 @@ export function MessageLogDetailSheet({
         setDiagnosis(null);
         setDiagnosisError(null);
         setIsAnalyzing(false);
-        
+
         try {
             const result = await getMessageLogDetail(tenantId, messageGuid);
 
@@ -286,7 +286,7 @@ export function MessageLogDetailSheet({
                                                 <div className="flex justify-between text-sm">
                                                     <span className="text-muted-foreground">End</span>
                                                     <span>
-                                                        {log.logEnd 
+                                                        {log.logEnd
                                                             ? formatSAPDate(log.logEnd, "PPpp")
                                                             : "In progress"
                                                         }
@@ -308,34 +308,34 @@ export function MessageLogDetailSheet({
                                                 </CardTitle>
                                             </CardHeader>
                                             <CardContent className="space-y-3">
-                                                <DetailRow 
-                                                    label="Message GUID" 
+                                                <DetailRow
+                                                    label="Message GUID"
                                                     value={log.messageGuid}
                                                     copyable
                                                 />
                                                 {log.correlationId && (
-                                                    <DetailRow 
-                                                        label="Correlation ID" 
+                                                    <DetailRow
+                                                        label="Correlation ID"
                                                         value={log.correlationId}
                                                         copyable
                                                     />
                                                 )}
                                                 {log.transactionId && (
-                                                    <DetailRow 
-                                                        label="Transaction ID" 
+                                                    <DetailRow
+                                                        label="Transaction ID"
                                                         value={log.transactionId}
                                                         copyable
                                                     />
                                                 )}
                                                 {log.applicationMessageId && (
-                                                    <DetailRow 
-                                                        label="Application Message ID" 
+                                                    <DetailRow
+                                                        label="Application Message ID"
                                                         value={log.applicationMessageId}
                                                     />
                                                 )}
                                                 {log.applicationMessageType && (
-                                                    <DetailRow 
-                                                        label="Message Type" 
+                                                    <DetailRow
+                                                        label="Message Type"
                                                         value={log.applicationMessageType}
                                                     />
                                                 )}
@@ -378,14 +378,14 @@ export function MessageLogDetailSheet({
                                                 </CardHeader>
                                                 <CardContent className="space-y-3">
                                                     {log.customStatus && (
-                                                        <DetailRow 
-                                                            label="Custom Status" 
+                                                        <DetailRow
+                                                            label="Custom Status"
                                                             value={log.customStatus}
                                                         />
                                                     )}
                                                     {log.logLevel && (
-                                                        <DetailRow 
-                                                            label="Log Level" 
+                                                        <DetailRow
+                                                            label="Log Level"
                                                             value={log.logLevel}
                                                         />
                                                     )}
@@ -463,12 +463,18 @@ export function MessageLogDetailSheet({
                                                     <Button
                                                         onClick={async () => {
                                                             if (!log) return;
+                                                            // Use log.tenantId as fallback if tenantId prop is not provided
+                                                            const effectiveTenantId = tenantId || log.tenantId;
+                                                            if (!effectiveTenantId) {
+                                                                setDiagnosisError("No tenant ID available. Please select a tenant.");
+                                                                return;
+                                                            }
                                                             setIsAnalyzing(true);
                                                             setDiagnosis(null);
                                                             setDiagnosisError(null);
                                                             try {
                                                                 const result = await diagnoseMessageLogError(
-                                                                    tenantId,
+                                                                    effectiveTenantId,
                                                                     log.messageGuid,
                                                                     log.iFlowId,
                                                                     log.integrationFlowName,
@@ -529,8 +535,8 @@ export function MessageLogDetailSheet({
                                                     </CardTitle>
                                                 </CardHeader>
                                                 <CardContent className="space-y-3">
-                                                    <DetailRow 
-                                                        label="Error Type" 
+                                                    <DetailRow
+                                                        label="Error Type"
                                                         value={errorInfo.Type}
                                                     />
                                                     <div className="space-y-1">
@@ -640,13 +646,13 @@ export function MessageLogDetailSheet({
 }
 
 // Helper component for detail rows
-function DetailRow({ 
-    label, 
-    value, 
-    copyable = false 
-}: { 
-    label: string; 
-    value: string; 
+function DetailRow({
+    label,
+    value,
+    copyable = false
+}: {
+    label: string;
+    value: string;
     copyable?: boolean;
 }) {
     const copyToClipboard = (text: string) => {
