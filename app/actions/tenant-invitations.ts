@@ -15,6 +15,7 @@ import {
   type AcceptInvitationInput,
 } from "@/lib/validations/workspace";
 import { sendTenantInvitationEmail } from "./email";
+import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 /**
  * Check if user is tenant admin (OWNER or ADMIN)
@@ -59,6 +60,20 @@ export async function inviteMember(
     const adminCheck = await checkTenantAdmin(currentUser.id, tenantId);
     if (!adminCheck.success) {
       return { success: false, error: adminCheck.error };
+    }
+
+    // Check subscription limit for team members
+    const limitCheck = await checkSubscriptionLimit("teamMembers");
+    if (!limitCheck.success) {
+      return { success: false, error: limitCheck.error };
+    }
+
+    if (!limitCheck.data?.allowed) {
+      const { current, max } = limitCheck.data || { current: 0, max: 0 };
+      return {
+        success: false,
+        error: `Team member limit reached (${current}/${max}). Please upgrade your plan to invite more team members.`,
+      };
     }
 
     // Check if user is already a member
@@ -141,6 +156,9 @@ export async function inviteMember(
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
+
+    // Increment team member usage after successful invitation
+    await incrementUsage("teamMembers");
 
     const pendingInvitation: PendingInvitation = {
       id: invitation._id,

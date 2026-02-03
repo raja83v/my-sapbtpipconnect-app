@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { LimitReachedBanner } from "@/components/billing/limit-reached-banner";
 import {
   Card,
   CardContent,
@@ -200,8 +201,62 @@ export function BillingContent({
     return `${current} / ${max}`;
   };
 
+  // Check for exceeded limits
+  const tenantsExceeded = subscription && subscription.maxTenants !== -1 && subscription.currentTenantCount >= subscription.maxTenants;
+  const iflowsExceeded = subscription && subscription.maxIFlows !== -1 && subscription.currentIFlowCount >= subscription.maxIFlows;
+  const teamMembersExceeded = subscription && subscription.maxTeamMembers !== -1 && subscription.currentTeamMemberCount >= subscription.maxTeamMembers;
+  const aiCallsExceeded = subscription && subscription.maxAIAgentCalls !== -1 && subscription.currentAIAgentCalls >= subscription.maxAIAgentCalls;
+
+  const hasExceededLimits = tenantsExceeded || iflowsExceeded || teamMembersExceeded || aiCallsExceeded;
+
   return (
     <div className="space-y-6">
+      {/* Limit Exceeded Banners */}
+      {hasExceededLimits && (
+        <div className="space-y-3">
+          {tenantsExceeded && (
+            <LimitReachedBanner
+              limitType="tenants"
+              current={subscription!.currentTenantCount}
+              max={subscription!.maxTenants}
+              currentPlan={currentPlan}
+              variant={subscription!.currentTenantCount > subscription!.maxTenants ? "error" : "warning"}
+              dismissible={false}
+            />
+          )}
+          {iflowsExceeded && (
+            <LimitReachedBanner
+              limitType="iflows"
+              current={subscription!.currentIFlowCount}
+              max={subscription!.maxIFlows}
+              currentPlan={currentPlan}
+              variant={subscription!.currentIFlowCount > subscription!.maxIFlows ? "error" : "warning"}
+              dismissible={false}
+            />
+          )}
+          {teamMembersExceeded && (
+            <LimitReachedBanner
+              limitType="teamMembers"
+              current={subscription!.currentTeamMemberCount}
+              max={subscription!.maxTeamMembers}
+              currentPlan={currentPlan}
+              variant={subscription!.currentTeamMemberCount > subscription!.maxTeamMembers ? "error" : "warning"}
+              dismissible={false}
+            />
+          )}
+          {aiCallsExceeded && (
+            <LimitReachedBanner
+              limitType="aiAgentCalls"
+              current={subscription!.currentAIAgentCalls}
+              max={subscription!.maxAIAgentCalls}
+              currentPlan={currentPlan}
+              variant={subscription!.currentAIAgentCalls > subscription!.maxAIAgentCalls ? "error" : "warning"}
+              dismissible={false}
+            />
+          )}
+        </div>
+      )}
+
       {/* Current Plan Card */}
       <Card>
         <CardHeader>
@@ -512,8 +567,8 @@ export function BillingContent({
                           invoice.status === "PAID"
                             ? "default"
                             : invoice.status === "OPEN"
-                            ? "secondary"
-                            : "destructive"
+                              ? "secondary"
+                              : "destructive"
                         }
                       >
                         {invoice.status}
@@ -560,6 +615,7 @@ export function BillingContent({
           </CardContent>
         </Card>
       )}
+
     </div>
   );
 }

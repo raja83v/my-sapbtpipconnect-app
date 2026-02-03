@@ -10,6 +10,7 @@ import * as prompts from "@/lib/ai/prompts";
 import { revalidatePath } from "next/cache";
 import type { AIAgentTypeV2 } from "@/lib/ai/agent-types-v2";
 import { createSAPCPIClient, type SAPCPICredentials } from "@/lib/sap-cpi/client";
+import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 /**
  * Diagnose an error with AI-powered analysis
@@ -38,6 +39,20 @@ export async function diagnoseError(params: {
 
         if (!membership) {
             return { success: false, error: "You don't have access to this tenant" };
+        }
+
+        // Check subscription limit for AI agent calls
+        const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
+        if (!limitCheck.success) {
+            return { success: false, error: limitCheck.error };
+        }
+
+        if (!limitCheck.data?.allowed) {
+            const { current, max } = limitCheck.data || { current: 0, max: 0 };
+            return {
+                success: false,
+                error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
+            };
         }
 
         // Build context for error diagnosis
@@ -188,6 +203,9 @@ const pool = new Pool({
 
         // Track execution in database
         // TODO: Create execution record in Convex
+
+        // Increment AI agent usage after successful execution
+        await incrementUsage("aiAgentCalls");
 
         revalidatePath("/dashboard/ai-agents-v2");
 
@@ -416,6 +434,20 @@ export async function sendChatMessage(params: {
                 return { success: false, error: "You don't have access to this tenant" };
             }
 
+            // Check subscription limit for AI agent calls
+            const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
+            if (!limitCheck.success) {
+                return { success: false, error: limitCheck.error };
+            }
+
+            if (!limitCheck.data?.allowed) {
+                const { current, max } = limitCheck.data || { current: 0, max: 0 };
+                return {
+                    success: false,
+                    error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
+                };
+            }
+
             contextInfo += `\n**Tenant Context:** User is working with tenant ${tenantId}`;
         }
 
@@ -472,6 +504,9 @@ Provide a helpful, accurate, and concise response. If the question is about SAP 
             console.error("Failed to track execution:", trackError);
             // Don't fail the request if tracking fails
         }
+
+        // Increment AI agent usage after successful execution
+        await incrementUsage("aiAgentCalls");
 
         revalidatePath("/dashboard/ai-agents");
 
@@ -644,6 +679,20 @@ export async function analyzeIFlowPerformance(params: {
 
         if (!membership) {
             return { success: false, error: "You don't have access to this tenant" };
+        }
+
+        // Check subscription limit for AI agent calls
+        const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
+        if (!limitCheck.success) {
+            return { success: false, error: limitCheck.error };
+        }
+
+        if (!limitCheck.data?.allowed) {
+            const { current, max } = limitCheck.data || { current: 0, max: 0 };
+            return {
+                success: false,
+                error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
+            };
         }
 
         // Get tenant details for SAP CPI connection
@@ -1086,6 +1135,9 @@ Focus on actionable, specific recommendations based on the metrics provided.`,
         } catch (trackError) {
             console.error("Failed to track execution:", trackError);
         }
+
+        // Increment AI agent usage after successful execution
+        await incrementUsage("aiAgentCalls");
 
         revalidatePath("/dashboard/ai-agents");
 

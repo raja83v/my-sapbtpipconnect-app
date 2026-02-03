@@ -1,16 +1,107 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 
+// Default free tier limits
+const FREE_TIER_LIMITS = {
+  maxTenants: 1,
+  maxIFlows: 10,
+  maxTeamMembers: 3,
+  maxAIAgentCalls: 100,
+};
+
 /**
- * Get subscription by user ID (alias for getByUserId)
+ * Helper function to calculate real-time usage for a user
+ */
+async function calculateUsage(ctx: any, userId: any) {
+  // Get tenant count - count tenants where user is a member
+  const tenantMemberships = await ctx.db
+    .query("tenantMembers")
+    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .collect();
+  const currentTenantCount = tenantMemberships.length;
+
+  // Get iFlow count - count iFlows across all user's tenants
+  let currentIFlowCount = 0;
+  for (const membership of tenantMemberships) {
+    const iFlows = await ctx.db
+      .query("iFlows")
+      .withIndex("by_tenantId", (q: any) => q.eq("tenantId", membership.tenantId))
+      .collect();
+    currentIFlowCount += iFlows.length;
+  }
+
+  // Get team member count - count unique team members across all owned tenants
+  let currentTeamMemberCount = 0;
+  const ownedTenants = tenantMemberships.filter((m: any) => m.role === "OWNER");
+  for (const membership of ownedTenants) {
+    const members = await ctx.db
+      .query("tenantMembers")
+      .withIndex("by_tenantId", (q: any) => q.eq("tenantId", membership.tenantId))
+      .collect();
+    // Count members excluding the owner
+    currentTeamMemberCount += members.filter((m: any) => m.userId !== userId).length;
+  }
+
+  return {
+    currentTenantCount,
+    currentIFlowCount,
+    currentTeamMemberCount,
+  };
+}
+
+/**
+ * Get subscription by user ID with real-time usage calculation
+ * Returns a virtual FREE subscription if none exists
  */
 export const getSubscription = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const subscription = await ctx.db
       .query("subscriptions")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .first();
+
+    // Calculate real-time usage
+    const usage = await calculateUsage(ctx, args.userId);
+
+    // If no subscription exists, return a virtual FREE subscription with real usage
+    if (!subscription) {
+      return {
+        _id: "virtual_free_subscription" as any,
+        _creationTime: Date.now(),
+        userId: args.userId,
+        plan: "FREE" as const,
+        status: "ACTIVE" as const,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        stripePriceId: null,
+        stripeCurrentPeriodStart: null,
+        stripeCurrentPeriodEnd: null,
+        maxTenants: FREE_TIER_LIMITS.maxTenants,
+        maxIFlows: FREE_TIER_LIMITS.maxIFlows,
+        maxTeamMembers: FREE_TIER_LIMITS.maxTeamMembers,
+        maxAIAgentCalls: FREE_TIER_LIMITS.maxAIAgentCalls,
+        currentTenantCount: usage.currentTenantCount,
+        currentIFlowCount: usage.currentIFlowCount,
+        currentTeamMemberCount: usage.currentTeamMemberCount,
+        currentAIAgentCalls: 0,
+        trialStart: null,
+        trialEnd: null,
+        cancelAtPeriodEnd: false,
+        canceledAt: null,
+      };
+    }
+
+    // AI agent calls are tracked in the subscription, so use the stored value
+    const currentAIAgentCalls = subscription.currentAIAgentCalls;
+
+    return {
+      ...subscription,
+      currentTenantCount: usage.currentTenantCount,
+      currentIFlowCount: usage.currentIFlowCount,
+      currentTeamMemberCount: usage.currentTeamMemberCount,
+      currentAIAgentCalls,
+    };
   },
 });
 
@@ -208,7 +299,7 @@ export const getBillingStats = query({
     for (const sub of subscriptions) {
       // Count by plan
       stats.byPlan[sub.plan] = (stats.byPlan[sub.plan] || 0) + 1;
-      
+
       // Count by status
       if (["ACTIVE", "CANCELED", "TRIALING", "PAST_DUE"].includes(sub.status)) {
         stats.byStatus[sub.status]++;
@@ -237,10 +328,10 @@ export const getBillingStats = query({
 });
 
 /**
- * Check subscription limits
+ * Check subscription limits with real-time usage calculation
  */
 export const checkLimits = query({
-  args: { 
+  args: {
     userId: v.id("users"),
     limitType: v.optional(v.union(
       v.literal("tenants"),
@@ -255,27 +346,25 @@ export const checkLimits = query({
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .first();
 
-    // Default free tier limits
-    const defaultLimits = {
-      maxTenants: 1,
-      maxIFlows: 10,
-      maxTeamMembers: 3,
-      maxAIAgentCalls: 100,
-    };
-
     const plan = subscription?.plan || "FREE";
     const limits = subscription ? {
       maxTenants: subscription.maxTenants,
       maxIFlows: subscription.maxIFlows,
       maxTeamMembers: subscription.maxTeamMembers,
       maxAIAgentCalls: subscription.maxAIAgentCalls,
-    } : defaultLimits;
+    } : FREE_TIER_LIMITS;
+
+    // Calculate real-time usage using helper function
+    const calculatedUsage = await calculateUsage(ctx, args.userId);
+
+    // AI agent calls are tracked in the subscription, so use the stored value
+    const currentAIAgentCalls = subscription?.currentAIAgentCalls ?? 0;
 
     const usage = {
-      tenants: subscription?.currentTenantCount ?? 0,
-      iFlows: subscription?.currentIFlowCount ?? 0,
-      teamMembers: subscription?.currentTeamMemberCount ?? 0,
-      aiAgentCalls: subscription?.currentAIAgentCalls ?? 0,
+      tenants: calculatedUsage.currentTenantCount,
+      iFlows: calculatedUsage.currentIFlowCount,
+      teamMembers: calculatedUsage.currentTeamMemberCount,
+      aiAgentCalls: currentAIAgentCalls,
     };
 
     // If a specific limit type is requested, return that info
@@ -286,10 +375,10 @@ export const checkLimits = query({
         teamMembers: { current: usage.teamMembers, max: limits.maxTeamMembers },
         aiAgentCalls: { current: usage.aiAgentCalls, max: limits.maxAIAgentCalls },
       };
-      
+
       const { current, max } = limitMap[args.limitType];
       const allowed = max === -1 || current < max;
-      
+
       return { allowed, current, max, plan };
     }
 

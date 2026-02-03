@@ -6,7 +6,7 @@ import { stripe, PRICING_PLANS, getPlanByPriceId, absoluteUrl, type PlanType } f
 import { getCurrentUser } from "./user";
 import { revalidatePath } from "next/cache";
 
-export type ActionResponse<T = void> = 
+export type ActionResponse<T = void> =
   | { success: true; data?: T }
   | { success: false; error: string };
 
@@ -335,9 +335,9 @@ export async function getBillingHistory(): Promise<ActionResponse<{
       limit: 10,
     });
 
-    return { 
-      success: true, 
-      data: { 
+    return {
+      success: true,
+      data: {
         invoices: invoices.map(inv => ({
           id: inv._id,
           stripeInvoiceId: inv.stripeInvoiceId,
@@ -353,7 +353,7 @@ export async function getBillingHistory(): Promise<ActionResponse<{
           paidAt: inv.paidAt || null,
           createdAt: inv._creationTime,
         }))
-      } 
+      }
     };
   } catch (error) {
     console.error("Error fetching billing history:", error);
@@ -598,8 +598,8 @@ export async function checkSubscriptionLimit(
       limitType,
     });
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: result,
     };
   } catch (error) {
@@ -649,5 +649,56 @@ export async function decrementUsage(
   } catch (error) {
     console.error("Error decrementing usage:", error);
     return { success: false, error: "Failed to decrement usage" };
+  }
+}
+
+// Check limit and increment usage atomically (for use before creating resources)
+export async function checkAndIncrementUsage(
+  usageType: "tenants" | "iflows" | "teamMembers" | "aiAgentCalls"
+): Promise<ActionResponse<{ allowed: boolean; current: number; max: number; plan: string }>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    // First check if the limit allows the action
+    const limitCheck = await convex.query(api.billing.checkLimits, {
+      userId: user.id as any,
+      limitType: usageType,
+    });
+
+    if (!limitCheck.allowed) {
+      const limitNames: Record<string, string> = {
+        tenants: "CPI tenant",
+        iflows: "iFlow",
+        teamMembers: "team member",
+        aiAgentCalls: "AI agent call",
+      };
+
+      return {
+        success: false,
+        error: `${limitNames[usageType]} limit reached (${limitCheck.current}/${limitCheck.max}). Please upgrade your plan to continue.`,
+      };
+    }
+
+    // If allowed, increment the usage
+    await convex.mutation(api.billingMutations.incrementUsage, {
+      userId: user.id as any,
+      usageType,
+    });
+
+    return {
+      success: true,
+      data: {
+        allowed: true,
+        current: limitCheck.current + 1,
+        max: limitCheck.max,
+        plan: limitCheck.plan,
+      },
+    };
+  } catch (error) {
+    console.error("Error checking and incrementing usage:", error);
+    return { success: false, error: "Failed to check usage limit" };
   }
 }

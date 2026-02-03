@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Link2, Check } from "lucide-react";
+import { Loader2, Link2, Check, Users, Zap, ArrowUpRight } from "lucide-react";
 import { IconTrash } from "@tabler/icons-react";
 import {
   Card,
@@ -12,9 +12,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { MemberInviteDialog } from "./member-invite-dialog";
 import { MembersDataTable } from "./members-data-table";
+import { LimitReachedBanner } from "@/components/billing";
 import {
   getTenantMembers,
 } from "@/app/actions/tenant-members";
@@ -22,8 +24,11 @@ import {
   getPendingInvitations,
   cancelInvitation,
 } from "@/app/actions/tenant-invitations";
+import { getUserSubscription } from "@/app/actions/billing";
 import type { TenantMemberWithUser, PendingInvitation } from "@/types/workspace";
+import type { PlanType } from "@/lib/stripe-config";
 import { formatDate } from "@/lib/format";
+import Link from "next/link";
 
 interface MembersTabProps {
   tenantId: string;
@@ -37,6 +42,12 @@ export function MembersTab({ tenantId, currentUserId }: MembersTabProps) {
   const [isLoadingInvitations, setIsLoadingInvitations] = useState(true);
   const [cancelingInvitationId, setCancelingInvitationId] = useState<string | null>(null);
   const [copiedInvitationId, setCopiedInvitationId] = useState<string | null>(null);
+
+  // Subscription state
+  const [plan, setPlan] = useState<PlanType>("FREE");
+  const [teamMembersCurrent, setTeamMembersCurrent] = useState(0);
+  const [teamMembersMax, setTeamMembersMax] = useState(3);
+  const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
 
   async function loadMembers() {
     setIsLoadingMembers(true);
@@ -69,6 +80,23 @@ export function MembersTab({ tenantId, currentUserId }: MembersTabProps) {
       toast.error("Failed to load invitations");
     } finally {
       setIsLoadingInvitations(false);
+    }
+  }
+
+  async function loadSubscription() {
+    setIsLoadingSubscription(true);
+    try {
+      const result = await getUserSubscription();
+      if (result.success && result.data?.subscription) {
+        const sub = result.data.subscription;
+        setPlan(sub.plan);
+        setTeamMembersCurrent(sub.currentTeamMemberCount);
+        setTeamMembersMax(sub.maxTeamMembers);
+      }
+    } catch (error) {
+      console.error("Error loading subscription:", error);
+    } finally {
+      setIsLoadingSubscription(false);
     }
   }
 
@@ -112,23 +140,58 @@ export function MembersTab({ tenantId, currentUserId }: MembersTabProps) {
   function handleRefresh() {
     loadMembers();
     loadInvitations();
+    loadSubscription();
   }
 
   useEffect(() => {
     loadMembers();
     loadInvitations();
+    loadSubscription();
   }, [tenantId]);
+
+  // Calculate usage
+  const isUnlimited = teamMembersMax === -1;
+  const teamMembersRemaining = isUnlimited ? Infinity : Math.max(0, teamMembersMax - teamMembersCurrent);
+  const teamMembersPercent = isUnlimited ? 0 : Math.min((teamMembersCurrent / teamMembersMax) * 100, 100);
+  const isLimitApproaching = !isUnlimited && teamMembersPercent >= 80;
+  const isLimitReached = !isUnlimited && teamMembersCurrent >= teamMembersMax;
 
   return (
     <div className="space-y-6">
+      {/* Team Member Limit Banner */}
+      {isLimitReached && (
+        <LimitReachedBanner
+          limitType="teamMembers"
+          current={teamMembersCurrent}
+          max={teamMembersMax}
+          currentPlan={plan}
+          variant="warning"
+        />
+      )}
+
       {/* Members Section */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>Team Members</CardTitle>
-              <CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                Team Members
+                {!isLoadingSubscription && (
+                  <span className={`text-sm font-normal ${isLimitReached ? "text-destructive" : isLimitApproaching ? "text-yellow-600" : "text-muted-foreground"}`}>
+                    ({teamMembersCurrent}/{isUnlimited ? "∞" : teamMembersMax})
+                  </span>
+                )}
+              </CardTitle>
+              <CardDescription className="flex items-center gap-2">
                 Manage members and their roles in your workspace
+                {isLimitApproaching && !isLimitReached && plan !== "ENTERPRISE" && (
+                  <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs">
+                    <Link href="/dashboard/settings/billing">
+                      <Zap className="mr-1 h-3 w-3" />
+                      Upgrade for more
+                    </Link>
+                  </Button>
+                )}
               </CardDescription>
             </div>
             <MemberInviteDialog
@@ -136,6 +199,12 @@ export function MembersTab({ tenantId, currentUserId }: MembersTabProps) {
               onInviteSent={handleRefresh}
             />
           </div>
+          {!isUnlimited && !isLoadingSubscription && (
+            <Progress
+              value={teamMembersPercent}
+              className={`h-1.5 mt-3 ${teamMembersPercent >= 100 ? "[&>div]:bg-destructive" : teamMembersPercent >= 80 ? "[&>div]:bg-yellow-500" : ""}`}
+            />
+          )}
         </CardHeader>
         <CardContent>
           {isLoadingMembers ? (

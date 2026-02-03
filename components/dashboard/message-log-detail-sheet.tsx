@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
     Sheet,
     SheetContent,
@@ -25,15 +25,25 @@ import {
     IconLoader2,
     IconFile,
     IconBrain,
+    IconPlayerStop,
+    IconBulb,
+    IconTarget,
+    IconListCheck,
+    IconChevronDown,
+    IconChevronRight,
 } from "@tabler/icons-react";
+import {
+    Collapsible,
+    CollapsibleContent,
+    CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
     getMessageLogDetail,
     downloadMessageAttachment,
-    diagnoseMessageLogError,
     type GlobalMessageLog,
 } from "@/app/actions/message-logs";
 import type { MessageRunStep, MessageAttachment, MessageErrorInfo } from "@/lib/sap-cpi/client";
-import { format, formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -84,10 +94,84 @@ export function MessageLogDetailSheet({
     const [errorInfo, setErrorInfo] = useState<MessageErrorInfo | null>(null);
     const [errorText, setErrorText] = useState<string | null>(null);
 
-    // AI diagnosis state
+    // AI diagnosis state with streaming
+    const [diagnosis, setDiagnosis] = useState<string>("");
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [diagnosis, setDiagnosis] = useState<string | null>(null);
     const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
+
+    // Function to stop streaming
+    const stopStreaming = useCallback(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setIsAnalyzing(false);
+    }, []);
+
+    // Function to start streaming AI diagnosis
+    const startDiagnosis = useCallback(async (
+        effectiveTenantId: string,
+        messageGuid: string,
+        iFlowId: string | null,
+        integrationFlowName: string,
+        errorMessage: string | null
+    ) => {
+        // Reset state
+        setDiagnosis("");
+        setDiagnosisError(null);
+        setIsAnalyzing(true);
+
+        // Create abort controller for cancellation
+        abortControllerRef.current = new AbortController();
+
+        try {
+            const response = await fetch("/api/ai/diagnose-error", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    tenantId: effectiveTenantId,
+                    messageGuid,
+                    iFlowArtifactId: iFlowId,
+                    iFlowName: integrationFlowName,
+                    errorMessage,
+                }),
+                signal: abortControllerRef.current.signal,
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `HTTP error ${response.status}`);
+            }
+
+            if (!response.body) {
+                throw new Error("No response body");
+            }
+
+            // Read the stream
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                setDiagnosis(prev => prev + chunk);
+            }
+        } catch (error) {
+            if (error instanceof Error && error.name === "AbortError") {
+                // User cancelled - don't show error
+                return;
+            }
+            setDiagnosisError(error instanceof Error ? error.message : "Failed to analyze error");
+        } finally {
+            setIsAnalyzing(false);
+            abortControllerRef.current = null;
+        }
+    }, []);
 
     useEffect(() => {
         if (open && messageGuid) {
@@ -100,9 +184,9 @@ export function MessageLogDetailSheet({
 
         setIsLoading(true);
         // Reset AI diagnosis state when loading new message
-        setDiagnosis(null);
+        setDiagnosis("");
         setDiagnosisError(null);
-        setIsAnalyzing(false);
+        stopStreaming(); // Stop any ongoing streaming
 
         try {
             const result = await getMessageLogDetail(tenantId, messageGuid);
@@ -461,7 +545,7 @@ export function MessageLogDetailSheet({
                                             <CardContent>
                                                 {!diagnosis && !isAnalyzing && !diagnosisError && (
                                                     <Button
-                                                        onClick={async () => {
+                                                        onClick={() => {
                                                             if (!log) return;
                                                             // Use log.tenantId as fallback if tenantId prop is not provided
                                                             const effectiveTenantId = tenantId || log.tenantId;
@@ -469,27 +553,15 @@ export function MessageLogDetailSheet({
                                                                 setDiagnosisError("No tenant ID available. Please select a tenant.");
                                                                 return;
                                                             }
-                                                            setIsAnalyzing(true);
-                                                            setDiagnosis(null);
-                                                            setDiagnosisError(null);
-                                                            try {
-                                                                const result = await diagnoseMessageLogError(
-                                                                    effectiveTenantId,
-                                                                    log.messageGuid,
-                                                                    log.iFlowId,
-                                                                    log.integrationFlowName,
-                                                                    errorInfo?.Message || errorText
-                                                                );
-                                                                if (result.success && result.data) {
-                                                                    setDiagnosis(result.data.diagnosis);
-                                                                } else {
-                                                                    setDiagnosisError(result.error || "Failed to analyze error");
-                                                                }
-                                                            } catch (err) {
-                                                                setDiagnosisError(err instanceof Error ? err.message : "Failed to analyze error");
-                                                            } finally {
-                                                                setIsAnalyzing(false);
-                                                            }
+
+                                                            // Start streaming diagnosis
+                                                            startDiagnosis(
+                                                                effectiveTenantId,
+                                                                log.messageGuid,
+                                                                log.iFlowId,
+                                                                log.integrationFlowName,
+                                                                errorInfo?.Message || errorText
+                                                            );
                                                         }}
                                                         variant="outline"
                                                         size="sm"
@@ -500,9 +572,26 @@ export function MessageLogDetailSheet({
                                                     </Button>
                                                 )}
                                                 {isAnalyzing && (
-                                                    <div className="flex items-center gap-2 text-muted-foreground">
-                                                        <IconLoader2 className="h-4 w-4 animate-spin" />
-                                                        <span>Analyzing error details...</span>
+                                                    <div className="space-y-3">
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex items-center gap-2 text-muted-foreground">
+                                                                <IconLoader2 className="h-4 w-4 animate-spin" />
+                                                                <span>Analyzing error details...</span>
+                                                            </div>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={stopStreaming}
+                                                                className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                                                            >
+                                                                <IconPlayerStop className="h-3 w-3 mr-1" />
+                                                                Stop
+                                                            </Button>
+                                                        </div>
+                                                        {/* Show streaming content while loading */}
+                                                        {diagnosis && (
+                                                            <AIAnalysisContent diagnosis={diagnosis} />
+                                                        )}
                                                     </div>
                                                 )}
                                                 {diagnosisError && (
@@ -512,15 +601,29 @@ export function MessageLogDetailSheet({
                                                             variant="link"
                                                             size="sm"
                                                             className="ml-2 p-0 h-auto"
-                                                            onClick={() => setDiagnosisError(null)}
+                                                            onClick={() => {
+                                                                setDiagnosisError(null);
+                                                                setDiagnosis("");
+                                                            }}
                                                         >
                                                             Try again
                                                         </Button>
                                                     </div>
                                                 )}
-                                                {diagnosis && (
-                                                    <div className="prose prose-sm dark:prose-invert max-w-none">
-                                                        <ReactMarkdown>{diagnosis}</ReactMarkdown>
+                                                {diagnosis && !isAnalyzing && (
+                                                    <div className="space-y-3">
+                                                        <AIAnalysisContent diagnosis={diagnosis} />
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => {
+                                                                setDiagnosis("");
+                                                                setDiagnosisError(null);
+                                                            }}
+                                                            className="text-muted-foreground"
+                                                        >
+                                                            Clear analysis
+                                                        </Button>
                                                     </div>
                                                 )}
                                             </CardContent>
@@ -715,6 +818,192 @@ export function MessageLogDetailSheet({
                 )}
             </SheetContent>
         </Sheet>
+    );
+}
+
+// Component to display AI analysis in a structured format
+function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
+    const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+        explanation: true,
+        rootCause: true,
+        solutions: true,
+    });
+
+    // Parse the diagnosis into sections
+    const parseAnalysis = (text: string) => {
+        const sections: {
+            explanation: string;
+            rootCause: string;
+            solutions: string;
+            other: string;
+        } = {
+            explanation: "",
+            rootCause: "",
+            solutions: "",
+            other: "",
+        };
+
+        // Split by numbered sections (1., 2., 3.)
+        const lines = text.split('\n');
+        let currentSection: keyof typeof sections = "other";
+        let buffer: string[] = [];
+
+        const flushBuffer = () => {
+            if (buffer.length > 0) {
+                sections[currentSection] += buffer.join('\n') + '\n';
+                buffer = [];
+            }
+        };
+
+        for (const line of lines) {
+            // Check for section headers
+            const lowerLine = line.toLowerCase();
+
+            if (lowerLine.match(/^#+?\s*1\.?\s*(explanation|what went wrong)/i) ||
+                lowerLine.includes('explanation of what went wrong') ||
+                lowerLine.match(/^1\.\s*(explanation|what went wrong)/i)) {
+                flushBuffer();
+                currentSection = "explanation";
+                continue;
+            }
+
+            if (lowerLine.match(/^#+?\s*2\.?\s*(likely root cause|root cause)/i) ||
+                lowerLine.includes('likely root cause') ||
+                lowerLine.match(/^2\.\s*(likely root cause|root cause)/i)) {
+                flushBuffer();
+                currentSection = "rootCause";
+                continue;
+            }
+
+            if (lowerLine.match(/^#+?\s*3\.?\s*(suggested solutions|solutions|next steps)/i) ||
+                lowerLine.includes('suggested solutions') ||
+                lowerLine.includes('next steps') ||
+                lowerLine.match(/^3\.\s*(suggested solutions|solutions|next steps)/i)) {
+                flushBuffer();
+                currentSection = "solutions";
+                continue;
+            }
+
+            buffer.push(line);
+        }
+        flushBuffer();
+
+        return sections;
+    };
+
+    const sections = parseAnalysis(diagnosis);
+    const hasStructuredContent = sections.explanation || sections.rootCause || sections.solutions;
+
+    // If we couldn't parse structured sections, show as plain markdown
+    if (!hasStructuredContent) {
+        return (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+                <ReactMarkdown>{diagnosis}</ReactMarkdown>
+            </div>
+        );
+    }
+
+    const toggleSection = (section: string) => {
+        setOpenSections(prev => ({ ...prev, [section]: !prev[section] }));
+    };
+
+    return (
+        <div className="space-y-3">
+            {/* Explanation Section */}
+            {sections.explanation && (
+                <Collapsible open={openSections.explanation} onOpenChange={() => toggleSection('explanation')}>
+                    <Card className="border-blue-200 dark:border-blue-900/50">
+                        <CollapsibleTrigger asChild>
+                            <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    {openSections.explanation ? (
+                                        <IconChevronDown className="h-4 w-4 text-blue-500" />
+                                    ) : (
+                                        <IconChevronRight className="h-4 w-4 text-blue-500" />
+                                    )}
+                                    <IconAlertCircle className="h-4 w-4 text-blue-500" />
+                                    <span className="text-blue-700 dark:text-blue-400">What Went Wrong</span>
+                                </CardTitle>
+                            </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                            <CardContent className="pt-0">
+                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground">
+                                    <ReactMarkdown>{sections.explanation.trim()}</ReactMarkdown>
+                                </div>
+                            </CardContent>
+                        </CollapsibleContent>
+                    </Card>
+                </Collapsible>
+            )}
+
+            {/* Root Cause Section */}
+            {sections.rootCause && (
+                <Collapsible open={openSections.rootCause} onOpenChange={() => toggleSection('rootCause')}>
+                    <Card className="border-amber-200 dark:border-amber-900/50">
+                        <CollapsibleTrigger asChild>
+                            <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    {openSections.rootCause ? (
+                                        <IconChevronDown className="h-4 w-4 text-amber-500" />
+                                    ) : (
+                                        <IconChevronRight className="h-4 w-4 text-amber-500" />
+                                    )}
+                                    <IconTarget className="h-4 w-4 text-amber-500" />
+                                    <span className="text-amber-700 dark:text-amber-400">Root Cause</span>
+                                </CardTitle>
+                            </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                            <CardContent className="pt-0">
+                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground">
+                                    <ReactMarkdown>{sections.rootCause.trim()}</ReactMarkdown>
+                                </div>
+                            </CardContent>
+                        </CollapsibleContent>
+                    </Card>
+                </Collapsible>
+            )}
+
+            {/* Solutions Section */}
+            {sections.solutions && (
+                <Collapsible open={openSections.solutions} onOpenChange={() => toggleSection('solutions')}>
+                    <Card className="border-green-200 dark:border-green-900/50">
+                        <CollapsibleTrigger asChild>
+                            <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    {openSections.solutions ? (
+                                        <IconChevronDown className="h-4 w-4 text-green-500" />
+                                    ) : (
+                                        <IconChevronRight className="h-4 w-4 text-green-500" />
+                                    )}
+                                    <IconListCheck className="h-4 w-4 text-green-500" />
+                                    <span className="text-green-700 dark:text-green-400">Suggested Solutions</span>
+                                </CardTitle>
+                            </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                            <CardContent className="pt-0">
+                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground [&_ul]:space-y-2 [&_ol]:space-y-2 [&_li]:leading-relaxed">
+                                    <ReactMarkdown>{sections.solutions.trim()}</ReactMarkdown>
+                                </div>
+                            </CardContent>
+                        </CollapsibleContent>
+                    </Card>
+                </Collapsible>
+            )}
+
+            {/* Other content that didn't fit into sections */}
+            {sections.other.trim() && (
+                <Card>
+                    <CardContent className="pt-4">
+                        <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground">
+                            <ReactMarkdown>{sections.other.trim()}</ReactMarkdown>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+        </div>
     );
 }
 

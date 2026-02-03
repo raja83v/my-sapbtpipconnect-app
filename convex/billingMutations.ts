@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
   subscriptionPlanValidator,
@@ -292,6 +292,29 @@ export const resetMonthlyAIAgentCalls = mutation({
     }
 
     return { reset: subscriptions.length };
+  },
+});
+
+/**
+ * Internal version of reset monthly AI agent calls (for cron job)
+ */
+export const resetAllMonthlyAIAgentCalls = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    console.log('🔄 Resetting monthly AI agent calls for all subscriptions...');
+
+    const subscriptions = await ctx.db.query("subscriptions").collect();
+    let resetCount = 0;
+
+    for (const subscription of subscriptions) {
+      if (subscription.currentAIAgentCalls > 0) {
+        await ctx.db.patch(subscription._id, { currentAIAgentCalls: 0 });
+        resetCount++;
+      }
+    }
+
+    console.log(`✅ Reset AI agent calls for ${resetCount} subscriptions (${subscriptions.length} total)`);
+    return { reset: resetCount, total: subscriptions.length };
   },
 });
 

@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import { encrypt, decrypt } from "@/lib/encryption";
 import type { ActionResult } from "@/types/actions";
 import { revalidatePath } from "next/cache";
+import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 // Configuration for execution sync
 const EXECUTION_SYNC_CONFIG = {
@@ -204,6 +205,20 @@ export async function createTenant(data: {
       return { success: false, error: "Not authenticated" };
     }
 
+    // Check subscription limit for tenants
+    const limitCheck = await checkSubscriptionLimit("tenants");
+    if (!limitCheck.success) {
+      return { success: false, error: limitCheck.error };
+    }
+
+    if (!limitCheck.data?.allowed) {
+      const { current, max } = limitCheck.data || { current: 0, max: 0 };
+      return {
+        success: false,
+        error: `Tenant limit reached (${current}/${max}). Please upgrade your plan to add more tenants.`,
+      };
+    }
+
     const tenantSlug = data.tenantName
       .toLowerCase()
       .replace(/[^a-z0-9]/g, "-")
@@ -255,6 +270,9 @@ export async function createTenant(data: {
       connectionTestAt,
       ownerId: currentUser.id as any,
     });
+
+    // Increment tenant usage after successful creation
+    await incrementUsage("tenants");
 
     revalidatePath("/dashboard/settings");
     return { success: true, data: { tenantId } };
@@ -895,10 +913,58 @@ export async function syncTenantIFlows(
       lastDeployedAt: iflow.DeployedOn ? new Date(iflow.DeployedOn).getTime() : undefined,
     }));
 
+    // Check subscription limit for iFlows before syncing
+    // We need to determine how many NEW iFlows would be created
+    const existingIFlows = await convex.query(api.iflows.listByTenant, {
+      tenantId: tenantId as any,
+    });
+    const existingIFlowIds = new Set(existingIFlows.map((iflow: any) => iflow.iFlowId));
+    const newIFlowsCount = iflowsToSync.filter(iflow => !existingIFlowIds.has(iflow.iFlowId)).length;
+
+    if (newIFlowsCount > 0) {
+      // Check if we can add these new iFlows
+      const limitCheck = await checkSubscriptionLimit("iflows");
+      if (!limitCheck.success) {
+        return { success: false, error: limitCheck.error };
+      }
+
+      if (!limitCheck.data?.allowed) {
+        const { current, max } = limitCheck.data || { current: 0, max: 0 };
+        // Calculate how many we can still add
+        const remainingSlots = max === -1 ? Infinity : Math.max(0, max - current);
+
+        if (remainingSlots === 0) {
+          return {
+            success: false,
+            error: `iFlow limit reached (${current}/${max}). Please upgrade your plan to sync more iFlows.`,
+          };
+        }
+
+        // Filter to only sync existing iFlows + as many new ones as we can fit
+        const newIFlowsToAdd = iflowsToSync
+          .filter(iflow => !existingIFlowIds.has(iflow.iFlowId))
+          .slice(0, remainingSlots);
+        const existingIFlowsToUpdate = iflowsToSync.filter(iflow => existingIFlowIds.has(iflow.iFlowId));
+
+        // Replace iflowsToSync with the limited set
+        iflowsToSync.length = 0;
+        iflowsToSync.push(...existingIFlowsToUpdate, ...newIFlowsToAdd);
+
+        console.log(`[Sync] Limited to ${newIFlowsToAdd.length} new iFlows due to subscription limit`);
+      }
+    }
+
     const syncResult = await convex.mutation(api.iflowMutations.batchUpsert, {
       tenantId: tenantId as any,
       iFlows: iflowsToSync,
     });
+
+    // Increment iFlow usage for newly created iFlows
+    if (syncResult.created > 0) {
+      for (let i = 0; i < syncResult.created; i++) {
+        await incrementUsage("iflows");
+      }
+    }
 
     const syncedCount = syncResult.created + syncResult.updated;
     console.timeEnd('iFlow sync');

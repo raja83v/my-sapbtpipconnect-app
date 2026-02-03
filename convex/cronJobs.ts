@@ -135,3 +135,25 @@ export const getConnectedTenants = internalQuery({
         return tenants;
     },
 });
+
+/**
+ * Reset monthly AI agent call counts for all subscriptions
+ * Called by cron job on the 1st of each month at midnight UTC
+ */
+export const resetAllMonthlyAICalls = internalAction({
+    args: {},
+    handler: async (ctx) => {
+        console.log('🔄 Starting monthly AI agent call reset...');
+
+        try {
+            // Call the billing mutation to reset all AI agent calls
+            await ctx.runMutation(internal.billingMutations.resetAllMonthlyAIAgentCalls);
+
+            console.log('✅ Monthly AI agent call reset completed successfully');
+            return { success: true };
+        } catch (error) {
+            console.error('❌ Error resetting monthly AI agent calls:', error);
+            return { success: false, error: String(error) };
+        }
+    },
+});

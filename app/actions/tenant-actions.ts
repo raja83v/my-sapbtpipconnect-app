@@ -5,6 +5,7 @@ import { fetchMutation, fetchQuery } from "convex/nextjs";
 import { encrypt } from "@/lib/encryption";
 import { auth } from "@clerk/nextjs/server";
 import { Id } from "@/convex/_generated/dataModel";
+import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 /**
  * Create a new tenant with encrypted credentials
@@ -27,6 +28,17 @@ export async function createTenant(data: {
         throw new Error("Unauthorized");
     }
 
+    // Check subscription limit for tenants
+    const limitCheck = await checkSubscriptionLimit("tenants");
+    if (!limitCheck.success) {
+        throw new Error(limitCheck.error || "Failed to check subscription limit");
+    }
+
+    if (!limitCheck.data?.allowed) {
+        const { current, max } = limitCheck.data || { current: 0, max: 0 };
+        throw new Error(`Tenant limit reached (${current}/${max}). Please upgrade your plan to add more tenants.`);
+    }
+
     // Encrypt sensitive data before storing
     const encryptedData = {
         ...data,
@@ -46,6 +58,9 @@ export async function createTenant(data: {
         ...encryptedData,
         ownerId: convexUser._id,
     });
+
+    // Increment tenant usage after successful creation
+    await incrementUsage("tenants");
 
     return tenantId;
 }

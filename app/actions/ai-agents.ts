@@ -1,6 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "./user";
+import { checkSubscriptionLimit, incrementUsage } from "./billing";
 import { convex } from "@/lib/convex";
 import { api } from "@/convex/_generated/api";
 import type { ActionResult } from "@/types/actions";
@@ -60,10 +61,10 @@ async function buildAgentContext(
 
     if (tenant) {
       // Get iFlow stats
-      const iflowStats = await convex.query(api.iflows.getStatsByTenant, { 
-        tenantId: tenantId as any 
+      const iflowStats = await convex.query(api.iflows.getStatsByTenant, {
+        tenantId: tenantId as any
       });
-      const execStats = await convex.query(api.iflows.getExecutionStatsByTenant, { 
+      const execStats = await convex.query(api.iflows.getExecutionStatsByTenant, {
         tenantId: tenantId as any,
         daysBack: 30,
       });
@@ -92,7 +93,7 @@ async function buildAgentContext(
 
     if (iflow) {
       const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
-      const executions = await convex.query(api.iflows.getExecutions, { 
+      const executions = await convex.query(api.iflows.getExecutions, {
         iFlowId: iflowId as any,
         limit: 50,
       });
@@ -155,6 +156,20 @@ export async function executeAgent(
 
     const { agentType, prompt, tenantId, iflowId, context } = params;
 
+    // Check subscription limit for AI agent calls
+    const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
+    if (!limitCheck.success) {
+      return { success: false, error: limitCheck.error };
+    }
+
+    if (!limitCheck.data?.allowed) {
+      const { current, max } = limitCheck.data || { current: 0, max: 0 };
+      return {
+        success: false,
+        error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
+      };
+    }
+
     // Validate tenant access if tenantId is provided
     if (tenantId) {
       const membership = await convex.query(api.tenants.getMembership, {
@@ -214,7 +229,11 @@ ${prompt}`;
         duration,
       });
 
+      // Increment AI agent usage count after successful execution
+      await incrementUsage("aiAgentCalls");
+
       revalidatePath("/dashboard/ai-agents");
+      revalidatePath("/dashboard/settings/billing");
 
       return {
         success: true,
@@ -325,8 +344,8 @@ export async function getConversationById(
       return { success: false, error: "Conversation not found" };
     }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
         inputPrompt: execution.inputPrompt,
         outputData: execution.outputData || "",

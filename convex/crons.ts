@@ -32,4 +32,14 @@ const crons = cronJobs();
 //     internal.cronJobs.syncAllTenantMessages
 // );
 
+/**
+ * Reset monthly AI agent call counts on the 1st of each month at midnight UTC
+ * This ensures users get their full monthly allocation at the start of each billing period
+ */
+crons.monthly(
+    "reset-monthly-ai-calls",
+    { day: 1, hourUTC: 0, minuteUTC: 0 },
+    internal.cronJobs.resetAllMonthlyAICalls
+);
+
 export default crons;
