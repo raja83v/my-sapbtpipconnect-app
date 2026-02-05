@@ -98,6 +98,190 @@ export const organizationTypeValidator = v.union(
   v.literal("OTHER")
 );
 
+// ============================================================================
+// iFlow Creator Component Validators
+// ============================================================================
+
+// Adapter type validators (50+ types)
+export const iflowAdapterTypeValidator = v.union(
+  // Cloud Connectors
+  v.literal("HTTP"), v.literal("HTTPS"), v.literal("SOAP"), v.literal("SOAP_SAP_RM"), v.literal("REST"),
+  v.literal("OData"), v.literal("OData_V2"), v.literal("OData_V4"),
+  v.literal("SFTP"), v.literal("FTP"), v.literal("FTPS"),
+  v.literal("Mail"), v.literal("IMAP"), v.literal("POP3"), v.literal("SMTP"),
+  v.literal("JDBC"),
+  v.literal("IDoc"), v.literal("XI"), v.literal("RFC"),
+  v.literal("AS2"), v.literal("AS4"),
+  // Message Queuing
+  v.literal("JMS"), v.literal("AMQP"), v.literal("Kafka"), v.literal("SAP_Event_Mesh"), v.literal("AzureServiceBus"),
+  // Cloud Applications
+  v.literal("Salesforce"), v.literal("SuccessFactors"), v.literal("SuccessFactors_SOAP"), 
+  v.literal("SuccessFactors_REST"), v.literal("SuccessFactors_OData"),
+  v.literal("Ariba"), v.literal("Ariba_Network"),
+  v.literal("Workday"), v.literal("ServiceNow"),
+  v.literal("MicrosoftDynamics"), v.literal("MicrosoftDynamics365"),
+  v.literal("Twitter"), v.literal("Facebook"), v.literal("Slack"),
+  v.literal("Dropbox"), v.literal("GoogleDrive"), v.literal("Box"),
+  v.literal("SAP_Concur"), v.literal("SAP_FieldGlass"), v.literal("SAP_IBP"), v.literal("SAP_C4C"),
+  // Infrastructure
+  v.literal("ProcessDirect"), v.literal("DataStore"), v.literal("DataStoreSelect"),
+  v.literal("AmazonS3"), v.literal("AmazonSQS"), v.literal("AmazonSNS"), v.literal("AmazonDynamoDB"),
+  v.literal("AzureBlob"), v.literal("AzureCosmosDB"),
+  v.literal("OpenConnectors"), v.literal("ELSTER"), v.literal("MDI")
+);
+
+// Protocol type validator
+export const iflowProtocolTypeValidator = v.union(
+  v.literal("HTTP"), v.literal("HTTPS"), v.literal("TCP"),
+  v.literal("SFTP"), v.literal("FTP"), v.literal("FTPS"),
+  v.literal("AMQP"), v.literal("AMQPS"),
+  v.literal("KAFKA"), v.literal("MQTT"), v.literal("MQTTS")
+);
+
+// Authentication type validator
+export const iflowAuthTypeValidator = v.union(
+  v.literal("None"), v.literal("Basic"), v.literal("OAuth"), v.literal("OAuth2"),
+  v.literal("OAuth2_ClientCredentials"), v.literal("OAuth2_SAML"),
+  v.literal("Certificate"), v.literal("ClientCertificate"), v.literal("PrincipalPropagation"),
+  v.literal("SAML"), v.literal("APIKey"), v.literal("AWS_Signature"), v.literal("Azure_AD")
+);
+
+// Flow control component validators
+export const iflowRouterTypeValidator = v.union(
+  v.literal("ExclusiveGateway"),
+  v.literal("InclusiveGateway")
+);
+
+export const iflowMulticastTypeValidator = v.union(
+  v.literal("ParallelMulticast"),
+  v.literal("SequentialMulticast")
+);
+
+export const iflowSplitterTypeValidator = v.union(
+  v.literal("IteratingSplitter"),
+  v.literal("GeneralSplitter"),
+  v.literal("ParallelSplitter"),
+  v.literal("TokenizerSplitter")
+);
+
+export const iflowExpressionTypeValidator = v.union(
+  v.literal("XPath"),
+  v.literal("NonXML"),
+  v.literal("Header"),
+  v.literal("Property"),
+  v.literal("LineBreak"),
+  v.literal("Token"),
+  v.literal("PKCS7")
+);
+
+export const iflowAggregationStrategyValidator = v.union(
+  v.literal("CombineXML"),
+  v.literal("Concatenate"),
+  v.literal("CollectInList"),
+  v.literal("Custom"),
+  v.literal("UseLatest"),
+  v.literal("CollectAll")
+);
+
+export const iflowJoinTypeValidator = v.union(
+  v.literal("AND"),
+  v.literal("OR"),
+  v.literal("XOR")
+);
+
+// Converter type validator
+export const iflowConverterTypeValidator = v.union(
+  v.literal("XMLToJSON"), v.literal("JSONToXML"),
+  v.literal("CSVToXML"), v.literal("XMLToCSV"),
+  v.literal("EDIToXML"), v.literal("XMLToEDI"),
+  v.literal("Base64Encoder"), v.literal("Base64Decoder"),
+  v.literal("GZIPCompressor"), v.literal("GZIPDecompressor"),
+  v.literal("ZIPCompressor"), v.literal("ZIPDecompressor"),
+  v.literal("MIMEMultipartEncoder"), v.literal("MIMEMultipartDecoder")
+);
+
+// Security component validators
+export const iflowEncryptorTypeValidator = v.union(
+  v.literal("PGPEncryptor"),
+  v.literal("PKCS7Encryptor"),
+  v.literal("XMLEncryptor")
+);
+
+export const iflowDecryptorTypeValidator = v.union(
+  v.literal("PGPDecryptor"),
+  v.literal("PKCS7Decryptor"),
+  v.literal("XMLDecryptor")
+);
+
+export const iflowSignerTypeValidator = v.union(
+  v.literal("PKCS7Signer"),
+  v.literal("XMLDigitalSigner"),
+  v.literal("SimpleSigner")
+);
+
+export const iflowVerifierTypeValidator = v.union(
+  v.literal("PKCS7Verifier"),
+  v.literal("XMLDigitalVerifier"),
+  v.literal("SimpleVerifier")
+);
+
+// Data Store operation validator
+export const iflowDataStoreOperationValidator = v.union(
+  v.literal("Write"),
+  v.literal("Get"),
+  v.literal("Delete"),
+  v.literal("Select")
+);
+
+export const iflowDataStoreVisibilityValidator = v.union(
+  v.literal("Global"),
+  v.literal("Integration Flow")
+);
+
+// Timer/Scheduler validator
+export const iflowScheduleTypeValidator = v.union(
+  v.literal("RunOnce"),
+  v.literal("Schedule")
+);
+
+// Error handling validators
+export const iflowErrorTypeValidator = v.union(
+  v.literal("Exception"),
+  v.literal("Timeout"),
+  v.literal("ValidationError"),
+  v.literal("Escalation")
+);
+
+export const iflowTriggerTypeValidator = v.union(
+  v.literal("ErrorBoundary"),
+  v.literal("Escalation")
+);
+
+// Integration pattern validator
+export const iflowIntegrationPatternValidator = v.union(
+  v.literal("PointToPoint"),
+  v.literal("PublishSubscribe"),
+  v.literal("ContentBasedRouter"),
+  v.literal("Splitter"),
+  v.literal("Aggregator"),
+  v.literal("Scatter-Gather"),
+  v.literal("RecipientList"),
+  v.literal("Pipeline")
+);
+
+// Flow step type validator
+export const iflowStepTypeValidator = v.union(
+  v.literal("adapter"), v.literal("script"), v.literal("mapping"),
+  v.literal("router"), v.literal("multicast"),
+  v.literal("splitter"), v.literal("aggregator"), v.literal("join"), v.literal("gather"), v.literal("filter"),
+  v.literal("converter"), v.literal("contentModifier"), v.literal("xmlValidator"),
+  v.literal("encryptor"), v.literal("decryptor"), v.literal("signer"), v.literal("verifier"),
+  v.literal("dataStore"), v.literal("variable"), v.literal("persistMessage"),
+  v.literal("requestReply"), v.literal("contentEnricher"), v.literal("loopingCall"), v.literal("idempotentCall"),
+  v.literal("localProcess"), v.literal("exceptionSubprocess"), v.literal("timer"),
+  v.literal("start"), v.literal("end"), v.literal("error"), v.literal("terminate"), v.literal("escalation")
+);
+
 export default defineSchema({
   // User model
   users: defineTable({

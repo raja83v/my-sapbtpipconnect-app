@@ -33,8 +33,9 @@ interface DescriptionInputStepProps {
     onBack: () => void;
 }
 
-// Common iFlow templates
+// Common iFlow templates - organized by phase
 const TEMPLATES: IFlowTemplate[] = [
+    // === PHASE 1: BASIC INTEGRATION ===
     {
         id: "soap-to-rest",
         name: "SOAP to REST Conversion",
@@ -51,13 +52,117 @@ const TEMPLATES: IFlowTemplate[] = [
         template: "Create an integration flow that reads CSV/XML files from SFTP, validates the data, transforms it, and inserts records into a database. Include duplicate checking and error notifications.",
         tags: ["SFTP", "Database", "File Processing"],
     },
+    
+    // === PHASE 2: ADVANCED FLOW CONTROL ===
+    {
+        id: "content-routing",
+        name: "Content-Based Routing",
+        description: "Route messages based on content conditions",
+        category: "orchestration",
+        template: "Create an integration flow that receives orders and routes them to different target systems based on order type: B2B orders to EDI gateway, B2C orders to e-commerce system, and internal orders to SAP ERP via IDoc. Use content-based routing with XPath conditions. Include a default route for unrecognized order types with error logging.",
+        tags: ["Router", "XPath", "Conditional"],
+    },
+    {
+        id: "multicast-broadcast",
+        name: "Multicast Broadcasting",
+        description: "Send messages to multiple recipients simultaneously",
+        category: "orchestration",
+        template: "Create an integration flow that receives inventory updates and broadcasts them to multiple systems in parallel: update the warehouse management system, notify the e-commerce platform, and log to an audit database. Use multicast with parallel processing. Include aggregation to collect responses and create a unified status report.",
+        tags: ["Multicast", "Parallel", "Aggregation"],
+    },
+    {
+        id: "batch-splitter",
+        name: "Batch Message Splitter",
+        description: "Split large batches into individual messages",
+        category: "transformation",
+        template: "Create an integration flow that receives a batch file containing 10,000+ customer records from SFTP, splits them into individual messages using iterating splitter, enriches each record with data from a REST API, and sends to Salesforce. Use data store to track processing status. Include aggregator to collect results and generate summary report.",
+        tags: ["Splitter", "Aggregator", "Batch"],
+    },
+    {
+        id: "idoc-splitter",
+        name: "IDoc Batch Processing",
+        description: "Process IDoc batches with parallel handling",
+        category: "transformation",
+        template: "Create an integration flow that receives IDoc batches from SAP ERP, uses IDoc splitter to separate individual IDocs, validates each one, transforms to target format, and sends to the appropriate target system based on IDoc type. Include gather step to consolidate processing results and send acknowledgment back to SAP.",
+        tags: ["IDoc", "Splitter", "SAP"],
+    },
+    
+    // === PHASE 3: SECURITY & ENCRYPTION ===
+    {
+        id: "secure-file-transfer",
+        name: "PGP Encrypted File Transfer",
+        description: "Secure file exchange with encryption",
+        category: "integration",
+        template: "Create an integration flow that receives files via SFTP, decrypts them using PGP decryption with the partner's public key, processes the content (validate, transform), encrypts the result using PGP encryption with the recipient's public key, and sends to the target SFTP server. Store the sender's public key in the keystore with alias 'partner_pgp_key'.",
+        tags: ["PGP", "Encryption", "SFTP", "Security"],
+    },
+    {
+        id: "pkcs7-signing",
+        name: "Document Signing (PKCS7)",
+        description: "Sign and verify documents for compliance",
+        category: "integration",
+        template: "Create an integration flow that receives invoice documents, validates the content, signs the document using PKCS7 signer with our private key (alias: 'company_signing_key'), adds a timestamp, and sends to the tax authority. For incoming responses, verify the signature using PKCS7 verifier. Include certificate chain validation.",
+        tags: ["PKCS7", "Signing", "Compliance"],
+    },
+    {
+        id: "xml-signature",
+        name: "XML Digital Signature",
+        description: "Sign XML documents for B2B exchanges",
+        category: "integration",
+        template: "Create an integration flow for B2B document exchange that receives XML purchase orders, validates against XSD schema, signs specific elements using XML Digital Signature (enveloped signature, RSA-SHA256 algorithm), and sends via AS2. For incoming documents, verify XML signatures and extract signed content. Store certificates with alias 'b2b_xml_sign'.",
+        tags: ["XML Signature", "B2B", "AS2"],
+    },
+    
+    // === PHASE 4: SCHEDULING & PERSISTENCE ===
+    {
+        id: "scheduled-sync",
+        name: "Scheduled Data Synchronization",
+        description: "Timer-based periodic data sync",
+        category: "integration",
+        template: "Create a scheduled integration flow that runs every hour (CRON: 0 0 * * * ?) to synchronize customer master data from SAP S/4HANA to Salesforce. Use data store to track last sync timestamp and only process changed records (delta sync). Include variables to store processing statistics. Send email notification on completion with record counts.",
+        tags: ["Timer", "Scheduler", "Data Sync", "CRON"],
+    },
+    {
+        id: "batch-processing",
+        name: "Nightly Batch Processing",
+        description: "Scheduled batch job with persistence",
+        category: "integration",
+        template: "Create a scheduled integration flow that runs nightly at 2 AM (CRON: 0 0 2 * * ?) to process pending orders stored in the data store. Read orders with 'Select' operation, process each order (validate, enrich, transform), send to SAP ERP via IDoc, and update the data store entry status to 'processed'. Include exception subprocess to handle failures and move failed records to dead letter data store.",
+        tags: ["Batch", "Scheduler", "Data Store", "Nightly"],
+    },
+    {
+        id: "stateful-processing",
+        name: "Stateful Message Processing",
+        description: "Track processing state with data stores",
+        category: "orchestration",
+        template: "Create an integration flow for order fulfillment that tracks order state across multiple stages. When an order is received, write it to data store with status 'received'. As it progresses through validation, enrichment, and submission stages, update the status in data store. Use variables to store intermediate results. Provide a separate flow endpoint to query order status from data store.",
+        tags: ["Data Store", "Variables", "Stateful"],
+    },
+    {
+        id: "idempotent-processing",
+        name: "Idempotent Message Handler",
+        description: "Prevent duplicate processing",
+        category: "integration",
+        template: "Create an integration flow that handles incoming messages idempotently. Extract unique message ID from header or payload, check data store if message was already processed, if yes skip processing and return cached result, if no process the message and store result in data store with the message ID as key. Set retention period to 7 days.",
+        tags: ["Idempotent", "Data Store", "Deduplication"],
+    },
+    
+    // === CROSS-CUTTING: MODULAR DESIGN ===
+    {
+        id: "modular-subprocess",
+        name: "Modular Integration (ProcessDirect)",
+        description: "Reusable integration modules",
+        category: "orchestration",
+        template: "Create a main integration flow that orchestrates customer order processing by calling reusable sub-flows via ProcessDirect adapter. The main flow receives orders and calls: 1) '/validateOrder' subprocess for validation, 2) '/enrichCustomer' subprocess to add customer details, 3) '/transformToIDoc' subprocess for format conversion. Each subprocess is a separate iFlow callable via ProcessDirect, enabling reuse across multiple integrations.",
+        tags: ["ProcessDirect", "Modular", "Subprocess", "Reusable"],
+    },
     {
         id: "edi-processing",
         name: "EDI Document Processing",
         description: "Process EDI documents (X12, EDIFACT)",
         category: "transformation",
-        template: "Create an integration flow that receives EDI documents, validates the structure, transforms to internal format, and routes to target systems based on document type. Include acknowledgment generation.",
-        tags: ["EDI", "Validation", "Routing"],
+        template: "Create an integration flow that receives EDI documents via AS2, validates the structure, uses EDI to XML converter to transform to internal format, and routes to target systems based on document type using content-based router. Include EDI acknowledgment (997/CONTRL) generation and send via AS2. Store original EDI in data store for audit.",
+        tags: ["EDI", "AS2", "Converter", "Routing"],
     },
     {
         id: "api-orchestration",
@@ -68,20 +173,12 @@ const TEMPLATES: IFlowTemplate[] = [
         tags: ["REST", "Orchestration", "Aggregation"],
     },
     {
-        id: "data-sync",
-        name: "Data Synchronization",
-        description: "Sync data between two systems",
-        category: "integration",
-        template: "Create an integration flow that synchronizes data between two systems in real-time. Include change detection, conflict resolution, and bidirectional sync capabilities.",
-        tags: ["Sync", "Real-time", "Bidirectional"],
-    },
-    {
         id: "event-driven",
         name: "Event-Driven Integration",
         description: "Process events from message queue",
         category: "integration",
-        template: "Create an integration flow that consumes events from a message queue, processes them based on event type, and triggers appropriate actions in target systems. Include retry logic and dead letter handling.",
-        tags: ["Events", "Queue", "Async"],
+        template: "Create an integration flow that consumes events from Kafka topic, deserializes JSON payloads, routes based on event type using content-based router, and triggers appropriate actions in target systems. Use data store to track event processing for exactly-once semantics. Include exception subprocess with dead letter handling to Kafka DLQ topic.",
+        tags: ["Kafka", "Events", "Router", "Dead Letter"],
     },
 ];
 
@@ -304,14 +401,39 @@ export function DescriptionInputStep({
                         Tips for Better Results
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                    <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                        <li>Be specific about source and target systems</li>
-                        <li>Mention data formats (JSON, XML, CSV, etc.)</li>
-                        <li>Include error handling requirements</li>
-                        <li>Specify any performance needs (timeouts, batch sizes)</li>
-                        <li>Mention security requirements (authentication, encryption)</li>
-                    </ul>
+                <CardContent className="space-y-3 text-sm">
+                    <div>
+                        <p className="font-medium text-foreground mb-1">Basic Integration</p>
+                        <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
+                            <li>Specify source and target systems clearly</li>
+                            <li>Mention data formats (JSON, XML, CSV, EDI)</li>
+                            <li>Include error handling requirements</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p className="font-medium text-foreground mb-1">Flow Control</p>
+                        <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
+                            <li>Use &quot;route based on&quot; for content-based routing</li>
+                            <li>Mention &quot;parallel&quot; or &quot;multicast&quot; for broadcasting</li>
+                            <li>Say &quot;split&quot; or &quot;batch&quot; for message splitting</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p className="font-medium text-foreground mb-1">Security</p>
+                        <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
+                            <li>Mention &quot;PGP encrypt/decrypt&quot; for file encryption</li>
+                            <li>Say &quot;sign&quot; or &quot;verify&quot; for document signing</li>
+                            <li>Include key alias names if known</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p className="font-medium text-foreground mb-1">Scheduling & Persistence</p>
+                        <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
+                            <li>Specify schedule (e.g., &quot;every hour&quot;, &quot;nightly at 2 AM&quot;)</li>
+                            <li>Use &quot;data store&quot; for stateful processing</li>
+                            <li>Mention &quot;idempotent&quot; for duplicate prevention</li>
+                        </ul>
+                    </div>
                 </CardContent>
             </Card>
 

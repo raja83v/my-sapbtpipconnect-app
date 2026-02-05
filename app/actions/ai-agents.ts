@@ -50,6 +50,7 @@ function getSystemPrompt(agentType: AIAgentType): string {
  */
 async function buildAgentContext(
   agentType: AIAgentType,
+  userId: string,
   tenantId?: string,
   iflowId?: string
 ): Promise<string> {
@@ -89,7 +90,9 @@ async function buildAgentContext(
 
   // Get specific iFlow information if provided
   if (iflowId) {
-    const iflow = await convex.query(api.iflows.getById, { id: iflowId as any });
+    // Use helper to handle both Convex ID and SAP CPI iFlow ID
+    const { getIFlowByAnyId } = await import("./iflows");
+    const iflow = await getIFlowByAnyId(iflowId, userId as any);
 
     if (iflow) {
       const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
@@ -183,7 +186,7 @@ export async function executeAgent(
     }
 
     // Build context for the agent
-    const agentContext = await buildAgentContext(agentType, tenantId, iflowId);
+    const agentContext = await buildAgentContext(agentType, currentUser.id as any, tenantId, iflowId);
 
     // Get system prompt
     const systemPrompt = getSystemPrompt(agentType);

@@ -6,11 +6,14 @@ import { api } from "@/convex/_generated/api";
 import { decrypt } from "@/lib/encryption";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
 import { BPMN2Generator } from "@/lib/sap-cpi/bpmn2-generator";
+import { validateBPMN2, generateValidationReport, ValidationResult } from "@/lib/sap-cpi/bpmn2-validator";
 import type { IFlowDesign, PackageSelection, CreationResult } from "@/components/ai/v2/specialized/iflow-creator/types";
 
-// Extend CreationResult to include generated XML
+// Extend CreationResult to include generated XML and validation
 export interface CreationResultWithXML extends CreationResult {
     generatedXML?: string;
+    validationReport?: string;
+    validationResult?: ValidationResult;
 }
 
 export async function createIFlowInSAPCPI(
@@ -125,11 +128,45 @@ export async function createIFlowInSAPCPI(
 
         console.log(`✅ Generated BPMN2 XML (${bpmn2Xml.length} characters)`);
 
+        // 7b. Validate the generated BPMN2 XML
+        const validationResult = validateBPMN2(bpmn2Xml);
+        const validationReport = generateValidationReport(validationResult);
+
+        console.log('📋 BPMN2 Validation:', validationResult.isValid ? '✅ PASSED' : '❌ FAILED');
+
+        // CRITICAL: Block deployment if validation fails
+        // This prevents malformed BPMN2 XML from being deployed to SAP CPI
+        // which would cause "Error while loading the details of the integration flow"
+        if (!validationResult.isValid) {
+            console.error('❌ BPMN2 Validation FAILED - Blocking deployment');
+            console.error('Validation Errors:', validationResult.errors);
+            console.error('Validation Report:\n', validationReport);
+
+            return {
+                success: false,
+                iflowId,
+                packageId,
+                errors: [
+                    'BPMN2 validation failed - iFlow cannot be deployed',
+                    ...validationResult.errors.slice(0, 5), // Show first 5 errors
+                ],
+                generatedXML: bpmn2Xml,
+                validationReport,
+                validationResult,
+            };
+        }
+
+        // Log warnings but don't block deployment
+        if (validationResult.warnings.length > 0) {
+            console.log('⚠️ Validation Warnings:', validationResult.warnings);
+            validationResult.warnings.forEach(w => warnings.push(w));
+        }
+
         // 8. Prepare script files if any
         const scriptFiles = design.scripts
-            .filter(script => script.scriptContent)
+            .filter(script => script.scriptContent && script.scriptPath)
             .map(script => ({
-                path: script.scriptPath,
+                path: script.scriptPath || `src/main/resources/script/${script.id}.groovy`,
                 content: script.scriptContent!,
             }));
 
@@ -172,6 +209,8 @@ export async function createIFlowInSAPCPI(
             deploymentUrl: `${tenant.tenantUrl}/itspaces/shell/monitoring/Messages?iflowId=${iflowId}`,
             warnings: warnings.length > 0 ? warnings : undefined,
             generatedXML: bpmn2Xml, // Include the generated XML
+            validationReport, // Include validation report for debugging
+            validationResult, // Include validation result
             design, // Include the design for ZIP generation
         };
     } catch (error) {

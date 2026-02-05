@@ -18,6 +18,50 @@ import {
   type MappingConfig,
   type ScriptConfig,
 } from "@/lib/sap-cpi/client";
+import type { Id } from "@/convex/_generated/dataModel";
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Helper function to get iFlow by either Convex ID or SAP CPI iFlow ID
+ * Handles both ID formats automatically
+ */
+export async function getIFlowByAnyId(iflowId: string, userId: Id<"users">) {
+  const trimmedId = iflowId.trim();
+
+  // Determine if this is a Convex ID or SAP CPI iFlow ID
+  // Convex IDs have a specific format (alphanumeric, 15+ chars)
+  const looksLikeConvexId = /^[a-z0-9]{2,}[0-9a-z]{10,}$/i.test(trimmedId) && trimmedId.length > 15;
+
+  if (looksLikeConvexId) {
+    // Try to fetch by Convex ID
+    try {
+      return await convex.query(api.iflows.getById, { id: trimmedId as any });
+    } catch (error) {
+      console.error("Error fetching iFlow by Convex ID:", error);
+      return null;
+    }
+  } else {
+    // It's an SAP CPI iFlow ID - search across user's accessible tenants
+    const userTenants = await convex.query(api.tenants.listForUser, { userId });
+
+    // Search for iFlow with this SAP CPI ID across all accessible tenants
+    for (const tenant of userTenants) {
+      const foundIFlow = await convex.query(api.iflows.getByTenantAndIFlowId, {
+        tenantId: tenant._id,
+        iFlowId: trimmedId,
+      });
+
+      if (foundIFlow) {
+        return foundIFlow;
+      }
+    }
+
+    return null;
+  }
+}
 
 // ============================================================================
 // Types
@@ -273,7 +317,7 @@ export async function getIFlowDetails(iflowId: string): Promise<ActionResult<IFl
       return { success: false, error: "Not authenticated" };
     }
 
-    const iflow = await convex.query(api.iflows.getById, { id: iflowId as any });
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
@@ -362,13 +406,8 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
       return { success: false, error: "Not authenticated" };
     }
 
-    let iflow;
-    try {
-      iflow = await convex.query(api.iflows.getById, { id: trimmedId as any });
-    } catch (convexError) {
-      console.error("Convex query error:", convexError);
-      return { success: false, error: `Database error: ${convexError instanceof Error ? convexError.message : String(convexError)}` };
-    }
+    // Get iFlow by either Convex ID or SAP CPI iFlow ID
+    const iflow = await getIFlowByAnyId(trimmedId, currentUser.id as any);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
@@ -614,7 +653,7 @@ export async function getMessageLogs(
     const { iflowId, page = 1, pageSize = 20, status } = params;
 
     // Get iFlow with tenant details
-    const iflow = await convex.query(api.iflows.getById, { id: iflowId as any });
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
@@ -750,7 +789,7 @@ export async function toggleIFlowDeployment(
     }
 
     // Get iFlow with tenant details
-    const iflow = await convex.query(api.iflows.getById, { id: iflowId as any });
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
@@ -841,7 +880,7 @@ export async function diagnoseExecutionError(
     }
 
     // Get iFlow and tenant info
-    const iflow = await convex.query(api.iflows.getById, { id: iflowId as any });
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };

@@ -350,6 +350,68 @@ export async function generateIFlowDesign(
             });
             json = cleanedLines.join('\n');
 
+            // Step 8: Pre-process scriptContent and other code fields
+            // The AI generates code with unescaped double quotes that break JSON
+            // This is a complex fix that needs to handle multi-line script content
+            
+            // First, find all "scriptContent": " patterns and fix the content until the closing quote
+            // We need to be smarter about finding the real end of the scriptContent value
+            const fixCodeFields = (input: string): string => {
+                // Look for patterns like containsKey("Name") and escape the inner quotes
+                // Also handle other common Groovy patterns with unescaped quotes
+                
+                // Pattern: method("stringArg") -> method(\"stringArg\")
+                // But we need to be inside a JSON string value
+                
+                let result = input;
+                
+                // Fix common Groovy patterns that have unescaped quotes
+                // containsKey("Name") -> containsKey(\"Name\")
+                result = result.replace(/(containsKey|containsValue|get|put|equals|startsWith|endsWith|matches|split|indexOf)\s*\(\s*"([^"\\]*)"\s*\)/g, 
+                    (match, method, arg) => `${method}(\\"${arg}\\")`);
+                
+                // Fix getProperty("name") patterns
+                result = result.replace(/(getProperty|setProperty|getHeader|setHeader)\s*\(\s*"([^"\\]*)"\s*\)/g,
+                    (match, method, arg) => `${method}(\\"${arg}\\")`);
+                
+                // Fix println "text" or log.info "text"
+                result = result.replace(/(println|log\.info|log\.debug|log\.error|log\.warn)\s+"([^"\\]*)"/g,
+                    (match, method, arg) => `${method} \\"${arg}\\"`);
+                
+                // Fix String comparisons: == "value"
+                result = result.replace(/==\s*"([^"\\]*)"/g, '== \\"$1\\"');
+                result = result.replace(/!=\s*"([^"\\]*)"/g, '!= \\"$1\\"');
+                
+                // Fix new String("value") patterns
+                result = result.replace(/new\s+(?:String|StringBuilder|StringBuffer)\s*\(\s*"([^"\\]*)"\s*\)/g,
+                    (match, arg) => `new String(\\"${arg}\\")`);
+                    
+                return result;
+            };
+            
+            json = fixCodeFields(json);
+
+            // Additional step: Look for scriptContent values and fix remaining issues
+            json = json.replace(/"scriptContent"\s*:\s*"((?:[^"\\]|\\.)*)"/g, (match, content) => {
+                // Don't process if it's already a simple placeholder
+                if (content.includes('Script content removed') || content.length < 50) {
+                    return match;
+                }
+                
+                // Fix common Groovy patterns that break JSON
+                let fixed = content
+                    // Fix the specific pattern: .append('\"').append(value.replaceAll('\\\"', '\\\\\"'))
+                    // These single-quoted strings with escaped quotes break JSON
+                    .replace(/\\'\\\\*\\"/g, '\\\\"') // \'\" -> \"
+                    .replace(/\\\\{3,}/g, '\\\\') // Reduce 3+ backslashes to 2
+                    .replace(/replaceAll\s*\(\s*'\\\\/g, 'replaceAll("\\\\') // replaceAll('\ -> replaceAll("\
+                    .replace(/'\s*,\s*'\\\\/g, '", "\\\\') // ', '\ -> ", "\
+                    .replace(/\\\\'\s*\)/g, '")')  // \') -> ")
+                    .replace(/\(\s*'([^'\\]*)'\s*\)/g, '("$1")'); // ('text') -> ("text")
+                
+                return `"scriptContent": "${fixed}"`;
+            });
+
             return json;
         };
 
@@ -391,6 +453,39 @@ export async function generateIFlowDesign(
             // Repair attempt 1: Remove all trailing commas more aggressively
             const repairs = [
                 {
+                    name: "Fix unescaped quotes in Groovy method calls",
+                    fn: (s: string) => {
+                        // Fix patterns like containsKey("Name") where quotes are unescaped
+                        let result = s;
+                        result = result.replace(/(containsKey|containsValue|get|put|equals|startsWith|endsWith|matches|split|indexOf)\s*\(\s*"([^"\\]*)"\s*\)/g, 
+                            (match, method, arg) => `${method}(\\"${arg}\\")`);
+                        result = result.replace(/(getProperty|setProperty|getHeader|setHeader)\s*\(\s*"([^"\\]*)"\s*\)/g,
+                            (match, method, arg) => `${method}(\\"${arg}\\")`);
+                        result = result.replace(/(println|log\.info|log\.debug|log\.error|log\.warn)\s+"([^"\\]*)"/g,
+                            (match, method, arg) => `${method} \\"${arg}\\"`);
+                        result = result.replace(/==\s*"([^"\\]*)"/g, '== \\"$1\\"');
+                        result = result.replace(/!=\s*"([^"\\]*)"/g, '!= \\"$1\\"');
+                        return result;
+                    }
+                },
+                {
+                    name: "Simplify complex Groovy script content",
+                    fn: (s: string) => {
+                        // The AI generates complex Groovy with .append() chains and replaceAll() 
+                        // with escape sequences that break JSON parsing
+                        // Look for scriptContent fields and simplify them
+                        return s.replace(/"scriptContent"\s*:\s*"((?:[^"\\]|\\.)*(?:\.append|replaceAll)[^"]*(?:[^"\\]|\\.)*)"/gi, (match, content) => {
+                            // If script has complex patterns like .append('\"') or replaceAll('\\\"')
+                            // Replace with a simplified placeholder
+                            if (/\.append\s*\(\s*'\\/.test(content) || /replaceAll\s*\(\s*'\\{2,}/.test(content)) {
+                                console.log("🔧 Simplifying complex Groovy script content");
+                                return '"scriptContent": "// Complex script - see script file\\nimport com.sap.gateway.ip.core.customdev.util.Message\\n\\ndef Message processData(Message message) {\\n    def body = message.getBody(String)\\n    // TODO: Implement script logic\\n    message.setBody(body)\\n    return message\\n}"';
+                            }
+                            return match;
+                        });
+                    }
+                },
+                {
                     name: "Remove trailing commas",
                     fn: (s: string) => s.replace(/,(\s*[}\]])/g, '$1')
                 },
@@ -407,6 +502,50 @@ export async function generateIFlowDesign(
                     fn: (s: string) => s.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"')
                 },
                 {
+                    name: "Fix single quotes in script content",
+                    fn: (s: string) => {
+                        // Find scriptContent fields and convert single quotes to escaped form
+                        // Pattern: "scriptContent": "...code with 'quotes'..."
+                        return s.replace(/"scriptContent"\s*:\s*"((?:[^"\\]|\\.)*)"/g, (match, content) => {
+                            // Replace single quotes with a placeholder that won't break JSON
+                            // Also fix improperly escaped sequences
+                            let fixed = content
+                                // Fix triple+ backslash sequences that break parsing
+                                .replace(/\\{4,}/g, '\\\\')
+                                // Fix unescaped single quotes that appear after backslash patterns
+                                .replace(/\\+'(?=[^'])/g, "\\'")
+                                // Replace actual newlines
+                                .replace(/\n/g, '\\n')
+                                .replace(/\r/g, '\\r')
+                                .replace(/\t/g, '\\t');
+                            return `"scriptContent": "${fixed}"`;
+                        });
+                    }
+                },
+                {
+                    name: "Fix Groovy replaceAll patterns",
+                    fn: (s: string) => {
+                        // AI generates Groovy like: replaceAll('\"', '\\\"')
+                        // This breaks JSON because of the quotes and backslashes
+                        // Replace problematic patterns with safer alternatives
+                        return s
+                            // Fix patterns like: replaceAll('\\\"', '\\\\\\"')
+                            .replace(/replaceAll\s*\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)/g, (match, p1, p2) => {
+                                // Escape for JSON: replace backslashes and quotes
+                                const safeP1 = p1.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                                const safeP2 = p2.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                                return `replaceAll("${safeP1}", "${safeP2}")`;
+                            })
+                            // Fix Groovy single-quoted strings that might break JSON
+                            .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (match, content) => {
+                                // Only replace if we're likely inside a scriptContent value
+                                // Convert to escaped double quotes
+                                const escaped = content.replace(/"/g, '\\"').replace(/\\/g, '\\\\');
+                                return `"${escaped}"`;
+                            });
+                    }
+                },
+                {
                     name: "Escape unescaped newlines in strings",
                     fn: (s: string) => {
                         // More aggressive string content fixing
@@ -417,6 +556,13 @@ export async function generateIFlowDesign(
                                 .replace(/(?<!\\)\t/g, '\\t');
                             return `"${fixed}"`;
                         });
+                    }
+                },
+                {
+                    name: "Remove problematic script content entirely",
+                    fn: (s: string) => {
+                        // Last resort: replace complex scriptContent with placeholder
+                        return s.replace(/"scriptContent"\s*:\s*"(?:[^"\\]|\\.)*"/g, '"scriptContent": "// Script content removed due to parsing issues - regenerate or add manually"');
                     }
                 },
             ];
@@ -461,17 +607,48 @@ export async function generateIFlowDesign(
             }
         }
 
+        // Ensure all required arrays exist with defaults
+        design = {
+            ...design,
+            adapters: design.adapters || [],
+            scripts: design.scripts || [],
+            mappings: design.mappings || [],
+            errorHandlers: design.errorHandlers || [],
+            routers: design.routers || [],
+            multicasts: design.multicasts || [],
+            splitters: design.splitters || [],
+            aggregators: design.aggregators || [],
+            converters: design.converters || [],
+            contentModifiers: design.contentModifiers || [],
+            encryptors: design.encryptors || [],
+            decryptors: design.decryptors || [],
+            signers: design.signers || [],
+            verifiers: design.verifiers || [],
+            dataStores: design.dataStores || [],
+            variables: design.variables || [],
+            exceptionSubprocesses: design.exceptionSubprocesses || [],
+            localProcesses: design.localProcesses || [],
+            flowDiagram: design.flowDiagram || [],
+            performanceNotes: design.performanceNotes || [],
+            securityNotes: design.securityNotes || [],
+        };
+
         console.log("✅ Successfully generated iFlow design:");
-        console.log(`   Name: ${design.metadata.name}`);
+        console.log(`   Name: ${design.metadata?.name || 'Unknown'}`);
         console.log(`   Adapters: ${design.adapters.length}`);
         console.log(`   Scripts: ${design.scripts.length}`);
         console.log(`   Mappings: ${design.mappings.length}`);
         console.log(`   Error Handlers: ${design.errorHandlers.length}`);
-        console.log(`   Complexity: ${design.estimatedComplexity}`);
+        console.log(`   Routers: ${design.routers.length}`);
+        console.log(`   Splitters: ${design.splitters.length}`);
+        console.log(`   Converters: ${design.converters.length}`);
+        console.log(`   Security: ${design.encryptors.length + design.signers.length} components`);
+        console.log(`   Data Stores: ${design.dataStores.length}`);
+        console.log(`   Complexity: ${design.estimatedComplexity || 'medium'}`);
 
         // Validate the design has required components
         if (!design.metadata || !design.adapters || design.adapters.length === 0) {
-            throw new Error("Invalid design: missing required components");
+            throw new Error("Invalid design: missing required components (metadata or adapters)");
         }
 
         return { success: true, data: design };

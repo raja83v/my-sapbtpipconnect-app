@@ -27,16 +27,21 @@ import {
     Copy,
     Check,
     Download,
-    FileArchive
+    FileArchive,
+    ClipboardList,
+    AlertTriangle
 } from "lucide-react";
 import Link from "next/link";
 import JSZip from "jszip";
 import type { CreationResult, IFlowDesign } from "../types";
+import type { ValidationResult } from "@/lib/sap-cpi/bpmn2-validator";
 
-// Extended type to include generated XML and design
+// Extended type to include generated XML, design, and validation
 interface CreationResultWithXML extends CreationResult {
     generatedXML?: string;
     design?: IFlowDesign;
+    validationReport?: string;
+    validationResult?: ValidationResult;
 }
 
 interface CreationProgressProps {
@@ -78,6 +83,20 @@ export function CreationProgress({ result, onReset }: CreationProgressProps) {
             const a = document.createElement('a');
             a.href = url;
             a.download = `${result.iflowId || 'iflow'}.bpmn2.xml`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    };
+
+    const handleDownloadValidationReport = () => {
+        if (result?.validationReport) {
+            const blob = new Blob([result.validationReport], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${result.iflowId || 'iflow'}-validation-report.txt`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -399,6 +418,62 @@ Import-Package: com.sap.esb.application.services.cxf.interceptor,
                                 </div>
                             </DialogContent>
                         </Dialog>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Validation Report - For Debugging */}
+            {result?.validationReport && (
+                <Card className={result.validationResult?.isValid ? 'border-green-300' : 'border-yellow-300 bg-yellow-50'}>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-base flex items-center gap-2">
+                            {result.validationResult?.isValid ? (
+                                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                            ) : (
+                                <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                            )}
+                            BPMN2 Validation Report
+                        </CardTitle>
+                        <CardDescription>
+                            {result.validationResult?.isValid 
+                                ? 'No structural issues detected' 
+                                : `Found ${result.validationResult?.errors?.length || 0} potential issues`}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {/* Validation Errors */}
+                        {result.validationResult?.errors && result.validationResult.errors.length > 0 && (
+                            <div className="space-y-2">
+                                <p className="text-sm font-medium text-red-700">Errors:</p>
+                                <ul className="list-disc list-inside text-sm text-red-600 space-y-1">
+                                    {result.validationResult.errors.map((error, idx) => (
+                                        <li key={idx}>{error}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                        
+                        {/* Validation Warnings */}
+                        {result.validationResult?.warnings && result.validationResult.warnings.length > 0 && (
+                            <div className="space-y-2">
+                                <p className="text-sm font-medium text-yellow-700">Warnings:</p>
+                                <ul className="list-disc list-inside text-sm text-yellow-600 space-y-1">
+                                    {result.validationResult.warnings.map((warning, idx) => (
+                                        <li key={idx}>{warning}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+
+                        {/* Download Report Button */}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleDownloadValidationReport}
+                        >
+                            <ClipboardList className="mr-2 h-4 w-4" />
+                            Download Full Report
+                        </Button>
                     </CardContent>
                 </Card>
             )}

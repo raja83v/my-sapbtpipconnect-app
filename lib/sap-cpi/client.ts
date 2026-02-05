@@ -1101,6 +1101,11 @@ export class SAPCPIClient {
         // Add script files if provided
         if (scripts && scripts.length > 0) {
             scripts.forEach(script => {
+                // Skip scripts without path
+                if (!script.path) {
+                    console.warn('[SAP CPI Client] Skipping script without path');
+                    return;
+                }
                 // Ensure script paths are properly formatted
                 const scriptPath = script.path.startsWith('src/')
                     ? script.path

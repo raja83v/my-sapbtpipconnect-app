@@ -1,16 +1,26 @@
 /**
  * AI Prompts for iFlow Creator
+ * Enhanced with comprehensive SAP CPI component support
  */
 
 import { IFlowDescription } from "@/components/ai/v2/specialized/iflow-creator/types";
 
 export function createIFlowDesignPrompt(description: IFlowDescription): string {
+  const triggerSection = description.triggerType === 'timer' && description.schedulingConfig
+    ? `**Trigger Type:** Scheduled/Timer-based
+**Schedule:** ${description.schedulingConfig.type === 'cron'
+      ? `CRON: ${description.schedulingConfig.cronExpression}`
+      : `Simple: Run ${description.schedulingConfig.simpleSchedule?.runOnce ? 'once' : `every ${description.schedulingConfig.simpleSchedule?.repeatInterval} seconds`}`}`
+    : '**Trigger Type:** Message-based (on-demand)';
+
   return `You are an expert SAP Cloud Platform Integration (CPI) architect. Your task is to design a complete integration flow based on the user's requirements.
 
 ## User Requirements
 
 **Description:**
 ${description.description}
+
+${triggerSection}
 
 ${description.sourceSystem ? `**Source System:** ${description.sourceSystem}` : ''}
 ${description.targetSystem ? `**Target System:** ${description.targetSystem}` : ''}
@@ -21,18 +31,148 @@ ${description.requirements.map(req => `- ${req}`).join('\n')}` : ''}
 
 ## Your Task
 
-Design a complete SAP CPI integration flow that includes:
+Design a complete SAP CPI integration flow that includes all necessary components from the comprehensive list below.
 
-1. **Metadata**: iFlow name, ID, description, version
-2. **Adapters**: All required sender and receiver adapters with configurations
-3. **Scripts**: Any Groovy/JavaScript scripts needed for data transformation or validation
-4. **Mappings**: Data mappings and transformations required
-5. **Error Handlers**: Error handling strategy with retry logic
-6. **Performance Recommendations**: Timeout settings, pool sizes, etc.
+## Available Components
+
+### 1. ADAPTERS (50+ types)
+
+**Cloud Connectors:**
+- HTTP, HTTPS, SOAP, SOAP_SAP_RM, REST
+- OData, OData_V2, OData_V4
+- SFTP, FTP, FTPS
+- Mail, IMAP, POP3, SMTP
+- JDBC
+- IDoc, XI, RFC
+- AS2, AS4
+
+**SAP ERP/S4HANA Adapters (CRITICAL for SAP integrations):**
+
+**RFC Adapter** (Receiver only):
+- Used to call ABAP function modules (BAPI, RFC)
+- Requires SAP Cloud Connector destination
+- Properties: rfcDestination, sapClient, sapLanguage, functionModule
+- Supports sync RFC, tRFC (transactional), qRFC (queued)
+- Example use cases: Call BAPI_MATERIAL_GETDETAIL, RFC_READ_TABLE, BAPI_SALESORDER_CREATEFROMDAT2
+
+**IDoc Adapter** (Sender/Receiver):
+- Used for EDI/B2B document exchange with SAP ERP
+- Supports all IDoc types: ORDERS, INVOIC, MATMAS, DEBMAS, CREMAS
+- Partner configuration: senderPartnerNumber, senderPartnerType (LS/KU/LI/US), receiverPartnerNumber
+- Control record settings: mestyp, idoctyp, cimtyp
+- Properties: idocDestination, sapClient, idocType, messageType, serialization
+- Example: Send purchase orders (ORDERS05), receive invoices (INVOIC02), master data sync (MATMAS05)
+
+**XI Adapter** (Sender/Receiver):
+- Used for PI/PO integration (SAP Process Integration/Orchestration)
+- XI protocol for async message exchange
+- Interface settings: interfaceNamespace, interfaceName, operationName
+- Quality of Service: BestEffort, ExactlyOnce, ExactlyOnceInOrder (EOIO)
+- Sender/receiver routing: senderService, senderParty, receiverService, receiverParty
+- Example: Migrate existing PI/PO interfaces to CPI, hybrid scenarios
+
+**Message Queuing:**
+- JMS, AMQP, Kafka, SAP_Event_Mesh, AzureServiceBus
+
+**Cloud Applications:**
+- Salesforce, SuccessFactors (SOAP/REST/OData)
+- Ariba, Ariba_Network
+- Workday, ServiceNow
+- MicrosoftDynamics, MicrosoftDynamics365
+- SAP_Concur, SAP_FieldGlass, SAP_IBP, SAP_C4C
+
+**Infrastructure:**
+- ProcessDirect (for iFlow chaining)
+- DataStore, DataStoreSelect
+- AmazonS3, AmazonSQS, AmazonSNS
+- AzureBlob, AzureCosmosDB
+- OpenConnectors
+
+### 2. FLOW CONTROL
+
+**Routing:**
+- Router (ExclusiveGateway): Content-based routing with XPath, Header, Property conditions
+- Multicast (ParallelGateway): Parallel or sequential branching
+
+**Splitting/Aggregating:**
+- Splitter: IteratingSplitter, GeneralSplitter, ParallelSplitter, TokenizerSplitter
+- Aggregator: With correlation expressions and completion conditions
+- Join: AND, OR, XOR convergence
+- Gather: Synchronous or asynchronous
+- Filter: XPath, Header, Property-based filtering
+
+### 3. MESSAGE TRANSFORMERS
+
+**Converters:**
+- XMLToJSON, JSONToXML
+- CSVToXML, XMLToCSV
+- EDIToXML, XMLToEDI (EDIFACT, X12, ODETTE)
+- Base64Encoder, Base64Decoder
+- GZIPCompressor, GZIPDecompressor
+- ZIPCompressor, ZIPDecompressor
+- MIMEMultipartEncoder, MIMEMultipartDecoder
+
+**Modifiers:**
+- ContentModifier: Header, Property, Body modifications
+- XMLValidator: Schema validation (XSD, WSDL)
+
+**Mappings:**
+- MessageMapping: Graphical field mapping
+- XSLTMapping: XSLT transformations
+
+### 4. SECURITY COMPONENTS
+
+**Encryption:**
+- PGPEncryptor, PGPDecryptor
+- PKCS7Encryptor, PKCS7Decryptor
+- XMLEncryptor, XMLDecryptor
+
+**Signing:**
+- PKCS7Signer, PKCS7Verifier
+- XMLDigitalSigner, XMLDigitalVerifier
+- SimpleSigner, SimpleVerifier
+
+### 5. PERSISTENCE
+
+**Data Store:**
+- Write, Get, Delete, Select operations
+- Global or Integration Flow visibility
+- Retention period configuration
+
+**Variables:**
+- Write/Read variables
+- Header, Property, Body types
+- Expiration period
+
+### 6. EXTERNAL CALLS
+
+- RequestReply: Synchronous external call
+- Send: Asynchronous send
+- ContentEnricher: Lookup and enrich
+- PollEnrich: Polling-based enrichment
+
+### 7. TIMER/SCHEDULER
+
+- TimerStartEvent: RunOnce or Schedule
+- CRON expressions for complex schedules
+- Timezone support
+
+### 8. ERROR HANDLING
+
+- ExceptionSubprocess: Error boundary handling
+- Error Start/End events
+- Dead Letter Channel configuration
+- Retry configuration
+
+### 9. SCRIPTS
+
+- Groovy: For complex transformations
+- JavaScript: For lightweight processing
+- XSLT: For XML transformations
 
 ## Output Format
 
-Respond with a valid JSON object matching this structure:
+Respond with a valid JSON object matching this comprehensive structure:
 
 \`\`\`json
 {
@@ -42,118 +182,415 @@ Respond with a valid JSON object matching this structure:
     "description": "string (detailed description)",
     "version": "1.0.0"
   },
+  
+  "triggerType": "message|timer|event",
+  "timerConfig": {
+    "id": "string",
+    "name": "string",
+    "scheduleType": "RunOnce|Schedule",
+    "cronExpression": "string (e.g., '0 0 */2 * * ?')",
+    "runOnDeployment": boolean,
+    "timezone": "string (e.g., 'UTC', 'Europe/Berlin')"
+  },
+  
+  "integrationPattern": "PointToPoint|PublishSubscribe|ContentBasedRouter|Splitter|Aggregator|Scatter-Gather|RecipientList|Pipeline",
+  
   "adapters": [
     {
-      "id": "string (unique ID)",
-      "name": "string (descriptive name)",
-      "type": "SOAP|REST|SFTP|HTTPS|XI|AS2|IDOC|JDBC|OData",
+      "id": "string",
+      "name": "string",
+      "type": "HTTP|HTTPS|SOAP|REST|OData|SFTP|JMS|AMQP|Kafka|Salesforce|SuccessFactors|ProcessDirect|RFC|IDoc|XI|...",
       "direction": "Sender|Receiver",
-      "protocol": "HTTP|HTTPS|TCP|SFTP|FTP",
-      "messageProtocol": "string (e.g., 'SOAP 1.x', 'XI', 'AS2')",
-      "address": "string (endpoint URL or path)",
-      "timeout": number (milliseconds, recommended: 60000),
-      "connectionTimeout": number (milliseconds, recommended: 60000),
-      "poolSize": number (recommended: 50),
+      "protocol": "HTTP|HTTPS|TCP|SFTP|FTP|AMQP|KAFKA|RFC|IDoc|XI|...",
+      "messageProtocol": "string",
+      "address": "string",
+      "timeout": number,
+      "connectionTimeout": number,
+      "poolSize": number,
       "authentication": {
-        "type": "Basic|OAuth|Certificate|None",
-        "credentials": "string (placeholder)"
+        "type": "None|Basic|OAuth|OAuth2|Certificate|SAML|APIKey|AWS_Signature",
+        "credentialName": "string"
       },
-      "properties": {
-        "key": "value (adapter-specific properties)"
+      "properties": {},
+      "queueName": "string (for JMS/messaging)",
+      "topicName": "string (for pub/sub)",
+      "kafkaBrokers": "string",
+      "processDirect": { "address": "string" },
+      
+      "// RFC ADAPTER PROPERTIES (when type=RFC, direction=Receiver)": "",
+      "rfcDestination": "string (Cloud Connector destination name)",
+      "sapClient": "string (e.g., '100', '800')",
+      "sapLanguage": "string (e.g., 'EN', 'DE')",
+      "functionModule": "string (e.g., 'BAPI_MATERIAL_GETDETAIL')",
+      "rfcType": "synchronous|transactional|queued|background",
+      "transactionCommit": boolean,
+      
+      "// IDOC ADAPTER PROPERTIES (when type=IDoc)": "",
+      "idocDestination": "string (Cloud Connector destination)",
+      "idocType": "string (e.g., 'ORDERS05', 'INVOIC02', 'MATMAS05')",
+      "messageType": "string (e.g., 'ORDERS', 'INVOIC', 'MATMAS')",
+      "idocExtension": "string (optional extension type)",
+      "senderPartnerNumber": "string",
+      "senderPartnerType": "LS|KU|LI|US (Logical System, Customer, Vendor, User)",
+      "receiverPartnerNumber": "string",
+      "receiverPartnerType": "LS|KU|LI|US",
+      "senderPort": "string",
+      "receiverPort": "string",
+      "idocVersion": "3|4",
+      "serialization": "Synchronous|Asynchronous",
+      
+      "// XI ADAPTER PROPERTIES (when type=XI)": "",
+      "xiUrl": "string (PI/PO system URL)",
+      "senderService": "string",
+      "senderParty": "string",
+      "receiverService": "string",
+      "receiverParty": "string",
+      "interfaceNamespace": "string (e.g., 'urn:sap-com:document:sap:rfc:functions')",
+      "interfaceName": "string",
+      "operationName": "string",
+      "qualityOfService": "BestEffort|ExactlyOnce|ExactlyOnceInOrder",
+      "communicationChannel": "string",
+      "deliveryAssurance": "AtMostOnce|AtLeastOnce|ExactlyOnce"
+    }
+  ],
+  
+  "routers": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "ExclusiveGateway|InclusiveGateway",
+      "routingConditions": [
+        {
+          "id": "string",
+          "name": "string",
+          "expressionType": "XPath|NonXML|Header|Property",
+          "expression": "string",
+          "targetId": "string",
+          "order": number
+        }
+      ],
+      "defaultRoute": "string",
+      "throwExceptionOnNoMatch": boolean
+    }
+  ],
+  
+  "multicasts": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "ParallelMulticast|SequentialMulticast",
+      "branches": [
+        { "id": "string", "name": "string", "targetId": "string" }
+      ],
+      "aggregationStrategy": "UseLatest|CollectAll|Custom",
+      "stopOnException": boolean,
+      "timeout": number
+    }
+  ],
+  
+  "splitters": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "IteratingSplitter|GeneralSplitter|ParallelSplitter|TokenizerSplitter",
+      "expressionType": "XPath|LineBreak|Token",
+      "expression": "string",
+      "parallelProcessing": boolean,
+      "groupSize": number,
+      "streaming": boolean
+    }
+  ],
+  
+  "aggregators": [
+    {
+      "id": "string",
+      "name": "string",
+      "correlationExpression": "string",
+      "correlationExpressionType": "XPath|Header|Property",
+      "completionCondition": {
+        "type": "MessageCount|Timeout|Expression",
+        "value": "string|number"
+      },
+      "aggregationStrategy": "CombineXML|Concatenate|CollectInList|Custom",
+      "timeout": number,
+      "throwExceptionOnTimeout": boolean
+    }
+  ],
+  
+  "converters": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "XMLToJSON|JSONToXML|CSVToXML|XMLToCSV|EDIToXML|XMLToEDI|Base64Encoder|Base64Decoder|GZIPCompressor|GZIPDecompressor",
+      "options": {
+        "delimiter": "string",
+        "headerLine": boolean,
+        "jsonPrefix": "string",
+        "ediStandard": "EDIFACT|X12|ODETTE"
       }
     }
   ],
-  "scripts": [
+  
+  "contentModifiers": [
     {
-      "id": "string (unique ID)",
-      "name": "string (descriptive name)",
-      "type": "groovy|javascript|xslt",
-      "purpose": "string (what this script does)",
-      "scriptPath": "string (e.g., 'src/main/resources/script/DataValidation.groovy')",
-      "scriptContent": "string (actual script code)",
-      "complexity": "low|medium|high",
-      "estimatedLines": number
+      "id": "string",
+      "name": "string",
+      "headerActions": [
+        { "action": "Create|Delete", "name": "string", "type": "Constant|Expression|XPath", "value": "string" }
+      ],
+      "propertyActions": [
+        { "action": "Create|Delete", "name": "string", "type": "Constant|Expression|XPath", "value": "string" }
+      ],
+      "bodyAction": { "type": "Constant|Expression|XPath", "value": "string" }
     }
   ],
-  "mappings": [
+  
+  "xmlValidators": [
     {
-      "id": "string (unique ID)",
-      "name": "string (descriptive name)",
-      "type": "MessageMapping|XSLTMapping|Enricher|Splitter|Aggregator",
-      "sourceFields": ["field1", "field2"],
-      "targetFields": ["field1", "field2"],
-      "transformations": ["description of transformations"],
+      "id": "string",
+      "name": "string",
+      "schemaSource": "XSD|WSDL",
+      "schemaPath": "string",
+      "throwExceptionOnFailure": boolean
+    }
+  ],
+  
+  "encryptors": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "PGPEncryptor|PKCS7Encryptor|XMLEncryptor",
+      "keyAlias": "string",
+      "algorithm": "string",
+      "signMessage": boolean
+    }
+  ],
+  
+  "decryptors": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "PGPDecryptor|PKCS7Decryptor|XMLDecryptor",
+      "keyAlias": "string",
+      "verifySignature": boolean
+    }
+  ],
+  
+  "signers": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "PKCS7Signer|XMLDigitalSigner|SimpleSigner",
+      "keyAlias": "string",
+      "signatureAlgorithm": "string"
+    }
+  ],
+  
+  "verifiers": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "PKCS7Verifier|XMLDigitalVerifier|SimpleVerifier",
+      "publicKeyAlias": "string",
+      "throwExceptionOnFailure": boolean
+    }
+  ],
+  
+  "dataStores": [
+    {
+      "id": "string",
+      "name": "string",
+      "operation": "Write|Get|Delete|Select",
+      "dataStoreName": "string",
+      "entryId": "string",
+      "visibility": "Global|Integration Flow",
+      "retentionPeriod": number,
+      "overwriteExisting": boolean
+    }
+  ],
+  
+  "variables": [
+    {
+      "id": "string",
+      "name": "string",
+      "operation": "Write|Read",
+      "variableName": "string",
+      "type": "Header|Property|Body",
+      "value": "string"
+    }
+  ],
+  
+  "requestReplies": [
+    {
+      "id": "string",
+      "name": "string",
+      "adapterId": "string",
+      "timeout": number,
+      "externalCallType": "RequestReply|Send|Request"
+    }
+  ],
+  
+  "contentEnrichers": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "ContentEnricher|PollEnrich",
+      "adapterId": "string",
+      "pathToNode": "string",
+      "aggregationStrategy": "Combine|Enrich|Replace"
+    }
+  ],
+  
+  "scripts": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "groovy|javascript|xslt",
+      "purpose": "string",
+      "scriptPath": "string",
+      "scriptContent": "string (actual code)",
       "complexity": "low|medium|high"
     }
   ],
+  
+  "mappings": [
+    {
+      "id": "string",
+      "name": "string",
+      "type": "MessageMapping|XSLTMapping|ContentModifier",
+      "sourceFields": ["field1", "field2"],
+      "targetFields": ["field1", "field2"],
+      "transformations": ["transformation descriptions"],
+      "complexity": "low|medium|high"
+    }
+  ],
+  
   "errorHandlers": [
     {
-      "id": "string (unique ID)",
-      "name": "string (descriptive name)",
-      "errorType": "Exception|Timeout|ValidationError",
-      "retryCount": number (recommended: 3),
-      "retryInterval": number (milliseconds, recommended: 5000),
+      "id": "string",
+      "name": "string",
+      "errorType": "Exception|Timeout|ValidationError|Escalation",
+      "retryCount": number,
+      "retryInterval": number,
       "alertOnFailure": boolean,
-      "fallbackAction": "string (what to do on final failure)"
+      "fallbackAction": "string",
+      "deadLetterChannel": {
+        "enabled": boolean,
+        "jmsQueue": "string",
+        "retainPayload": boolean
+      }
     }
   ],
+  
+  "exceptionSubprocesses": [
+    {
+      "id": "string",
+      "name": "string",
+      "triggerType": "ErrorBoundary|Escalation",
+      "sendToDeadLetter": boolean
+    }
+  ],
+  
+  "localProcesses": [
+    {
+      "id": "string",
+      "name": "string",
+      "steps": [],
+      "isReusable": boolean,
+      "description": "string (what this subprocess does)"
+    }
+  ],
+  
   "flowDiagram": [
     {
-      "id": "string (unique ID)",
-      "type": "start|end|adapter|script|mapping|error",
+      "id": "string",
+      "type": "start|end|adapter|script|mapping|router|multicast|splitter|aggregator|converter|encryptor|dataStore|error|localProcess",
       "name": "string",
       "position": { "x": number, "y": number },
-      "connections": ["id1", "id2"]
+      "connections": ["id1", "id2"],
+      "branchId": "string (for parallel branches)"
     }
   ],
+  
   "estimatedComplexity": "low|medium|high",
-  "performanceNotes": [
-    "string (performance recommendations)"
-  ],
-  "securityNotes": [
-    "string (security considerations)"
-  ]
+  "performanceNotes": ["string (performance recommendations)"],
+  "securityNotes": ["string (security considerations)"]
 }
 \`\`\`
 
 ## Design Guidelines
 
 1. **Adapters**:
-   - Always include at least one sender and one receiver adapter
-   - Use appropriate adapter types based on the systems mentioned
-   - Set reasonable timeouts (60000ms = 1 minute)
-   - Set connection pool size to 50 for production workloads
-   - Include authentication configuration
+   - Choose appropriate adapter based on system type
+   - Use ProcessDirect for iFlow chaining and modular design (address format: "/processName")
+   - Use JMS/AMQP for async messaging patterns
+   - Set reasonable timeouts (60000ms default)
+   - Always configure authentication
 
-2. **Scripts**:
-   - Only include scripts when necessary for:
-     - Data validation
-     - Complex transformations
-     - Business logic
-   - Provide actual working script code
-   - Keep scripts simple and focused
+2. **SAP ERP/S4HANA Integration** (RFC, IDoc, XI):
+   - **RFC Adapter**: Use for BAPI calls, RFC function modules
+     - Always Receiver adapter (CPI calls SAP)
+     - Requires Cloud Connector destination configured
+     - Common BAPIs: BAPI_MATERIAL_GETDETAIL, BAPI_SALESORDER_CREATEFROMDAT2, RFC_READ_TABLE
+     - Use transactional RFC (tRFC) for reliable delivery
+   - **IDoc Adapter**: Use for EDI/B2B and master data sync
+     - Sender: Receive IDocs from SAP ERP (configure partner/port)
+     - Receiver: Send IDocs to SAP ERP (set idocType, messageType)
+     - Common IDoc types: ORDERS05 (orders), INVOIC02 (invoices), MATMAS05 (materials), DEBMAS06 (customers)
+     - Set proper partner types: LS (Logical System), KU (Customer), LI (Vendor)
+   - **XI Adapter**: Use for PI/PO migration and hybrid scenarios
+     - Maintains XI message protocol for existing PI/PO interfaces
+     - Configure Quality of Service: ExactlyOnce for critical, BestEffort for high volume
+     - Set sender/receiver services for routing
 
-3. **Mappings**:
-   - Include mappings for data transformation
-   - Specify source and target fields
-   - Describe transformations clearly
+2. **Modular Design with ProcessDirect**:
+   - Break complex integrations into reusable sub-flows
+   - Main flow calls sub-flows via ProcessDirect Receiver adapter
+   - Sub-flows expose ProcessDirect Sender endpoint (e.g., "/validateOrder", "/enrichData")
+   - Use local integration processes for in-flow modularity
+   - ProcessDirect enables sync calls between iFlows with low latency
+   - Example pattern: Main → [ProcessDirect:/validate] → [ProcessDirect:/transform] → Target
 
-4. **Error Handling**:
-   - Always include error handlers
-   - Set retry count to 3 with 5-second intervals
-   - Include alert configuration
-   - Specify fallback actions
+3. **Flow Control**:
+   - Use Router for conditional logic (e.g., content-based routing)
+   - Use Multicast for parallel system calls (e.g., notify multiple systems)
+   - Use Splitter for batch processing
+   - Use Aggregator to collect split messages
+   - Always pair Splitter with Aggregator when needed
+   - CRITICAL: Router/Multicast targetId MUST reference existing elements defined in "steps" array or "localProcesses" array
+   - NEVER route to exception subprocesses - they are ERROR HANDLERS that trigger on failures, not routing targets
+   - Valid router targets: other process steps, local processes, end events
+   - For error cases: use a normal step that throws an exception, which will trigger the exception subprocess automatically
 
-5. **Performance**:
-   - Recommend appropriate timeout values
-   - Suggest connection pool sizes
-   - Identify potential bottlenecks
-   - Provide optimization tips
+4. **Transformers**:
+   - Use XMLToJSON/JSONToXML for format conversion
+   - Use ContentModifier for header/property manipulation
+   - Use XMLValidator for schema validation
+   - Use scripts only for complex logic
 
-6. **Security**:
-   - Recommend authentication methods
-   - Suggest encryption where needed
-   - Identify security risks
+5. **Security**:
+   - Use PGP for file-based encryption
+   - Use PKCS7 for message-level encryption
+   - Use XML Digital Signature for SOAP
+   - Always verify signatures on incoming
+
+6. **Error Handling**:
+   - Always include ExceptionSubprocess
+   - Configure retry with exponential backoff
+   - Use Dead Letter Channel for async patterns
+   - Log errors before failing
+
+6. **Timer/Scheduler**:
+   - Use for batch/scheduled integrations
+   - Set appropriate CRON expressions
+   - Consider timezone
+   - Don't run on deployment in production
+
+7. **Persistence**:
+   - Use DataStore for async patterns
+   - Use Variables for long-running processes
+   - Set appropriate retention periods
+   - Use Global visibility for cross-iFlow access
 
 ## Important Notes
 
@@ -163,17 +600,20 @@ Respond with a valid JSON object matching this structure:
 - Include detailed descriptions
 - Consider scalability and performance
 - Think about error scenarios
+- Choose the RIGHT components for the use case
 
 ## JSON Output Requirements
 
 CRITICAL: Your response must be valid, parseable JSON:
-- Use double quotes for all strings
-- Escape special characters properly (use \\\\ for backslash, \\n for newline, \\t for tab)
-- Do NOT use single quotes
+- Use double quotes for ALL strings, including strings inside Groovy/JavaScript code
+- For scriptContent: Avoid complex regex patterns with multiple backslashes
+- For scriptContent: Use double quotes in Groovy (NOT single quotes): message.getBody(String.class) not message.getBody('String')
+- Escape special characters properly: \\\\ for backslash, \\n for newline
+- Do NOT use single quotes anywhere in JSON values
 - Do NOT include comments in the JSON
 - Do NOT wrap the JSON in markdown code blocks
 - Ensure all brackets and braces are properly closed
-- Test that your JSON is valid before responding
+- Keep scripts simple - complex transformations should describe the logic, not implement complex regex
 
 Now, design the integration flow based on the requirements above. Respond ONLY with the raw JSON object, no markdown formatting, no additional text.`;
 }
@@ -181,36 +621,60 @@ Now, design the integration flow based on the requirements above. Respond ONLY w
 export const IFLOW_CREATOR_SYSTEM_PROMPT = `You are an expert SAP Cloud Platform Integration (CPI) architect with deep knowledge of:
 
 - SAP CPI architecture and best practices
-- Integration patterns (point-to-point, publish-subscribe, orchestration)
-- Adapter types (SOAP, REST, SFTP, OData, JDBC, etc.)
-- Data transformation and mapping
-- Error handling and retry strategies
+- All 50+ adapter types (Cloud Connectors, Messaging, Cloud Apps, Infrastructure)
+- Integration patterns (Point-to-Point, Publish-Subscribe, Content-Based Router, Scatter-Gather, Pipeline)
+- Flow control components (Router, Multicast, Splitter, Aggregator, Join, Filter)
+- Message transformers (JSON/XML/CSV/EDI converters, Content Modifiers, Validators)
+- Security components (PGP, PKCS#7, XML Digital Signature encryption/signing)
+- Persistence components (Data Store, Variables)
+- Timer/Scheduler configurations with CRON expressions
+- Error handling and exception subprocesses
 - Performance optimization
-- Security best practices
 
 Your role is to design complete, production-ready integration flows based on user requirements. You provide:
 
-1. Complete adapter configurations with all necessary properties
-2. Working script code (Groovy/JavaScript) when needed
-3. Detailed mapping specifications
-4. Robust error handling strategies
-5. Performance and security recommendations
+1. Complete adapter configurations with all necessary properties for 50+ adapter types
+2. Flow control logic with routers, multicasts, splitters, and aggregators
+3. Message transformation with converters and content modifiers
+4. Security configurations with encryption and signing
+5. Persistence with data stores and variables
+6. Working script code (Groovy/JavaScript) when needed
+7. Detailed mapping specifications
+8. Robust error handling strategies with exception subprocesses
+9. Timer/scheduler configurations for batch processing
+10. Performance and security recommendations
 
 You always:
 - Follow SAP CPI best practices
 - Generate realistic, deployable configurations
 - Consider scalability and performance
-- Include comprehensive error handling
-- Provide security recommendations
-- Use industry-standard patterns
+- Include comprehensive error handling with exception subprocesses
+- Provide security recommendations including encryption and signing
+- Use industry-standard integration patterns
+- Choose the RIGHT components for each use case
+- Support complex scenarios like:
+  - Multi-system orchestration with parallel calls
+  - Content-based routing with multiple conditions
+  - Batch processing with splitter/aggregator patterns
+  - B2B integrations with EDI and AS2/AS4
+  - Event-driven integrations with JMS/Kafka
+  - Scheduled batch processing with timer events
+  - Secure integrations with PGP/PKCS7 encryption
 
 CRITICAL JSON FORMATTING RULES:
 - You MUST respond with valid, parseable JSON only
-- Use double quotes for all strings, never single quotes
+- Use double quotes for ALL strings in JSON, never single quotes (even in Groovy code)
+- NEVER use complex escape sequences in scriptContent - they break JSON parsing
+- For scriptContent: Keep scripts MINIMAL - only import statements and method signatures
+  GOOD: "scriptContent": "import com.sap.gateway.ip.core.customdev.util.Message\\n\\ndef Message processData(Message message) {\\n    def body = message.getBody(String)\\n    // Process body here\\n    return message\\n}"
+  BAD: Any script with .append(), replaceAll(), or multiple backslashes
+- NEVER use .append() or StringBuilder in inline scripts - these always break JSON
+- NEVER use replaceAll() with regex patterns in inline scripts
+- If a script needs complex logic, just put a placeholder comment and basic structure
 - Properly escape special characters: \\\\ for backslash, \\n for newline, \\t for tab, \\" for quotes
+- Keep scriptContent under 500 characters - complex scripts will be files, not inline
 - Do NOT wrap JSON in markdown code blocks
 - Do NOT include any text before or after the JSON
 - Ensure all brackets and braces are properly matched and closed
-- Test your JSON validity before responding
 
 You respond with raw, valid JSON that can be directly parsed and used to generate BPMN2 XML for SAP CPI deployment.`;
