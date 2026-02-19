@@ -603,6 +603,109 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
   }
 }
 
+/**
+ * Fetch content of a specific resource file from the iFlow ZIP package
+ */
+export async function getIFlowResourceContent(
+  iflowId: string,
+  resourcePath: string
+): Promise<ActionResult<{ content: string; name: string; type: string; size: number }>> {
+  try {
+    if (!iflowId || !resourcePath) {
+      return { success: false, error: "Invalid iFlow ID or resource path" };
+    }
+
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      return { success: false, error: "Not authenticated" };
+    }
+
+    const iflow = await getIFlowByAnyId(iflowId.trim(), currentUser.id as any);
+    if (!iflow) {
+      return { success: false, error: "iFlow not found" };
+    }
+
+    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    if (!tenant) {
+      return { success: false, error: "Tenant not found" };
+    }
+
+    const membership = await convex.query(api.tenants.getMembership, {
+      userId: currentUser.id as any,
+      tenantId: iflow.tenantId,
+    });
+    if (!membership) {
+      return { success: false, error: "You don't have access to this iFlow" };
+    }
+
+    if (!(tenant.authType === "OAUTH" && tenant.authenticationUrl && tenant.clientId && tenant.clientSecret)) {
+      return { success: false, error: "SAP CPI credentials not configured for this tenant" };
+    }
+
+    let accessToken = getCachedToken(tenant._id);
+    if (!accessToken) {
+      const decryptedClientSecret = await decrypt(tenant.clientSecret);
+      accessToken = await getSAPToken(
+        tenant.authenticationUrl,
+        tenant.clientId,
+        decryptedClientSecret
+      );
+      cacheToken(tenant._id, accessToken);
+    }
+
+    const client = createSAPCPIClient({
+      tenantUrl: tenant.tenantUrl,
+      authType: "OAUTH",
+      clientId: tenant.clientId,
+      clientSecret: tenant.clientSecret,
+      tokenUrl: tenant.authenticationUrl,
+    });
+    (client as any).accessToken = accessToken;
+    (client as any).tokenExpiry = Date.now() + 3600000;
+
+    // Download the ZIP and extract content for the specific resource
+    const AdmZip = (await import("adm-zip")).default;
+    const zipBuffer = await client.downloadIFlowPackage(iflow.iFlowId);
+    const zip = new AdmZip(zipBuffer);
+    const entry = zip.getEntry(resourcePath);
+
+    if (!entry) {
+      return { success: false, error: `Resource not found in package: ${resourcePath}` };
+    }
+
+    // Binary files are not viewable
+    const binaryExtensions = ['.jar', '.class', '.zip', '.gz', '.tar', '.png', '.jpg', '.gif', '.ico', '.pdf'];
+    const isBinary = binaryExtensions.some(ext => resourcePath.toLowerCase().endsWith(ext));
+    if (isBinary) {
+      return { success: false, error: "Binary files cannot be viewed as text" };
+    }
+
+    const content = entry.getData().toString("utf8");
+    const name = resourcePath.split("/").pop() || resourcePath;
+
+    // Determine type from extension
+    let type = "text";
+    if (resourcePath.endsWith(".groovy")) type = "groovy";
+    else if (resourcePath.endsWith(".js")) type = "javascript";
+    else if (resourcePath.endsWith(".xml") || resourcePath.endsWith(".iflw") || resourcePath.endsWith(".bpmn") || resourcePath.endsWith(".bpmn2")) type = "xml";
+    else if (resourcePath.endsWith(".xsd")) type = "xml";
+    else if (resourcePath.endsWith(".wsdl")) type = "xml";
+    else if (resourcePath.endsWith(".edmx")) type = "xml";
+    else if (resourcePath.endsWith(".xslt") || resourcePath.endsWith(".xsl")) type = "xml";
+    else if (resourcePath.endsWith(".json")) type = "json";
+    else if (resourcePath.endsWith(".properties")) type = "properties";
+    else if (resourcePath.endsWith(".mmap")) type = "xml";
+
+    return {
+      success: true,
+      data: { content, name, type, size: entry.header.size },
+    };
+  } catch (error) {
+    console.error("Error fetching resource content:", error);
+    return { success: false, error: "Failed to fetch resource content" };
+  }
+}
+
 export interface MessageLog {
   id: string;
   messageId: string;

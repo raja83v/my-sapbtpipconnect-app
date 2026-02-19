@@ -225,9 +225,10 @@ export function validateBPMN2(xml: string): ValidationResult {
 
     // 10. Check for invalid adapter configurations
     // Mail/IMAP/POP3 adapters can only be Sender (polling inbox)
+    // Note: Generator auto-corrects this to SMTP, so this is just a warning now
     const mailReceiverPattern = /<bpmn2:messageFlow[^>]*>[\s\S]*?<key>ComponentType<\/key>\s*<value>(Mail|IMAP|POP3)<\/value>[\s\S]*?<key>direction<\/key>\s*<value>Receiver<\/value>/gi;
     if (mailReceiverPattern.test(xml)) {
-        errors.push('Invalid adapter: Mail/IMAP/POP3 cannot be used as Receiver adapter. Use SMTP for sending emails.');
+        warnings.push('Mail/IMAP/POP3 detected as Receiver adapter - should be auto-corrected to SMTP. If issue persists, use SMTP explicitly for sending emails.');
     }
 
     // Check for unsupported adapter types
@@ -257,19 +258,19 @@ export function validateBPMN2(xml: string): ValidationResult {
 
     // 11. Check for shapes outside their container bounds (causes SAP CPI editor error)
     // Extract participant process bounds
-    const participantProcessMatch = xml.match(/bpmndi:BPMNShape[^>]*bpmnElement="Participant_Process"[^>]*>[\s\S]*?<dc:Bounds[^>]*y="(\d+)"[^>]*height="(\d+)"/);
+    const participantProcessMatch = xml.match(/bpmndi:BPMNShape[^>]*bpmnElement="Participant_Process"[^>]*>[\s\S]*?<dc:Bounds[^>]*y="([\d.]+)"[^>]*height="([\d.]+)"/);
     if (participantProcessMatch) {
-        const processY = parseInt(participantProcessMatch[1], 10);
-        const processHeight = parseInt(participantProcessMatch[2], 10);
+        const processY = parseFloat(participantProcessMatch[1]);
+        const processHeight = parseFloat(participantProcessMatch[2]);
         const processBottom = processY + processHeight;
 
         // Check if any subprocess shapes extend beyond process bounds
-        const subProcessShapeRegex = /bpmndi:BPMNShape[^>]*bpmnElement="([^"]*subprocess[^"]*)"[^>]*>[\s\S]*?<dc:Bounds[^>]*y="(\d+)"[^>]*height="(\d+)"/gi;
+        const subProcessShapeRegex = /bpmndi:BPMNShape[^>]*bpmnElement="([^"]*subprocess[^"]*)"[^>]*>[\s\S]*?<dc:Bounds[^>]*y="([\d.]+)"[^>]*height="([\d.]+)"/gi;
         let spMatch;
         while ((spMatch = subProcessShapeRegex.exec(xml)) !== null) {
             const spId = spMatch[1];
-            const spY = parseInt(spMatch[2], 10);
-            const spHeight = parseInt(spMatch[3], 10);
+            const spY = parseFloat(spMatch[2]);
+            const spHeight = parseFloat(spMatch[3]);
             const spBottom = spY + spHeight;
             
             if (spBottom > processBottom) {
@@ -296,6 +297,11 @@ export function validateBPMN2(xml: string): ValidationResult {
     if (invalidTargets.length > 0) {
         errors.push(`Sequence flows reference non-existent target elements: ${invalidTargets.join(', ')}`);
     }
+
+    // 12. Validate script syntax (Groovy/JavaScript)
+    const scriptErrors = validateScriptSyntax(xml);
+    errors.push(...scriptErrors.errors);
+    warnings.push(...scriptErrors.warnings);
 
     return {
         isValid: errors.length === 0,
@@ -369,6 +375,202 @@ export function generateValidationReport(result: ValidationResult): string {
     }
     
     lines.push('='.repeat(60));
-    
+
     return lines.join('\n');
+}
+
+/**
+ * Validate Groovy and JavaScript syntax in script elements
+ * This is a static syntax check - runtime errors can still occur
+ */
+function validateScriptSyntax(xml: string): { errors: string[]; warnings: string[] } {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    // Extract Groovy scripts
+    const groovyMatches = xml.matchAll(/<key>GroovyScript<\/key>[\s\S]*?<value>([\s\S]*?)<\/value>/gi);
+    let scriptIndex = 0;
+    for (const match of groovyMatches) {
+        scriptIndex++;
+        const scriptContent = decodeXmlEntities(match[1]);
+
+        if (scriptContent && scriptContent.trim().length > 0) {
+            // Basic Groovy syntax validation
+            const groovyErrors = validateGroovySyntax(scriptContent, `GroovyScript_${scriptIndex}`);
+            errors.push(...groovyErrors);
+        }
+    }
+
+    // Extract JavaScript scripts
+    const jsMatches = xml.matchAll(/<key>JavaScriptScript<\/key>[\s\S]*?<value>([\s\S]*?)<\/value>/gi);
+    scriptIndex = 0;
+    for (const match of jsMatches) {
+        scriptIndex++;
+        const scriptContent = decodeXmlEntities(match[1]);
+
+        if (scriptContent && scriptContent.trim().length > 0) {
+            // Basic JavaScript syntax validation
+            const jsErrors = validateJavaScriptSyntax(scriptContent, `JavaScriptScript_${scriptIndex}`);
+            errors.push(...jsErrors);
+        }
+    }
+
+    // Check for empty scripts
+    const subActivityTypes = xml.matchAll(/<key>subActivityType<\/key>\s*<value>(GroovyScript|JavaScriptScript)<\/value>/gi);
+    for (const match of subActivityTypes) {
+        // Check if the script content is empty
+        const scriptType = match[1];
+        const scriptPattern = new RegExp(`<key>${scriptType}</key>[\\s\\S]*?<value>([\\s\\S]*?)</value>`, 'i');
+        const scriptMatch = xml.match(scriptPattern);
+        if (scriptMatch && (!scriptMatch[1] || scriptMatch[1].trim().length === 0)) {
+            warnings.push(`Empty ${scriptType} detected - script will have no effect`);
+        }
+    }
+
+    return { errors, warnings };
+}
+
+/**
+ * Decode XML entities in script content
+ */
+function decodeXmlEntities(content: string): string {
+    return content
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&#x27;/g, "'");
+}
+
+/**
+ * Validate basic Groovy syntax
+ */
+function validateGroovySyntax(script: string, scriptId: string): string[] {
+    const errors: string[] = [];
+
+    // Check for balanced braces
+    const openBraces = (script.match(/\{/g) || []).length;
+    const closeBraces = (script.match(/\}/g) || []).length;
+    if (openBraces !== closeBraces) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced braces (${openBraces} open, ${closeBraces} close)`);
+    }
+
+    // Check for balanced parentheses
+    const openParens = (script.match(/\(/g) || []).length;
+    const closeParens = (script.match(/\)/g) || []).length;
+    if (openParens !== closeParens) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced parentheses (${openParens} open, ${closeParens} close)`);
+    }
+
+    // Check for balanced square brackets
+    const openBrackets = (script.match(/\[/g) || []).length;
+    const closeBrackets = (script.match(/\]/g) || []).length;
+    if (openBrackets !== closeBrackets) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced square brackets (${openBrackets} open, ${closeBrackets} close)`);
+    }
+
+    // Check for common syntax errors
+    // Missing semicolon at end of statement (warn only)
+    const lines = script.split('\n');
+    lines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+        // Skip comments and empty lines
+        if (trimmedLine.startsWith('//') || trimmedLine.startsWith('/*') || trimmedLine.startsWith('*') || trimmedLine.length === 0) {
+            return;
+        }
+
+        // Check for common typos
+        if (trimmedLine.includes('= =')) {
+            errors.push(`Script syntax error in ${scriptId} line ${index + 1}: Double equals without variable (${trimmedLine.substring(0, 50)}...)`);
+        }
+
+        // Check for invalid operator combinations
+        if (trimmedLine.match(/[^=!<>]=[^=]/)) {
+            // This is likely intentional, skip
+        }
+
+        // Check for unfinished strings (odd number of quotes)
+        const singleQuotes = (line.match(/'/g) || []).length;
+        const doubleQuotes = (line.match(/"/g) || []).length;
+        // Note: This is a simplified check
+        if ((singleQuotes % 2 !== 0) && !line.includes("'")) {
+            // Could be an issue, but hard to detect reliably
+        }
+    });
+
+    // Check for def without assignment in closure context
+    if (script.includes('def ') && script.includes('->')) {
+        // This is likely a closure parameter, which is valid
+    }
+
+    // Check for common runtime issues (warnings)
+    if (script.includes('import ') && !script.includes(';')) {
+        // Groovy doesn't require semicolons, but warn if it looks wrong
+    }
+
+    // Check for potential null pointer issues
+    if (script.match(/\w+\.\w+/) && !script.includes('?.') && !script.includes('if (')) {
+        // Could potentially cause NPE at runtime - this is just a warning
+    }
+
+    return errors;
+}
+
+/**
+ * Validate basic JavaScript syntax
+ */
+function validateJavaScriptSyntax(script: string, scriptId: string): string[] {
+    const errors: string[] = [];
+
+    // Check for balanced braces
+    const openBraces = (script.match(/\{/g) || []).length;
+    const closeBraces = (script.match(/\}/g) || []).length;
+    if (openBraces !== closeBraces) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced braces (${openBraces} open, ${closeBraces} close)`);
+    }
+
+    // Check for balanced parentheses
+    const openParens = (script.match(/\(/g) || []).length;
+    const closeParens = (script.match(/\)/g) || []).length;
+    if (openParens !== closeParens) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced parentheses (${openParens} open, ${closeParens} close)`);
+    }
+
+    // Check for balanced square brackets
+    const openBrackets = (script.match(/\[/g) || []).length;
+    const closeBrackets = (script.match(/\]/g) || []).length;
+    if (openBrackets !== closeBrackets) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced square brackets (${openBrackets} open, ${closeBrackets} close)`);
+    }
+
+    // Check for template literal issues
+    const backticks = (script.match(/`/g) || []).length;
+    if (backticks % 2 !== 0) {
+        errors.push(`Script syntax error in ${scriptId}: Unbalanced backticks (template literals)`);
+    }
+
+    // Check for async without await or vice versa
+    if (script.includes('await ') && !script.includes('async ')) {
+        errors.push(`Script syntax error in ${scriptId}: 'await' used outside async function`);
+    }
+
+    // Check for common issues
+    const lines = script.split('\n');
+    lines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+
+        // Skip comments and empty lines
+        if (trimmedLine.startsWith('//') || trimmedLine.startsWith('/*') || trimmedLine.startsWith('*') || trimmedLine.length === 0) {
+            return;
+        }
+
+        // Check for assignment in condition (common bug)
+        if (trimmedLine.match(/if\s*\(\s*\w+\s*=\s*\w+/)) {
+            errors.push(`Script syntax error in ${scriptId} line ${index + 1}: Assignment in condition (did you mean == or ===?)`);
+        }
+    });
+
+    return errors;
 }

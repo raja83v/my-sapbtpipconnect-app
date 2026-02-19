@@ -98,6 +98,29 @@ export const organizationTypeValidator = v.union(
   v.literal("OTHER")
 );
 
+// Pipeline phase validator (iFlow Creator multi-agent orchestration)
+export const pipelinePhaseValidator = v.union(
+  v.literal("INIT"),
+  v.literal("ARCHITECTURE"),
+  v.literal("DESIGN_REVIEW"),
+  v.literal("BPMN_GENERATION"),
+  v.literal("VALIDATION"),
+  v.literal("FIX_ATTEMPT"),
+  v.literal("SUMMARIZATION"),
+  v.literal("AWAITING_APPROVAL"),
+  v.literal("DEPLOYING"),
+  v.literal("COMPLETED"),
+  v.literal("FAILED"),
+  v.literal("CANCELLED")
+);
+
+export const pipelineAgentLogStatusValidator = v.union(
+  v.literal("RUNNING"),
+  v.literal("COMPLETED"),
+  v.literal("FAILED"),
+  v.literal("SKIPPED")
+);
+
 // ============================================================================
 // iFlow Creator Component Validators
 // ============================================================================
@@ -537,4 +560,84 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_stripeInvoiceId", ["stripeInvoiceId"]),
+
+  // ============================================================================
+  // iFlow Creator Multi-Agent Pipeline
+  // ============================================================================
+
+  // Pipeline execution state (one per iFlow creation attempt)
+  iflowPipelines: defineTable({
+    userId: v.id("users"),
+    tenantId: v.id("cpiTenants"),
+
+    // Current pipeline phase
+    phase: pipelinePhaseValidator,
+
+    // Inputs (stored as JSON strings for flexibility)
+    packageSelection: v.string(),
+    description: v.string(),
+    tenantCapabilities: v.optional(v.string()),
+
+    // Agent outputs (populated progressively)
+    architectResult: v.optional(v.string()),
+    reviewerResult: v.optional(v.string()),
+    bpmn2Xml: v.optional(v.string()),
+    bpmn2ScriptFiles: v.optional(v.string()),
+    validatorResult: v.optional(v.string()),
+    fixAttempts: v.optional(v.string()),
+    summarizerResult: v.optional(v.string()),
+    deploymentResult: v.optional(v.string()),
+
+    // The final approved design (after review + fixes)
+    finalDesign: v.optional(v.string()),
+
+    // Error state
+    errorPhase: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    errorRecoverable: v.optional(v.boolean()),
+
+    // Metrics
+    totalTokensUsed: v.number(),
+    totalDuration: v.optional(v.number()),
+
+    // Timestamps
+    startedAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_tenantId", ["tenantId"])
+    .index("by_phase", ["phase"])
+    .index("by_userId_tenantId", ["userId", "tenantId"]),
+
+  // Individual agent execution logs within a pipeline (audit trail)
+  iflowPipelineAgentLogs: defineTable({
+    pipelineId: v.id("iflowPipelines"),
+    agentName: v.string(), // ARCHITECT | REVIEWER | VALIDATOR | FIX | SUMMARIZER
+
+    status: v.union(
+      v.literal("RUNNING"),
+      v.literal("COMPLETED"),
+      v.literal("FAILED"),
+      v.literal("SKIPPED")
+    ),
+
+    // Input/Output (JSON, truncated for large payloads)
+    input: v.optional(v.string()),
+    output: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+
+    // Metrics
+    tokensUsed: v.number(),
+    duration: v.number(), // ms
+
+    // For Fix Agent retry tracking
+    attemptNumber: v.optional(v.number()),
+
+    // Timestamps
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_pipelineId", ["pipelineId"])
+    .index("by_pipelineId_agentName", ["pipelineId", "agentName"]),
 });

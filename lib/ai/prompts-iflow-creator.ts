@@ -71,6 +71,50 @@ Design a complete SAP CPI integration flow that includes all necessary component
 - Sender/receiver routing: senderService, senderParty, receiverService, receiverParty
 - Example: Migrate existing PI/PO interfaces to CPI, hybrid scenarios
 
+**Mail Adapters** (IMAP/POP3 for Sender, SMTP for Receiver):
+
+**IMAP/POP3 Adapter** (Sender only - polling mailbox):
+- Used to poll emails from a mailbox at scheduled intervals
+- IMAP preferred for modern mailboxes, POP3 for legacy systems
+- CRITICAL: Must use type="Mail" or type="IMAP" for Sender direction
+- Properties:
+  - mailServer: IMAP/POP3 server hostname (e.g., "imap.gmail.com", "outlook.office365.com")
+  - mailPort: Port number (993 for IMAP SSL, 995 for POP3 SSL, 143/110 for non-SSL)
+  - authentication: type (Basic, OAuth2), credentialName (Security Material name)
+  - properties: {
+      "scheduler.period": "300" (polling interval - e.g., 300 = 5 minutes in seconds),
+      "scheduler.periodUnit": "second" (unit: second, minute, hour),
+      "folderName": "INBOX" (folder to poll),
+      "onlyUnreadMessages": "true" (only unread emails),
+      "subjectFilter": "pattern" (optional subject filter),
+      "fromFilter": "sender@domain.com" (optional sender filter),
+      "postProcessing": "Mark as Read" or "Delete" or "Move",
+      "bodyType": "Text" or "HTML" or "Both",
+      "includeAttachments": "true" or "false",
+      "maxMessagesToProcess": "10" (max emails per poll),
+      "protection": "STARTTLS" or "SMTPS" or "Off"
+    }
+- Example: Poll mailbox every 5 mins for new orders, parse attachments, process content
+
+**SMTP Adapter** (Receiver only - sending emails):
+- Used to send emails as part of integration flow
+- CRITICAL: Must use type="SMTP" for sending emails (never Mail/IMAP/POP3)
+- Properties:
+  - mailServer: SMTP server hostname (e.g., "smtp.gmail.com", "smtp.office365.com")
+  - mailPort: Port number (587 for TLS, 465 for SSL, 25 for non-SSL)
+  - authentication: type (Basic, OAuth2), credentialName
+  - properties: {
+      "from": "sender@company.com",
+      "to": "\${header.recipientEmail}" (can use expressions),
+      "cc": "cc@company.com" (optional),
+      "bcc": "bcc@company.com" (optional),
+      "subject": "\${property.emailSubject}" or "Static Subject",
+      "mailContentType": "text/plain" or "text/html",
+      "attachments": "true" or "false",
+      "protection": "STARTTLS" or "SMTPS"
+    }
+- Example: Send notification emails, error alerts, document delivery
+
 **Message Queuing:**
 - JMS, AMQP, Kafka, SAP_Event_Mesh, AzureServiceBus
 
@@ -250,7 +294,25 @@ Respond with a valid JSON object matching this comprehensive structure:
       "operationName": "string",
       "qualityOfService": "BestEffort|ExactlyOnce|ExactlyOnceInOrder",
       "communicationChannel": "string",
-      "deliveryAssurance": "AtMostOnce|AtLeastOnce|ExactlyOnce"
+      "deliveryAssurance": "AtMostOnce|AtLeastOnce|ExactlyOnce",
+      
+      "// MAIL ADAPTER PROPERTIES (when type=Mail|IMAP|POP3|SMTP)": "",
+      "mailServer": "string (e.g., 'imap.gmail.com', 'smtp.office365.com')",
+      "mailPort": "number (993 for IMAP SSL, 995 for POP3 SSL, 587 for SMTP TLS)",
+      "// For Sender adapters (IMAP/POP3 - polling mailbox), use properties object with:": "",
+      "// - scheduler.period: polling interval (e.g., '300' for 5 min in seconds)": "",
+      "// - scheduler.periodUnit: 'second' or 'minute' or 'hour'": "",
+      "// - folderName: 'INBOX'": "",
+      "// - onlyUnreadMessages: 'true'": "",
+      "// - postProcessing: 'Mark as Read'": "",
+      "// - maxMessagesToProcess: '10'": "",
+      "// - bodyType: 'Text'": "",
+      "// - protection: 'STARTTLS' or 'SMTPS'": "",
+      "// For Receiver adapters (SMTP - sending emails), use properties object with:": "",
+      "// - from: sender email address": "",
+      "// - to: recipient (can use header expression like \${header.recipientEmail})": "",
+      "// - subject: email subject": "",
+      "// - mailContentType: 'text/plain' or 'text/html'": ""
     }
   ],
   
@@ -566,7 +628,13 @@ Respond with a valid JSON object matching this comprehensive structure:
    - Use XMLToJSON/JSONToXML for format conversion
    - Use ContentModifier for header/property manipulation
    - Use XMLValidator for schema validation
-   - Use scripts only for complex logic
+   - **PREFER Groovy Scripts over MessageMapping for data transformations**:
+     - MessageMapping requires separate .mmap resource files that must be created manually
+     - Groovy scripts can be embedded directly in the iFlow
+     - For parsing email content, XML transformation, JSON manipulation: use Groovy scripts
+     - For complex field-to-field mappings: use Groovy scripts with clear transformation logic
+   - When MessageMapping is specified, include detailed sourceFields, targetFields, and transformations
+   - Use ContentModifier for simple header/property manipulation (no script needed)
 
 5. **Security**:
    - Use PGP for file-based encryption
@@ -607,8 +675,9 @@ Respond with a valid JSON object matching this comprehensive structure:
 CRITICAL: Your response must be valid, parseable JSON:
 - Use double quotes for ALL strings, including strings inside Groovy/JavaScript code
 - For scriptContent: Avoid complex regex patterns with multiple backslashes
-- For scriptContent: Use double quotes in Groovy (NOT single quotes): message.getBody(String.class) not message.getBody('String')
-- Escape special characters properly: \\\\ for backslash, \\n for newline
+- For scriptContent: Use ESCAPED double quotes for Groovy method string arguments: contains(\\\\":\\\\") not contains(":")
+- For scriptContent: NEVER put unescaped double quotes inside method call arguments — they break JSON parsing
+- Escape special characters properly: \\\\ for backslash, \\n for newline, \\\\" for quotes inside strings
 - Do NOT use single quotes anywhere in JSON values
 - Do NOT include comments in the JSON
 - Do NOT wrap the JSON in markdown code blocks
@@ -670,6 +739,7 @@ CRITICAL JSON FORMATTING RULES:
   BAD: Any script with .append(), replaceAll(), or multiple backslashes
 - NEVER use .append() or StringBuilder in inline scripts - these always break JSON
 - NEVER use replaceAll() with regex patterns in inline scripts
+- NEVER put unescaped double quotes in method arguments like contains(":") or split(":") — always use escaped quotes: contains(\\\\\\\":\\\\\\\") or keep the script minimal with a TODO comment
 - If a script needs complex logic, just put a placeholder comment and basic structure
 - Properly escape special characters: \\\\ for backslash, \\n for newline, \\t for tab, \\" for quotes
 - Keep scriptContent under 500 characters - complex scripts will be files, not inline

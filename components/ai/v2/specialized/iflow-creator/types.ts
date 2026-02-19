@@ -42,7 +42,7 @@ export type InfraAdapterType =
 export type AdapterType = CloudAdapterType | MessagingAdapterType | CloudAppAdapterType | InfraAdapterType;
 
 // Protocol types
-export type ProtocolType = 'HTTP' | 'HTTPS' | 'TCP' | 'SFTP' | 'FTP' | 'FTPS' | 'AMQP' | 'AMQPS' | 'KAFKA' | 'MQTT' | 'MQTTS';
+export type ProtocolType = 'HTTP' | 'HTTPS' | 'TCP' | 'SFTP' | 'FTP' | 'FTPS' | 'AMQP' | 'AMQPS' | 'KAFKA' | 'MQTT' | 'MQTTS' | 'MAIL' | 'IMAP' | 'POP3' | 'SMTP';
 
 // Authentication types
 export type AuthenticationType =
@@ -131,11 +131,64 @@ export interface AdapterConfig {
 }
 
 export interface OAuthConfig {
+    // OAuth2 Common
     tokenEndpoint?: string;
     clientId?: string;
     clientSecret?: string;
     scope?: string;
     grantType?: 'client_credentials' | 'authorization_code' | 'password' | 'jwt_bearer';
+
+    // OAuth2 Client Credentials specific
+    clientCredentialKeystore?: string;
+    clientCredentialKeyAlias?: string;
+
+    // OAuth2 SAML Bearer specific
+    issuer?: string;
+    audience?: string;
+    subject?: string;
+    samlAssertion?: string;
+    keystoreName?: string;
+    keystoreAlias?: string;
+
+    // Token refresh
+    refreshToken?: string;
+    refreshEndpoint?: string;
+    tokenRefreshThreshold?: number; // seconds before expiry to refresh
+
+    // Advanced
+    additionalParams?: Record<string, string>;
+    headerAuth?: boolean; // Use Authorization header instead of body
+}
+
+export interface SAMLConfig {
+    // SAML 2.0 Configuration
+    issuer: string;
+    assertionConsumerServiceUrl?: string;
+    keystoreName?: string;
+    keystoreAlias?: string;
+    keystorePassword?: string;
+    privateKeyPassword?: string;
+
+    // SAML Assertion
+    subjectNameId?: string;
+    subjectFormat?: string;
+    authenticationContext?: string;
+
+    // Claims/Attributes
+    attributes?: {
+        name: string;
+        nameFormat?: string;
+        value: string;
+    }[];
+}
+
+export interface CertificateConfig {
+    keystoreName: string;
+    keystorePassword?: string;
+    keyAlias: string;
+    keyPassword?: string;
+    certificateName?: string;
+    certificateChain?: boolean;
 }
 
 // ============================================================================
@@ -271,6 +324,285 @@ export interface XIAdapterConfig extends Omit<AdapterConfig, 'type'> {
     retryInterval?: number;
     maxRetries?: number;
     exponentialBackoff?: boolean;
+}
+
+/**
+ * Mail Adapter Configuration
+ * Used for email-based integrations
+ * - IMAP/POP3: Sender adapter for polling mailboxes
+ * - SMTP: Receiver adapter for sending emails
+ */
+export interface MailAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'Mail' | 'IMAP' | 'POP3' | 'SMTP';
+    
+    // Connection Settings
+    mailServer?: string; // Mail server hostname
+    mailPort?: number; // Port (993 IMAP SSL, 995 POP3 SSL, 587 SMTP TLS)
+    
+    // For Sender adapters (IMAP/POP3) - Polling configuration
+    schedulerPeriod?: number; // Polling interval in milliseconds
+    schedulerPeriodUnit?: 'millisecond' | 'second' | 'minute' | 'hour';
+    mailFolder?: string; // Folder to poll (default: INBOX)
+    maxMessages?: number; // Max messages per poll
+    filterUnseen?: boolean; // Only unread messages
+    filterSubject?: string; // Subject filter pattern
+    filterFrom?: string; // Sender filter
+    postProcessing?: 'Mark as Read' | 'Delete' | 'Move';
+    bodyType?: 'Text' | 'HTML' | 'Both';
+    includeAttachments?: boolean;
+    
+    // For Receiver adapter (SMTP) - Email sending
+    mailFrom?: string; // Sender email address
+    mailTo?: string; // Recipient(s) - can use expressions
+    mailCc?: string; // CC recipients
+    mailBcc?: string; // BCC recipients
+    mailSubject?: string; // Subject - can use expressions
+    contentType?: 'text/plain' | 'text/html';
+    addAttachment?: boolean;
+    
+    // Security
+    connectionSecurity?: 'StartTLS' | 'SSL/TLS' | 'Off';
+}
+
+/**
+ * JDBC Adapter Configuration
+ * Used for database integrations with SAP CPI
+ */
+export interface JDBCAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'JDBC';
+
+    // Connection Settings
+    jdbcUrl?: string; // JDBC connection URL
+    driverClassName?: string; // JDBC driver class
+    username?: string;
+    password?: string;
+    credentialName?: string; // For credential lookup
+
+    // Connection Pool Settings
+    poolSize?: number; // Number of connections in pool
+    maxPoolSize?: number; // Maximum pool size
+    minIdle?: number; // Minimum idle connections
+    connectionTimeout?: number; // Connection timeout in ms
+    idleTimeout?: number; // Idle timeout in ms
+    maxLifetime?: number; // Max lifetime in ms
+
+    // Transaction Settings
+    transactionIsolationLevel?: 'READ_UNCOMMITTED' | 'READ_COMMITTED' | 'REPEATABLE_READ' | 'SERIALIZABLE';
+    autoCommit?: boolean;
+
+    // SQL Operation Settings
+    sqlOperation?: 'SELECT' | 'UPDATE' | 'INSERT' | 'DELETE' | 'CALL' | 'BATCH';
+    sqlStatement?: string; // SQL statement or stored procedure
+    preparedStatement?: boolean; // Use prepared statement
+    batchSize?: number; // For batch operations
+
+    // Query Settings
+    resultXsd?: string; // Result structure (for SELECT)
+    updateColumnList?: string; // Columns to update (for UPDATE)
+    keyColumn?: string; // Key column for updates
+    useUploadedKeyValues?: boolean; // Use uploaded keys
+    uploadedKeyColumn?: string; // Uploaded key column
+
+    // Error Handling
+    noDataFoundBehavior?: 'Continue' | 'Exception';
+    sqlExceptionBehavior?: 'Continue' | 'Exception';
+
+    // Advanced
+    fetchSize?: number; // JDBC fetch size
+    queryTimeout?: number; // Query timeout in seconds
+    fetchDirection?: 'FORWARD' | 'REVERSE' | 'UNKNOWN';
+}
+
+/**
+ * Salesforce Adapter Configuration
+ * Used for Salesforce integrations
+ */
+export interface SalesforceAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'Salesforce';
+
+    // Connection
+    connectionType?: 'Production' | 'Sandbox' | 'Custom';
+    loginUrl?: string; // Custom login URL
+    apiVersion?: string; // Salesforce API version (e.g., v57.0)
+    proxyType?: 'Internet' | 'OnPremise' | 'NoProxy';
+
+    // Authentication
+    useBulkApi?: boolean; // Enable Bulk API for large data operations
+    bulkApiBatchSize?: number; // Batch size for Bulk API
+
+    // Operation
+    operation?: 'create' | 'upsert' | 'update' | 'delete' | 'query' | 'getDeleted' | 'getUpdated';
+    objectName?: string; // Salesforce object (Account, Contact, etc.)
+    externalIdField?: string; // For upsert operations
+
+    // Query
+    sobjectQuery?: string; // SOQL query
+    batchSize?: number; // Query batch size
+
+    // Error Handling
+    errorHandling?: 'Throw Exception' | 'Continue';
+    faultColumn?: string; // Error column in output
+}
+
+/**
+ * SuccessFactors Adapter Configuration
+ * Used for SAP SuccessFactors integrations
+ */
+export interface SuccessFactorsAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'SuccessFactors' | 'SuccessFactors_SOAP' | 'SuccessFactors_REST' | 'SuccessFactors_OData';
+
+    // Connection
+    companyId?: string; // SuccessFactors Company ID
+    userId?: string; // User ID for authentication
+    odataServiceUrl?: string; // OData service endpoint
+    entityType?: string; // Entity to query (Employee, etc.)
+
+    // Authentication (OAuth2)
+    tokenEndpoint?: string;
+    clientId?: string;
+    clientSecret?: string;
+
+    // Operation
+    operation?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+    // Query
+    queryOptions?: string; // OData query options ($filter, $expand, etc.)
+    pageSize?: number;
+    top?: number;
+
+    // Format
+    dataFormat?: 'JSON' | 'XML';
+}
+
+/**
+ * Ariba Adapter Configuration
+ * Used for SAP Ariba integrations
+ */
+export interface AribaAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'Ariba' | 'Ariba_Network';
+
+    // Connection
+    realm?: string; // Ariba realm
+    applicationId?: string; // Ariba application ID
+    receiverNode?: string; // Receiver node name
+    aribaUrl?: string; // Ariba API URL
+
+    // Authentication
+    aribaUserId?: string;
+    aribaUserPassword?: string;
+
+    // Operation
+    operation?: 'PurchaseOrder' | 'Invoice' | 'Catalog' | 'Sourcing';
+    direction?: 'Inbound' | 'Outbound';
+
+    // Document
+    documentId?: string;
+    documentType?: string;
+}
+
+/**
+ * Workday Adapter Configuration
+ * Used for Workday integrations
+ */
+export interface WorkdayAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'Workday';
+
+    // Connection
+    tenantUrl?: string; // Workday tenant URL
+    workdayUserId?: string;
+
+    // Operation
+    businessObject?: string; // Workday business object
+    operation?: 'Get' | 'Put' | 'Post' | 'Delete';
+
+    // Integration
+    integrationName?: string;
+    workdayNamespace?: string;
+
+    // SOAP/REST
+    webService?: string;
+}
+
+/**
+ * ServiceNow Adapter Configuration
+ * Used for ServiceNow integrations
+ */
+export interface ServiceNowAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'ServiceNow';
+
+    // Connection
+    instanceUrl?: string; // ServiceNow instance URL
+    instanceName?: string;
+
+    // Authentication
+    username?: string;
+    password?: string;
+    tableApiKey?: string; // Table API key
+
+    // Operation
+    tableName?: string; // ServiceNow table
+    operation?: 'get' | 'post' | 'patch' | 'delete' | 'insert' | 'update' | 'deleteMultiple' | 'aggregate';
+
+    // Query
+    sysparmQuery?: string; // Encoded query
+    sysparmDisplayValue?: boolean; // Display values
+    sysparmFields?: string; // Fields to return
+    apiVersion?: string; // Table API version
+
+    // Pagination
+    pageSize?: number;
+}
+
+/**
+ * Amazon S3 Adapter Configuration
+ */
+export interface AmazonS3AdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'AmazonS3';
+
+    // Connection
+    awsRegion?: string;
+    bucketName?: string;
+    endpointUrl?: string; // For custom endpoints
+
+    // Authentication
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    credentialName?: string; // For credential lookup
+
+    // Operation
+    operation?: 'put' | 'get' | 'delete' | 'list' | 'copy';
+    objectKey?: string; // S3 object key
+    prefix?: string; // For list operations
+
+    // Advanced
+    storageClass?: 'STANDARD' | 'REDUCED_REDUNDANCY' | 'GLACIER';
+    contentType?: string;
+    multipartThreshold?: number;
+}
+
+/**
+ * Azure Blob Storage Adapter Configuration
+ */
+export interface AzureBlobAdapterConfig extends Omit<AdapterConfig, 'type'> {
+    type: 'AzureBlob';
+
+    // Connection
+    storageAccountName?: string;
+    containerName?: string;
+    endpointSuffix?: string; // e.g., core.windows.net
+
+    // Authentication
+    sasToken?: string;
+    sharedKey?: string;
+
+    // Operation
+    operation?: 'upload' | 'download' | 'delete' | 'list';
+    blobName?: string;
+    prefix?: string;
+
+    // Advanced
+    blockSize?: number;
+    maxConcurrentRequests?: number;
 }
 
 // ============================================================================
@@ -588,6 +920,171 @@ export interface DeadLetterConfig {
     jmsQueue?: string;
     retainPayload?: boolean;
     maxRedeliveries?: number;
+}
+
+// ============================================================================
+// MONITORING & ALERTING
+// ============================================================================
+
+// Alert Rule Configuration
+export interface AlertRuleConfig {
+    id: string;
+    name: string;
+    enabled: boolean;
+
+    // Trigger Conditions
+    triggerType: 'error' | 'timeout' | 'custom' | 'messageCount' | 'processingTime';
+    threshold?: number; // For message count or processing time
+    timeWindow?: number; // In seconds
+
+    // Alert Properties
+    alertType?: 'EMAIL' | 'HTTP' | 'JMS' | 'SNMP' | 'SPLUNK';
+    alertSeverity?: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+
+    // Notification Targets
+    recipients?: string[]; // Email addresses or endpoints
+    httpEndpoint?: string; // For webhook alerts
+    jmsDestination?: string;
+
+    // Custom Message
+    subject?: string;
+    messageTemplate?: string; // Template with placeholders
+}
+
+// Custom Log Endpoint Configuration
+export interface CustomLogEndpointConfig {
+    id: string;
+    name: string;
+    enabled: boolean;
+
+    // Endpoint Type
+    endpointType: 'HTTP' | 'DATABASE' | 'FILE' | 'KAFKA' | 'SPLUNK' | 'ELK';
+
+    // Connection
+    connectionUrl?: string;
+    credentialName?: string;
+
+    // Format
+    logFormat?: 'JSON' | 'XML' | 'CSV' | 'CUSTOM';
+    includeHeaders?: boolean;
+    includeProperties?: boolean;
+    includeAttachments?: boolean;
+
+    // Filtering
+    logLevel?: 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+    filterExpression?: string; // Simple filter expression
+}
+
+// Metrics Endpoint Configuration
+export interface MetricsEndpointConfig {
+    id: string;
+    name: string;
+    enabled: boolean;
+
+    // Endpoint
+    path?: string; // Metrics endpoint path (default: /metrics)
+    port?: number;
+
+    // Metrics to Expose
+    exposeMetrics?: {
+        messageCount?: boolean;
+        processingTime?: boolean;
+        errorRate?: boolean;
+        customMetrics?: string[];
+    };
+
+    // Format
+    format?: 'PROMETHEUS' | 'JSON' | 'GRAPHITE';
+}
+
+// Integration Flow Monitoring Configuration
+export interface MonitoringConfig {
+    // Alert Rules
+    alertRules?: AlertRuleConfig[];
+
+    // Custom Logging
+    customLogEndpoints?: CustomLogEndpointConfig[];
+
+    // Metrics
+    metricsEndpoint?: MetricsEndpointConfig;
+
+    // Dashboards
+    dashboardEnabled?: boolean;
+    customDashboardId?: string;
+
+    // Trace
+    traceEnabled?: boolean;
+    traceSampleRate?: number; // 0-100 percentage
+
+    // Message Store
+    storeMessages?: boolean;
+    messageRetentionDays?: number;
+}
+
+// ============================================================================
+// ENVIRONMENT CONFIGURATION
+// ============================================================================
+
+/**
+ * Environment Parameter Configuration
+ * Define parameters that can have different values per environment
+ */
+export interface EnvironmentParameter {
+    name: string;
+    description?: string;
+    type: 'string' | 'number' | 'boolean' | 'password' | 'url';
+    defaultValue?: string;
+    required?: boolean;
+}
+
+/**
+ * Deployment Profile Configuration
+ * Define different configurations for dev/test/prod environments
+ */
+export interface DeploymentProfile {
+    name: string; // 'development' | 'test' | 'production' | custom name
+    description?: string;
+
+    // Parameter overrides for this environment
+    parameterOverrides?: Record<string, string>;
+
+    // Adapter-specific configurations
+    adapterConfigs?: Record<string, Record<string, string>>;
+
+    // Resource limits
+    maxMemoryMB?: number;
+    maxExecutionTime?: number; // seconds
+
+    // Monitoring settings for this profile
+    monitoringConfig?: Partial<MonitoringConfig>;
+}
+
+/**
+ * Environment Configuration
+ * Main configuration for environment-specific parameters
+ */
+export interface EnvironmentConfig {
+    // Default values (used if not overridden)
+    parameters: EnvironmentParameter[];
+
+    // Deployment profiles
+    profiles: DeploymentProfile[];
+
+    // Current active profile
+    activeProfile?: string;
+
+    // Environment variables (system-level)
+    environmentVariables?: Record<string, string>;
+}
+
+/**
+ * Parameterized Value
+ * Represents a value that can be substituted at runtime
+ */
+export interface ParameterizedValue {
+    type: 'parameter' | 'expression' | 'constant';
+    value: string;
+    parameterName?: string; // For type='parameter'
 }
 
 // ============================================================================

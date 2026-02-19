@@ -51,6 +51,26 @@ export class BPMN2Generator {
     private elementPositions: Map<string, { x: number; y: number }> = new Map();
 
     /**
+     * Generate the cmdVariantUri property for a callActivity element.
+     * SAP CPI uses this to look up the component's property sheet metadata.
+     * Without it, clicking an element shows "Unable to render property sheet. Metadata not available or not registered".
+     * Note: Flow step cmdVariantUri does NOT include version — SAP CPI resolves it automatically.
+     */
+    private getCmdVariantUri(subActivityType: string, _componentVersion: string): string {
+        return `ctype::FlowstepVariant/cname::${subActivityType}`;
+    }
+
+    /**
+     * Generate the standard cmdVariantUri ifl:property block for a callActivity
+     */
+    private generateCmdVariantProperty(subActivityType: string, componentVersion: string): string {
+        return `                <ifl:property>
+                    <key>cmdVariantUri</key>
+                    <value>${this.getCmdVariantUri(subActivityType, componentVersion)}</value>
+                </ifl:property>`;
+    }
+
+    /**
      * Get the correct component version for SAP CPI components
      * SAP CPI requires specific version numbers for each component type
      */
@@ -130,10 +150,10 @@ export class BPMN2Generator {
             'FTPS': '1.3.0',
 
             // Mail Adapters
-            'Mail': '1.5.0',
-            'IMAP': '1.5.0',
-            'POP3': '1.5.0',
-            'SMTP': '1.5.0',
+            'Mail': '1.13.0',
+            'IMAP': '1.13.0',
+            'POP3': '1.13.0',
+            'SMTP': '1.13.0',
 
             // SAP Adapters
             'IDoc': '1.10.0',
@@ -145,6 +165,7 @@ export class BPMN2Generator {
             'AMQP': '1.6.0',
             'Kafka': '1.2.0',
             'SAP_Event_Mesh': '1.0.0',
+            'AzureServiceBus': '1.0.0',
 
             // Cloud Apps
             'Salesforce': '1.0.0',
@@ -153,11 +174,42 @@ export class BPMN2Generator {
             'SuccessFactors_REST': '1.6.0',
             'SuccessFactors_OData': '1.6.0',
             'Ariba': '1.0.0',
+            'Ariba_Network': '1.0.0',
+            'Workday': '1.0.0',
             'ServiceNow': '1.0.0',
+            'MicrosoftDynamics': '1.0.0',
+            'MicrosoftDynamics365': '1.0.0',
+            'Twitter': '1.0.0',
+            'Facebook': '1.0.0',
+            'Slack': '1.0.0',
+            'Dropbox': '1.0.0',
+            'GoogleDrive': '1.0.0',
+            'Box': '1.0.0',
+            'SAP_Concur': '1.0.0',
+            'SAP_FieldGlass': '1.0.0',
+            'SAP_IBP': '1.0.0',
+            'SAP_C4C': '1.0.0',
 
             // Infrastructure
             'ProcessDirect': '1.2.0',
             'DataStore': '1.0.0',
+            'DataStoreSelect': '1.0.0',
+            'AmazonS3': '1.0.0',
+            'AmazonSQS': '1.0.0',
+            'AmazonSNS': '1.0.0',
+            'AmazonDynamoDB': '1.0.0',
+            'AzureBlob': '1.0.0',
+            'AzureCosmosDB': '1.0.0',
+            'OpenConnectors': '1.0.0',
+            'ELSTER': '1.0.0',
+            'MDI': '1.0.0',
+
+            // JDBC (uses SAP Cloud Connector adapter)
+            'JDBC': '1.0.0',
+
+            // B2B Adapters
+            'AS2': '1.0.0',
+            'AS4': '1.0.0',
         };
 
         return adapterVersions[adapterType] || '1.0.0';
@@ -202,27 +254,263 @@ export class BPMN2Generator {
         if (design.contentEnrichers) design.contentEnrichers.forEach(c => ids.add(c.id));
         if (design.signers) design.signers.forEach(s => ids.add(s.id));
         if (design.encryptors) design.encryptors.forEach(e => ids.add(e.id));
+        
+        // NOTE: Do NOT include flowSteps or flowDiagram directly - they may contain
+        // elements with unrecognized types that won't be generated.
+        // Only component arrays contain elements that will actually exist in the BPMN2 XML.
 
         return ids;
+    }
+
+    /**
+     * Normalize design by extracting elements from flowSteps into the appropriate arrays
+     * This ensures the generator can process elements regardless of how the AI structured them
+     */
+    private normalizeDesign(design: IFlowDesign): IFlowDesign {
+        const normalized = { ...design };
+        
+        // Initialize arrays if not present
+        if (!normalized.scripts) normalized.scripts = [];
+        if (!normalized.mappings) normalized.mappings = [];
+        if (!normalized.routers) normalized.routers = [];
+        if (!normalized.converters) normalized.converters = [];
+        if (!normalized.contentModifiers) normalized.contentModifiers = [];
+        if (!normalized.xmlValidators) normalized.xmlValidators = [];
+        if (!normalized.splitters) normalized.splitters = [];
+        if (!normalized.aggregators) normalized.aggregators = [];
+        if (!normalized.multicasts) normalized.multicasts = [];
+        if (!normalized.dataStores) normalized.dataStores = [];
+        if (!normalized.variables) normalized.variables = [];
+        if (!normalized.requestReplies) normalized.requestReplies = [];
+        if (!normalized.contentEnrichers) normalized.contentEnrichers = [];
+        if (!normalized.encryptors) normalized.encryptors = [];
+        if (!normalized.decryptors) normalized.decryptors = [];
+        if (!normalized.signers) normalized.signers = [];
+        if (!normalized.verifiers) normalized.verifiers = [];
+        if (!normalized.joins) normalized.joins = [];
+        if (!normalized.filters) normalized.filters = [];
+        if (!normalized.localProcesses) normalized.localProcesses = [];
+        
+        // Extract elements from flowSteps into appropriate arrays
+        if (design.flowSteps && design.flowSteps.length > 0) {
+            console.log(`[BPMN2Generator] Normalizing ${design.flowSteps.length} flowSteps into component arrays`);
+            
+            for (const step of design.flowSteps) {
+                const config = step.config as any;
+                const existsInArray = (arr: any[], id: string) => arr.some(item => item.id === id);
+                
+                switch (step.type) {
+                    case 'script':
+                        if (!existsInArray(normalized.scripts!, step.id)) {
+                            normalized.scripts!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'mapping':
+                        if (!existsInArray(normalized.mappings!, step.id)) {
+                            normalized.mappings!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'router':
+                        if (!existsInArray(normalized.routers!, step.id)) {
+                            normalized.routers!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'converter':
+                        if (!existsInArray(normalized.converters!, step.id)) {
+                            normalized.converters!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'contentModifier':
+                        if (!existsInArray(normalized.contentModifiers!, step.id)) {
+                            normalized.contentModifiers!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'xmlValidator':
+                        if (!existsInArray(normalized.xmlValidators!, step.id)) {
+                            normalized.xmlValidators!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'splitter':
+                        if (!existsInArray(normalized.splitters!, step.id)) {
+                            normalized.splitters!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'aggregator':
+                        if (!existsInArray(normalized.aggregators!, step.id)) {
+                            normalized.aggregators!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'multicast':
+                        if (!existsInArray(normalized.multicasts!, step.id)) {
+                            normalized.multicasts!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'dataStore':
+                        if (!existsInArray(normalized.dataStores!, step.id)) {
+                            normalized.dataStores!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'variable':
+                        if (!existsInArray(normalized.variables!, step.id)) {
+                            normalized.variables!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'requestReply':
+                        if (!existsInArray(normalized.requestReplies!, step.id)) {
+                            normalized.requestReplies!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'contentEnricher':
+                        if (!existsInArray(normalized.contentEnrichers!, step.id)) {
+                            normalized.contentEnrichers!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'encryptor':
+                        if (!existsInArray(normalized.encryptors!, step.id)) {
+                            normalized.encryptors!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'decryptor':
+                        if (!existsInArray(normalized.decryptors!, step.id)) {
+                            normalized.decryptors!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'signer':
+                        if (!existsInArray(normalized.signers!, step.id)) {
+                            normalized.signers!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'verifier':
+                        if (!existsInArray(normalized.verifiers!, step.id)) {
+                            normalized.verifiers!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'join':
+                        if (!existsInArray(normalized.joins!, step.id)) {
+                            normalized.joins!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'filter':
+                        if (!existsInArray(normalized.filters!, step.id)) {
+                            normalized.filters!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    case 'localProcess':
+                        if (!existsInArray(normalized.localProcesses!, step.id)) {
+                            normalized.localProcesses!.push({ id: step.id, name: step.name, ...config });
+                        }
+                        break;
+                    // Handle adapter types - these become request-reply calls in the process
+                    case 'adapter':
+                    case 'odata':
+                    case 'http':
+                    case 'soap':
+                    case 'rest':
+                    case 'sftp':
+                    case 'jdbc':
+                        // Adapters/connection calls are processed via requestReply pattern
+                        if (!existsInArray(normalized.requestReplies!, step.id)) {
+                            normalized.requestReplies!.push({ 
+                                id: step.id, 
+                                name: step.name, 
+                                adapterId: config?.adapterId || step.id + '_adapter',
+                                adapterType: step.type.toUpperCase(),
+                                ...config 
+                            });
+                        }
+                        break;
+                    // Handle logging/error handling as content modifiers
+                    case 'log':
+                    case 'trace':
+                    case 'error':
+                        if (!existsInArray(normalized.contentModifiers!, step.id)) {
+                            const headerAction = step.type === 'error' ? 'Create' : 'Add';
+                            normalized.contentModifiers!.push({ 
+                                id: step.id, 
+                                name: step.name, 
+                                headerAction,
+                                headerName: step.type === 'error' ? 'CamelError' : 'Log',
+                                headerValue: step.name || config?.message || 'Log entry',
+                                ...config 
+                            });
+                        }
+                        break;
+                    default:
+                        // For totally unknown types, create as content modifier to ensure flow continuity
+                        console.warn(`[BPMN2Generator] Unknown step type "${step.type}" for step "${step.id}", creating as content modifier`);
+                        if (!existsInArray(normalized.contentModifiers!, step.id)) {
+                            normalized.contentModifiers!.push({ 
+                                id: step.id, 
+                                name: step.name || `${step.type} Step`,
+                                headerAction: 'Add',
+                                headerName: 'ProcessedBy',
+                                headerValue: step.id,
+                                ...config 
+                            });
+                        }
+                }
+            }
+        }
+        
+        // Also extract steps from localProcesses' internal steps
+        if (normalized.localProcesses) {
+            for (const localProcess of normalized.localProcesses) {
+                if (localProcess.steps && localProcess.steps.length > 0) {
+                    // These steps are handled separately in generateLocalIntegrationProcess
+                    // but we need to ensure the IDs are tracked
+                    console.log(`[BPMN2Generator] Local process "${localProcess.id}" has ${localProcess.steps.length} internal steps`);
+                }
+            }
+        }
+        
+        // Sanitize adapters - convert Mail/IMAP/POP3 Receiver to SMTP
+        if (normalized.adapters) {
+            normalized.adapters = normalized.adapters.map(adapter => {
+                if (['Mail', 'IMAP', 'POP3'].includes(adapter.type) && adapter.direction === 'Receiver') {
+                    console.warn(`[BPMN2Generator] Converting ${adapter.type} Receiver to SMTP for adapter "${adapter.id}"`);
+                    return {
+                        ...adapter,
+                        type: 'SMTP' as any,
+                        protocol: 'HTTPS' as any,
+                        messageProtocol: 'SMTP'
+                    };
+                }
+                return adapter;
+            });
+        }
+        
+        return normalized;
+    }
+
+    /**
+     * Public access to sanitizeDesign for pre-validation in the pipeline orchestrator.
+     * Fixes invalid references (e.g., router targets pointing to non-existent elements)
+     * and normalizes the design structure.
+     */
+    sanitizeDesignPublic(design: IFlowDesign): IFlowDesign {
+        return this.sanitizeDesign(design);
     }
 
     /**
      * Sanitize design to fix invalid references (e.g., router targets pointing to non-existent elements)
      */
     private sanitizeDesign(design: IFlowDesign): IFlowDesign {
-        const validIds = this.collectValidElementIds(design);
+        // First normalize the design to extract elements from flowSteps
+        const normalized = this.normalizeDesign(design);
+        
+        const validIds = this.collectValidElementIds(normalized);
 
         // Fix router targets that reference non-existent elements
-        if (design.routers) {
-            design.routers = design.routers.map(router => ({
+        if (normalized.routers) {
+            normalized.routers = normalized.routers.map(router => ({
                 ...router,
-                routingConditions: router.routingConditions.map(condition => {
+                routingConditions: router.routingConditions ? router.routingConditions.map(condition => {
                     if (!validIds.has(condition.targetId)) {
                         console.warn(`[BPMN2Generator] Router condition "${condition.name}" targets non-existent element "${condition.targetId}", redirecting to EndEvent_1`);
                         return { ...condition, targetId: 'EndEvent_1' };
                     }
                     return condition;
-                }),
+                }) : [],
                 // Fix default route if it references non-existent element
                 defaultRoute: router.defaultRoute && !validIds.has(router.defaultRoute)
                     ? (console.warn(`[BPMN2Generator] Router default route targets non-existent element "${router.defaultRoute}", redirecting to EndEvent_1`), 'EndEvent_1')
@@ -231,20 +519,20 @@ export class BPMN2Generator {
         }
 
         // Fix multicast targets
-        if (design.multicasts) {
-            design.multicasts = design.multicasts.map(multicast => ({
+        if (normalized.multicasts) {
+            normalized.multicasts = normalized.multicasts.map(multicast => ({
                 ...multicast,
-                branches: multicast.branches.map(branch => {
+                branches: multicast.branches ? multicast.branches.map(branch => {
                     if (!validIds.has(branch.targetId)) {
                         console.warn(`[BPMN2Generator] Multicast branch "${branch.name}" targets non-existent element "${branch.targetId}", redirecting to EndEvent_1`);
                         return { ...branch, targetId: 'EndEvent_1' };
                     }
                     return branch;
-                })
+                }) : []
             }));
         }
 
-        return design;
+        return normalized;
     }
 
     /**
@@ -263,10 +551,14 @@ export class BPMN2Generator {
         const collaborationId = `Collaboration_1`;
 
         // Determine if this is a timer-triggered flow
-        const isTimerTriggered = sanitizedDesign.triggerType === 'timer' || sanitizedDesign.timerConfig;
+        // IMPORTANT: Mail/IMAP/POP3 sender adapters have built-in scheduling via the
+        // scheduleKey property — they should NOT create a separate timer start event.
+        const hasMailSender = sanitizedDesign.adapters.some(a => 
+            a.direction === 'Sender' && ['Mail', 'IMAP', 'POP3'].includes(a.type)
+        );
+        const isTimerTriggered = !hasMailSender && !!(sanitizedDesign.triggerType === 'timer' || sanitizedDesign.timerConfig);
 
-        const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:ifl="http:///com.sap.ifl.model/Ifl.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_1" targetNamespace="http://www.sap.com/xi/BPMN2">
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:ifl="http:///com.sap.ifl.model/Ifl.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_1">
 ${this.generateCollaboration(sanitizedDesign, collaborationId, processId)}
 ${this.generateProcess(sanitizedDesign, processId, isTimerTriggered)}
 ${this.generateLocalProcesses(sanitizedDesign)}
@@ -361,6 +653,12 @@ ${this.generateLocalProcessContent(localProcess)}
                 return step.config ? this.generateConverter(step.config as ConverterConfig, incoming, outgoing) : '';
             case 'xmlValidator':
                 return step.config ? this.generateXMLValidator(step.config as XMLValidatorConfig, incoming, outgoing) : '';
+            // 'start' and 'end' steps are implicit in local/exception subprocesses — skip them
+            case 'start':
+            case 'startEvent':
+            case 'end':
+            case 'endEvent':
+                return '';
             default:
                 console.warn(`[BPMN2Generator] Unknown step type: ${step.type}`);
                 return '';
@@ -374,7 +672,36 @@ ${this.generateLocalProcessContent(localProcess)}
         const senderAdapters = design.adapters.filter(a => a.direction === 'Sender');
         const receiverAdapters = design.adapters.filter(a => a.direction === 'Receiver');
 
+        // Collaboration-level extension elements (required by SAP CPI)
+        const collaborationExtensions = `        <bpmn2:extensionElements>
+            <ifl:property>
+                <key>namespaceMapping</key>
+                <value/>
+            </ifl:property>
+            <ifl:property>
+                <key>allowedHeaderList</key>
+                <value/>
+            </ifl:property>
+            <ifl:property>
+                <key>ServerTrace</key>
+                <value/>
+            </ifl:property>
+            <ifl:property>
+                <key>returnExceptionToSender</key>
+                <value/>
+            </ifl:property>
+            <ifl:property>
+                <key>log</key>
+                <value>All events</value>
+            </ifl:property>
+            <ifl:property>
+                <key>cmdVariantUri</key>
+                <value>ctype::IFlowVariant/cname::IFlowConfiguration</value>
+            </ifl:property>
+        </bpmn2:extensionElements>`;
+
         // Build participants
+        // IntegrationProcess participant has EMPTY extensionElements (properties go on the <bpmn2:process> element)
         let participants = `        <bpmn2:participant id="Participant_1" ifl:type="EndpointSender" name="Sender">
             <bpmn2:extensionElements>
                 <ifl:property>
@@ -388,24 +715,7 @@ ${this.generateLocalProcessContent(localProcess)}
             </bpmn2:extensionElements>
         </bpmn2:participant>
         <bpmn2:participant id="Participant_Process" ifl:type="IntegrationProcess" name="${this.escapeXml(design.metadata.name)}" processRef="${processId}">
-            <bpmn2:extensionElements>
-                <ifl:property>
-                    <key>transactionTimeout</key>
-                    <value>30</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>componentVersion</key>
-                    <value>1.1</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>transactionalHandling</key>
-                    <value>Not Required</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>cmdVariantUri</key>
-                    <value>ctype::IFlowVariant/cname::${this.escapeXml(design.metadata.name)}/version::1.0.0</value>
-                </ifl:property>
-            </bpmn2:extensionElements>
+            <bpmn2:extensionElements/>
         </bpmn2:participant>
         <bpmn2:participant id="Participant_2" ifl:type="EndpointReceiver" name="Receiver">
             <bpmn2:extensionElements>
@@ -417,15 +727,17 @@ ${this.generateLocalProcessContent(localProcess)}
         </bpmn2:participant>`;
 
         // Build message flows
+        // NOTE: Sender message flow targetRef should be the StartEvent (not the participant)
+        // to match SAP CPI reference format
         let messageFlows = '';
 
         // Sender message flow
         if (senderAdapters.length > 0) {
             const adapter = senderAdapters[0];
-            messageFlows += this.generateMessageFlow(adapter, 'Participant_1', 'Participant_Process');
+            messageFlows += this.generateMessageFlow(adapter, 'Participant_1', 'StartEvent_1');
         } else {
             // Default HTTP sender
-            messageFlows += `        <bpmn2:messageFlow id="MessageFlow_1" name="HTTP" sourceRef="Participant_1" targetRef="Participant_Process">
+            messageFlows += `        <bpmn2:messageFlow id="MessageFlow_1" name="HTTP" sourceRef="Participant_1" targetRef="StartEvent_1">
             <bpmn2:extensionElements>
 ${this.generateDefaultSenderProperties()}
             </bpmn2:extensionElements>
@@ -447,6 +759,7 @@ ${this.generateDefaultReceiverProperties()}
         }
 
         return `    <bpmn2:collaboration id="${collaborationId}" name="${this.escapeXml(design.metadata.name)}">
+${collaborationExtensions}
 ${participants}
 ${messageFlows}
     </bpmn2:collaboration>`;
@@ -457,40 +770,44 @@ ${messageFlows}
      */
     private generateDefaultSenderProperties(): string {
         return `                <ifl:property>
-                    <key>ComponentType</key>
-                    <value>HTTP</value>
+                    <key>Description</key>
+                    <value></value>
                 </ifl:property>
                 <ifl:property>
                     <key>ComponentNS</key>
                     <value>sap</value>
                 </ifl:property>
                 <ifl:property>
-                    <key>ComponentSWCVId</key>
-                    <value>1.0.0</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>Description</key>
-                    <value></value>
-                </ifl:property>
-                <ifl:property>
-                    <key>TransportProtocol</key>
+                    <key>Name</key>
                     <value>HTTP</value>
                 </ifl:property>
                 <ifl:property>
                     <key>TransportProtocolVersion</key>
-                    <value>1.1</value>
+                    <value>1.6.0</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>ComponentSWCVName</key>
+                    <value>external</value>
                 </ifl:property>
                 <ifl:property>
                     <key>MessageProtocol</key>
                     <value>None</value>
                 </ifl:property>
                 <ifl:property>
-                    <key>MessageProtocolVersion</key>
-                    <value></value>
+                    <key>ComponentSWCVId</key>
+                    <value>1.6.0</value>
                 </ifl:property>
                 <ifl:property>
                     <key>direction</key>
                     <value>Sender</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>ComponentType</key>
+                    <value>HTTP</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>componentVersion</key>
+                    <value>1.6</value>
                 </ifl:property>
                 <ifl:property>
                     <key>system</key>
@@ -499,6 +816,18 @@ ${messageFlows}
                 <ifl:property>
                     <key>Address</key>
                     <value>/http/test</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>TransportProtocol</key>
+                    <value>HTTP</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>cmdVariantUri</key>
+                    <value>ctype::AdapterVariant/cname::sap:HTTP/tp::HTTP/mp::None/direction::Sender/version::1.6.0</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>MessageProtocolVersion</key>
+                    <value>1.6.0</value>
                 </ifl:property>`;
     }
 
@@ -507,40 +836,44 @@ ${messageFlows}
      */
     private generateDefaultReceiverProperties(): string {
         return `                <ifl:property>
-                    <key>ComponentType</key>
-                    <value>HTTP</value>
+                    <key>Description</key>
+                    <value></value>
                 </ifl:property>
                 <ifl:property>
                     <key>ComponentNS</key>
                     <value>sap</value>
                 </ifl:property>
                 <ifl:property>
-                    <key>ComponentSWCVId</key>
-                    <value>1.0.0</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>Description</key>
-                    <value></value>
-                </ifl:property>
-                <ifl:property>
-                    <key>TransportProtocol</key>
+                    <key>Name</key>
                     <value>HTTP</value>
                 </ifl:property>
                 <ifl:property>
                     <key>TransportProtocolVersion</key>
-                    <value>1.1</value>
+                    <value>1.6.0</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>ComponentSWCVName</key>
+                    <value>external</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>ComponentType</key>
+                    <value>HTTP</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>ComponentSWCVId</key>
+                    <value>1.6.0</value>
                 </ifl:property>
                 <ifl:property>
                     <key>MessageProtocol</key>
                     <value>None</value>
                 </ifl:property>
                 <ifl:property>
-                    <key>MessageProtocolVersion</key>
-                    <value></value>
-                </ifl:property>
-                <ifl:property>
                     <key>direction</key>
                     <value>Receiver</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>componentVersion</key>
+                    <value>1.6</value>
                 </ifl:property>
                 <ifl:property>
                     <key>system</key>
@@ -555,8 +888,20 @@ ${messageFlows}
                     <value>https://target-system.example.com/api</value>
                 </ifl:property>
                 <ifl:property>
+                    <key>TransportProtocol</key>
+                    <value>HTTP</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>cmdVariantUri</key>
+                    <value>ctype::AdapterVariant/cname::sap:HTTP/tp::HTTP/mp::None/direction::Receiver/version::1.6.0</value>
+                </ifl:property>
+                <ifl:property>
                     <key>authenticationMethod</key>
                     <value>None</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>MessageProtocolVersion</key>
+                    <value>1.6.0</value>
                 </ifl:property>`;
     }
 
@@ -628,10 +973,17 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
                     delete sanitized.properties['process.mode'];
                 }
             } else {
-                // Sender Mail adapter - ensure correct protocol
-                sanitized.protocol = 'HTTPS' as any;
-                sanitized.messageProtocol = adapter.type === 'IMAP' ? 'IMAP' :
-                    adapter.type === 'POP3' ? 'POP3' : 'IMAP';
+                // Sender Mail adapter - ensure correct protocol settings
+                // For IMAP/POP3/Mail sender, SAP CPI uses IMAP/POP3 as TransportProtocol
+                // and "Not Applicable" as MessageProtocol
+                sanitized.protocol = (adapter.type === 'POP3' ? 'POP3' : 'IMAP') as any;
+                sanitized.messageProtocol = 'Not Applicable';
+                    
+                // Ensure correct component type for SAP CPI
+                // SAP CPI expects 'Mail' as the component type for mail sender
+                if (adapter.type === 'IMAP' || adapter.type === 'POP3') {
+                    sanitized.type = 'Mail' as any;
+                }
             }
         }
 
@@ -649,25 +1001,148 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
     }
 
     /**
+     * Get the transport protocol for an adapter type.
+     * SAP CPI uses specific transport protocol names per adapter.
+     */
+    private getAdapterTransportProtocol(adapterType: string, protocol?: string): string {
+        const transportMap: Record<string, string> = {
+            'HTTP': 'HTTP',
+            'HTTPS': 'HTTPS',
+            'SOAP': 'HTTP',
+            'SOAP_SAP_RM': 'HTTP',
+            'REST': 'HTTP',
+            'OData': 'HTTP',
+            'OData_V2': 'HTTP',
+            'OData_V4': 'HTTP',
+            'SFTP': 'SFTP',
+            'FTP': 'FTP',
+            'FTPS': 'FTPS',
+            'Mail': 'IMAP',
+            'IMAP': 'IMAP',
+            'POP3': 'POP3',
+            'SMTP': 'SMTP',
+            'IDoc': 'HTTP',
+            'RFC': 'RFC',
+            'XI': 'XI',
+            'JMS': 'JMS',
+            'AMQP': 'AMQP',
+            'Kafka': 'Kafka',
+            'ProcessDirect': 'ProcessDirect',
+            'SuccessFactors': 'HTTP',
+            'SuccessFactors_SOAP': 'HTTP',
+            'SuccessFactors_REST': 'HTTP',
+            'SuccessFactors_OData': 'HTTP',
+            'Salesforce': 'HTTP',
+            'Ariba': 'HTTP',
+            'ServiceNow': 'HTTP',
+        };
+        return transportMap[adapterType] || protocol || 'HTTP';
+    }
+
+    /**
+     * Get the message protocol for an adapter type.
+     * SAP CPI uses specific message protocol names per adapter.
+     */
+    private getAdapterMessageProtocol(adapterType: string, messageProtocol?: string): string {
+        const msgProtocolMap: Record<string, string> = {
+            'HTTP': 'None',
+            'HTTPS': 'None',
+            'SOAP': 'SOAP 1.x',
+            'SOAP_SAP_RM': 'SAP RM',
+            'REST': 'None',
+            'OData': 'OData',
+            'OData_V2': 'OData',
+            'OData_V4': 'ODataV4',
+            'SFTP': 'Not Applicable',
+            'FTP': 'Not Applicable',
+            'FTPS': 'Not Applicable',
+            'Mail': 'Not Applicable',
+            'IMAP': 'Not Applicable',
+            'POP3': 'Not Applicable',
+            'SMTP': 'Not Applicable',
+            'IDoc': 'IDoc',
+            'RFC': 'RFC',
+            'XI': 'XI 3.0',
+            'JMS': 'Not Applicable',
+            'AMQP': 'Not Applicable',
+            'Kafka': 'Not Applicable',
+            'ProcessDirect': 'Not Applicable',
+            'SuccessFactors': 'REST',
+            'SuccessFactors_SOAP': 'SOAP 1.x',
+            'SuccessFactors_REST': 'REST',
+            'SuccessFactors_OData': 'OData',
+            'Salesforce': 'REST',
+            'Ariba': 'REST',
+            'ServiceNow': 'REST',
+        };
+        return msgProtocolMap[adapterType] || messageProtocol || 'None';
+    }
+
+    /**
+     * Get the short component version (e.g., "1.13.0" -> "1.13") for adapter cmdVariantUri
+     */
+    private getShortComponentVersion(adapterType: string): string {
+        const fullVersion = this.getAdapterVersion(adapterType);
+        // Remove trailing ".0" for the short version (e.g., "1.13.0" -> "1.13")
+        return fullVersion.replace(/\.0$/, '');
+    }
+
+    /**
+     * Generate the cmdVariantUri for an adapter.
+     * Pattern: ctype::AdapterVariant/cname::sap:<ComponentType>/tp::<TransportProtocol>/mp::<MessageProtocol>/direction::<direction>/version::<ComponentSWCVId>
+     */
+    private getAdapterCmdVariantUri(adapter: AdapterConfig): string {
+        const componentType = adapter.type;
+        const transportProtocol = this.getAdapterTransportProtocol(adapter.type, adapter.protocol);
+        const messageProtocol = this.getAdapterMessageProtocol(adapter.type, adapter.messageProtocol);
+        const direction = adapter.direction;
+        const version = this.getAdapterVersion(adapter.type);
+        return `ctype::AdapterVariant/cname::sap:${componentType}/tp::${transportProtocol}/mp::${messageProtocol}/direction::${direction}/version::${version}`;
+    }
+
+    /**
      * Generate adapter properties in SAP CPI format
      */
     private generateAdapterProperties(adapter: AdapterConfig): string {
-        const properties: [string, string][] = [
-            ['ComponentType', adapter.type],
-            ['ComponentNS', 'sap'],
-            ['ComponentSWCVId', this.getAdapterVersion(adapter.type)],
+        const adapterVersion = this.getAdapterVersion(adapter.type);
+        const transportProtocol = this.getAdapterTransportProtocol(adapter.type, adapter.protocol);
+        const messageProtocol = this.getAdapterMessageProtocol(adapter.type, adapter.messageProtocol);
+        const shortVersion = this.getShortComponentVersion(adapter.type);
+
+        const properties: [string, string][] = [];
+
+        // Add adapter-specific properties FIRST (before common properties) for Mail
+        // This matches the SAP CPI reference format where adapter properties come first
+        if (['Mail', 'IMAP', 'POP3', 'SMTP'].includes(adapter.type)) {
+            this.addMailProperties(properties, adapter as any);
+        }
+
+        // Common adapter properties (these go after adapter-specific for Mail, matching reference)
+        properties.push(
             ['Description', ''],
-            ['TransportProtocol', adapter.protocol || 'HTTP'],
-            ['TransportProtocolVersion', '1.1'],
-            ['MessageProtocol', adapter.messageProtocol || 'None'],
-            ['MessageProtocolVersion', ''],
+            ['ComponentNS', 'sap'],
+            ['Name', adapter.name || adapter.type],
+            ['TransportProtocolVersion', adapterVersion],
+            ['ComponentSWCVName', 'external'],
+            ['MessageProtocol', messageProtocol],
+            ['ComponentSWCVId', adapterVersion],
             ['direction', adapter.direction],
+            ['ComponentType', adapter.type],
+            ['componentVersion', shortVersion],
             ['system', adapter.direction === 'Sender' ? 'Sender' : 'Receiver'],
-        ];
+        );
 
         if (adapter.address) {
             properties.push(['Address', adapter.address]);
         }
+
+        // Add TransportProtocol and cmdVariantUri near the end (matching reference order)
+        properties.push(
+            ['TransportProtocol', transportProtocol],
+            ['cmdVariantUri', this.getAdapterCmdVariantUri(adapter)],
+            ['MessageProtocolVersion', adapterVersion],
+        );
+
         if (adapter.timeout) {
             properties.push(['requestTimeout', adapter.timeout.toString()]);
         }
@@ -922,6 +1397,149 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
     }
 
     /**
+     * Add Mail adapter specific properties matching SAP CPI reference format.
+     * Supports IMAP (Sender), POP3 (Sender), and SMTP (Receiver) adapters.
+     * Property names and values match exactly what SAP CPI expects.
+     * 
+     * Based on reference iFlow analysis: the Mail sender adapter has built-in scheduling
+     * via the `scheduleKey` property — NO separate timer start event is needed.
+     */
+    private addMailProperties(properties: [string, string][], adapter: any): void {
+        const isSender = adapter.direction === 'Sender';
+        
+        // Helper to get value from adapter properties with fallback
+        const getProp = (keys: string[], defaultVal: string = ''): string => {
+            for (const key of keys) {
+                if (adapter.properties?.[key] !== undefined) return String(adapter.properties[key]);
+            }
+            return defaultVal;
+        };
+        
+        // Extract server from address if not directly provided
+        let server = adapter.mailServer || adapter.properties?.server || '';
+        if (!server && adapter.address) {
+            const match = adapter.address.match(/^(?:imaps?|pop3s?|smtp):\/\/([^:\/]+)/i);
+            if (match) server = match[1];
+        }
+        
+        if (isSender) {
+            // === IMAP/POP3 Sender adapter properties (matches SAP CPI reference exactly) ===
+            properties.push(['server', server]);
+            properties.push(['disconnect', getProp(['disconnect'], '1')]);
+            properties.push(['archiveMailFolder', getProp(['archiveMailFolder'], '')]);
+            
+            // Authentication - SAP CPI uses specific auth values
+            const authType = adapter.authentication?.type;
+            let auth = 'loginEncrypted';
+            if (authType === 'OAuth2' || authType === 'OAuth2ClientCredentials') {
+                auth = 'OAuth2ClientCredentials';
+            } else if (authType === 'None') {
+                auth = 'none';
+            }
+            properties.push(['auth', getProp(['auth'], auth)]);
+            
+            // Read flag selection  
+            properties.push(['selectionReadFlag', getProp(['selectionReadFlag'], 'unread')]);
+            
+            // SSL/TLS settings
+            properties.push(['ssl', getProp(['ssl', 'protection'], 'starttls_mandatory')]);
+            
+            // Timeout
+            properties.push(['timeout', getProp(['timeout'], '3000')]);
+            
+            // Proxy settings
+            properties.push(['proxyPort', getProp(['proxyPort'], '8080')]);
+            
+            // Post-processing action (what to do with email after reading)
+            properties.push(['postProcessing', getProp(['postProcessing'], 'delete')]);
+            
+            // Location ID (for Cloud Connector)
+            properties.push(['locationId', getProp(['locationId'], '')]);
+            
+            // MIME decode headers
+            properties.push(['mimeDecodeHeaders', getProp(['mimeDecodeHeaders'], '1')]);
+            
+            // Max messages per poll
+            properties.push(['maxMessagesPerPoll', getProp(['maxMessagesPerPoll', 'maxMessagesToProcess'], '20')]);
+            
+            // Lock duration (to prevent parallel processing)
+            properties.push(['lockDuration', getProp(['lockDuration'], '60')]);
+            
+            // Proxy settings
+            properties.push(['proxyProtocol', getProp(['proxyProtocol'], 'socks5')]);
+            properties.push(['proxyType', getProp(['proxyType'], 'none')]);
+            properties.push(['proxyAlias', getProp(['proxyAlias'], '')]);
+            
+            // Remove attachments flag
+            properties.push(['removeAttachments', getProp(['removeAttachments'], '0')]);
+            
+            // Proxy host
+            properties.push(['proxyHost', getProp(['proxyHost'], '')]);
+            
+            // Forward original mail
+            properties.push(['forwardOriginalMail', getProp(['forwardOriginalMail'], '0')]);
+            
+            // Mail folder to read from
+            properties.push(['folder', getProp(['folder', 'folderName'], 'INBOX')]);
+            
+            // Schedule key - built-in scheduler for mail polling
+            // This is the KEY property that enables scheduling without a separate timer start event
+            // Use raw angle brackets — escapeXml() will convert them to &lt; &gt; automatically
+            const defaultScheduleKey = '<row><cell>dayValue</cell><cell></cell></row><row><cell>monthValue</cell><cell></cell></row><row><cell>yearValue</cell><cell></cell></row><row><cell>dateType</cell><cell>DAILY</cell></row><row><cell>secondValue</cell><cell>0</cell></row><row><cell>minutesValue</cell><cell></cell></row><row><cell>hourValue</cell><cell></cell></row><row><cell>toInterval</cell><cell>24</cell></row><row><cell>fromInterval</cell><cell>0</cell></row><row><cell>OnEverySecond</cell><cell>10</cell></row><row><cell>timeType</cell><cell>TIME_SECOND_INTERVAL</cell></row><row><cell>timeZone</cell><cell>( UTC 0:00 ) Greenwich Mean Time(Etc/GMT)</cell></row><row><cell>throwExceptionOnExpiry</cell><cell>true</cell></row><row><cell>second</cell><cell>0/10</cell></row><row><cell>minute</cell><cell>*</cell></row><row><cell>hour</cell><cell>0-24</cell></row><row><cell>day_of_month</cell><cell>?</cell></row><row><cell>month</cell><cell>*</cell></row><row><cell>dayOfWeek</cell><cell>*</cell></row><row><cell>year</cell><cell>*</cell></row><row><cell>startAt</cell><cell></cell></row><row><cell>endAt</cell><cell></cell></row><row><cell>attributeBehaviour</cell><cell>isRunOnceRequired,isScheduleOnDayRequired,isScheduleRecurRequired</cell></row><row><cell>triggerType</cell><cell>cron</cell></row><row><cell>noOfSchedules</cell><cell>1</cell></row><row><cell>schedule1</cell><cell>0/10+*+0-23+?+*+*+*&amp;trigger.timeZone=Etc/GMT</cell></row>';
+            properties.push(['scheduleKey', getProp(['scheduleKey'], defaultScheduleKey)]);
+            
+            // Token credential (for OAuth2)
+            properties.push(['tokenCredential', getProp(['tokenCredential'], '')]);
+            
+            // User credential
+            if (adapter.authentication?.credentialName) {
+                properties.push(['user', adapter.authentication.credentialName]);
+            } else {
+                properties.push(['user', getProp(['user'], '')]);
+            }
+        } else {
+            // === SMTP Receiver adapter properties ===
+            properties.push(['server', server]);
+            
+            // Authentication
+            const authType = adapter.authentication?.type;
+            let auth = 'loginEncrypted';
+            if (authType === 'None') auth = 'none';
+            properties.push(['auth', getProp(['auth'], auth)]);
+            
+            // SSL/TLS
+            properties.push(['ssl', getProp(['ssl', 'protection'], 'starttls_mandatory')]);
+            
+            // Timeout
+            properties.push(['timeout', getProp(['timeout'], '3000')]);
+            
+            // From / To / CC / BCC / Subject
+            if (adapter.properties?.from) properties.push(['from', adapter.properties.from]);
+            if (adapter.properties?.to) properties.push(['to', adapter.properties.to]);
+            if (adapter.properties?.cc) properties.push(['cc', adapter.properties.cc]);
+            if (adapter.properties?.bcc) properties.push(['bcc', adapter.properties.bcc]);
+            if (adapter.properties?.subject) properties.push(['subject', adapter.properties.subject]);
+            
+            // Content type
+            properties.push(['mailContentType', getProp(['mailContentType'], 'text/plain')]);
+            
+            // Proxy settings
+            properties.push(['proxyType', getProp(['proxyType'], 'none')]);
+            properties.push(['proxyHost', getProp(['proxyHost'], '')]);
+            properties.push(['proxyPort', getProp(['proxyPort'], '8080')]);
+            properties.push(['proxyProtocol', getProp(['proxyProtocol'], 'socks5')]);
+            properties.push(['locationId', getProp(['locationId'], '')]);
+            
+            // User credential
+            if (adapter.authentication?.credentialName) {
+                properties.push(['user', adapter.authentication.credentialName]);
+            } else {
+                properties.push(['user', getProp(['user'], '')]);
+            }
+        }
+    }
+
+    /**
      * Generate process section with activities
      */
     private generateProcess(design: IFlowDesign, processId: string, isTimerTriggered: boolean = false): string {
@@ -937,11 +1555,11 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
         if (isTimerTriggered && design.timerConfig) {
             activities.push(this.generateTimerStartEvent(design.timerConfig));
         } else {
-            activities.push(`        <bpmn2:startEvent id="${startEventId}" name="Start">
+            activities.push(`        <bpmn2:startEvent id="${startEventId}" name="Start 1">
             <bpmn2:extensionElements>
                 <ifl:property>
-                    <key>componentVersion</key>
-                    <value>${this.getComponentVersion('StartEvent')}</value>
+                    <key>cmdVariantUri</key>
+                    <value>ctype::FlowstepVariant/cname::MessageStartEvent</value>
                 </ifl:property>
             </bpmn2:extensionElements>
             <bpmn2:outgoing>SequenceFlow_1</bpmn2:outgoing>
@@ -1211,10 +1829,17 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
                     break;
             }
 
-            // Add sequence flow (skip for routers and multicasts which have their own flows)
-            if (element.type !== 'router' && element.type !== 'multicast' && element.type !== 'join') {
+            // Add sequence flow connecting previous element to current
+            // Routers, multicasts, joins need their incoming flow defined
+            // but they generate their own outgoing flows
+            if (element.type === 'router' || element.type === 'multicast') {
+                // These have their own outgoing sequence flows, but still need incoming
+                sequenceFlows.push(`        <bpmn2:sequenceFlow id="${incomingFlow}" sourceRef="${previousId}" targetRef="${currentId}"/>`);
+            } else if (element.type !== 'join') {
+                // Normal elements get a sequence flow from previous element
                 sequenceFlows.push(`        <bpmn2:sequenceFlow id="${incomingFlow}" sourceRef="${previousId}" targetRef="${currentId}"/>`);
             }
+            // Join elements typically converge multiple flows - they use the incoming flows defined by their sources
 
             previousId = currentId;
             sequenceCounter++;
@@ -1224,11 +1849,11 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
         sequenceFlows.push(`        <bpmn2:sequenceFlow id="SequenceFlow_${sequenceCounter}" sourceRef="${previousId}" targetRef="EndEvent_1"/>`);
 
         // End event with message event definition
-        activities.push(`        <bpmn2:endEvent id="EndEvent_1" name="End">
+        activities.push(`        <bpmn2:endEvent id="EndEvent_1" name="End 1">
             <bpmn2:extensionElements>
                 <ifl:property>
-                    <key>componentVersion</key>
-                    <value>${this.getComponentVersion('EndEvent')}</value>
+                    <key>cmdVariantUri</key>
+                    <value>ctype::FlowstepVariant/cname::MessageEndEvent</value>
                 </ifl:property>
             </bpmn2:extensionElements>
             <bpmn2:incoming>SequenceFlow_${sequenceCounter}</bpmn2:incoming>
@@ -1245,19 +1870,11 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
         // Combine all elements
         const allProcessContent = [...activities, ...sequenceFlows];
 
-        return `    <bpmn2:process id="${processId}" name="${this.escapeXml(design.metadata.name)}" isExecutable="true">
+        return `    <bpmn2:process id="${processId}" name="${this.escapeXml(design.metadata.name)}">
         <bpmn2:extensionElements>
             <ifl:property>
-                <key>transactionTimeout</key>
-                <value>30</value>
-            </ifl:property>
-            <ifl:property>
-                <key>componentVersion</key>
-                <value>1.1</value>
-            </ifl:property>
-            <ifl:property>
                 <key>cmdVariantUri</key>
-                <value>ctype::IFlowVariant/cname::${this.escapeXml(design.metadata.name)}/version::1.0.0</value>
+                <value>ctype::FlowElementVariant/cname::IntegrationProcess</value>
             </ifl:property>
         </bpmn2:extensionElements>
 ${allProcessContent.join('\n')}
@@ -1279,9 +1896,18 @@ ${allProcessContent.join('\n')}
                     <value>ContentModifier</value>
                 </ifl:property>
                 <ifl:property>
+                    <key>body.type</key>
+                    <value>static</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>body.value</key>
+                    <value></value>
+                </ifl:property>
+                <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('ContentModifier')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty('ContentModifier', this.getComponentVersion('ContentModifier'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1296,6 +1922,11 @@ ${allProcessContent.join('\n')}
             : script.type === 'javascript' ? 'JavaScriptScript'
                 : 'XSLTScript';
 
+        // Use scriptContent if available, otherwise fall back to scriptPath
+        const scriptValue = script.scriptContent
+            ? this.escapeXml(script.scriptContent)
+            : (script.scriptPath ? this.escapeXml(script.scriptPath) : '');
+
         return `        <bpmn2:callActivity id="${script.id}" name="${this.escapeXml(script.name)}">
             <bpmn2:extensionElements>
                 <ifl:property>
@@ -1308,12 +1939,13 @@ ${allProcessContent.join('\n')}
                 </ifl:property>
                 <ifl:property>
                     <key>script</key>
-                    <value>${this.escapeXml(script.scriptPath)}</value>
+                    <value>${scriptValue}</value>
                 </ifl:property>
                 <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Script')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(scriptType, this.getComponentVersion('Script'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1322,22 +1954,75 @@ ${allProcessContent.join('\n')}
 
     /**
      * Generate mapping activity (callActivity)
+     * Note: MessageMapping requires a separate .mmap resource file to be created
+     * For AI-generated flows, we include a placeholder that shows what mapping is needed
      */
     private generateMapping(mapping: MappingConfig, incoming: string, outgoing: string): string {
-        return `        <bpmn2:callActivity id="${mapping.id}" name="${this.escapeXml(mapping.name)}">
-            <bpmn2:extensionElements>
-                <ifl:property>
+        // For MessageMapping, we need to specify the mapping resource
+        // The resource file needs to be created separately
+        const isMessageMapping = mapping.type === 'MessageMapping';
+        const resourceName = isMessageMapping ? `${mapping.id}_mapping` : '';
+        
+        // Build property list for mappings
+        let mappingProperties = `                <ifl:property>
                     <key>activityType</key>
                     <value>Enricher</value>
                 </ifl:property>
                 <ifl:property>
                     <key>subActivityType</key>
-                    <value>${mapping.type === 'MessageMapping' ? 'MessageMapping' : 'ContentModifier'}</value>
+                    <value>${isMessageMapping ? 'MessageMapping' : 'ContentModifier'}</value>
                 </ifl:property>
                 <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('MessageMapping')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(isMessageMapping ? 'MessageMapping' : 'ContentModifier', this.getComponentVersion('MessageMapping'))}`;
+        
+        // For MessageMapping, add resource reference if we have mapping details
+        if (isMessageMapping) {
+            // Include mapping resource name - this helps SAP CPI know what resource to look for
+            // The actual .mmap file needs to be created separately
+            mappingProperties += `
+                <ifl:property>
+                    <key>mappingname</key>
+                    <value>${resourceName}</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>mappingpath</key>
+                    <value>mapping/${resourceName}.mmap</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>mappingType</key>
+                    <value>MessageMapping</value>
+                </ifl:property>`;
+                
+            // Add source/target type hints if available
+            if (mapping.sourceFields && mapping.sourceFields.length > 0) {
+                mappingProperties += `
+                <ifl:property>
+                    <key>sourceFields</key>
+                    <value>${this.escapeXml(mapping.sourceFields.join(','))}</value>
+                </ifl:property>`;
+            }
+            if (mapping.targetFields && mapping.targetFields.length > 0) {
+                mappingProperties += `
+                <ifl:property>
+                    <key>targetFields</key>
+                    <value>${this.escapeXml(mapping.targetFields.join(','))}</value>
+                </ifl:property>`;
+            }
+            if (mapping.transformations && mapping.transformations.length > 0) {
+                mappingProperties += `
+                <ifl:property>
+                    <key>transformationNotes</key>
+                    <value>${this.escapeXml(mapping.transformations.join('; '))}</value>
+                </ifl:property>`;
+            }
+        }
+        
+        return `        <bpmn2:callActivity id="${mapping.id}" name="${this.escapeXml(mapping.name)}">
+            <bpmn2:extensionElements>
+${mappingProperties}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1381,6 +2066,7 @@ ${allProcessContent.join('\n')}
                     <key>timezone</key>
                     <value>${this.escapeXml(config.timezone)}</value>
                 </ifl:property>` : ''}
+${this.generateCmdVariantProperty('Timer', this.getComponentVersion('Timer'))}
             </bpmn2:extensionElements>
             <bpmn2:outgoing>SequenceFlow_1</bpmn2:outgoing>
             <bpmn2:timerEventDefinition>
@@ -1414,6 +2100,7 @@ ${allProcessContent.join('\n')}
                     <key>throwExceptionOnNoMatch</key>
                     <value>true</value>
                 </ifl:property>` : ''}
+${this.generateCmdVariantProperty('Router', this.getComponentVersion('Router'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoingFlows}</bpmn2:outgoing>
@@ -1471,6 +2158,7 @@ ${allProcessContent.join('\n')}
                     <key>timeout</key>
                     <value>${multicast.timeout}</value>
                 </ifl:property>` : ''}
+${this.generateCmdVariantProperty('Multicast', this.getComponentVersion('Multicast'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoingFlows}</bpmn2:outgoing>
@@ -1521,6 +2209,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Splitter')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(splitterType, this.getComponentVersion('Splitter'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1579,6 +2268,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Aggregator')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty('Aggregator', this.getComponentVersion('Aggregator'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1602,6 +2292,7 @@ ${allProcessContent.join('\n')}
                     <key>gatewayType</key>
                     <value>Join</value>
                 </ifl:property>
+${this.generateCmdVariantProperty('Join', this.getComponentVersion('Join'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incomingFlows}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1634,6 +2325,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Filter')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty('Filter', this.getComponentVersion('Filter'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1665,6 +2357,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Converter')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(converterMapping.subType, this.getComponentVersion('Converter'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1752,6 +2445,25 @@ ${allProcessContent.join('\n')}
                     <value>${this.escapeXml(p.value)}</value>
                 </ifl:property>` : ''}`).join('') || '';
 
+        // Include body properties - use provided bodyAction or default to empty static
+        const bodyProps = cm.bodyAction ? `
+                <ifl:property>
+                    <key>body.type</key>
+                    <value>${cm.bodyAction.type}</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>body.value</key>
+                    <value>${this.escapeXml(cm.bodyAction.value || '')}</value>
+                </ifl:property>` : `
+                <ifl:property>
+                    <key>body.type</key>
+                    <value>static</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>body.value</key>
+                    <value></value>
+                </ifl:property>`;
+
         return `        <bpmn2:callActivity id="${cm.id}" name="${this.escapeXml(cm.name)}">
             <bpmn2:extensionElements>
                 <ifl:property>
@@ -1761,19 +2473,12 @@ ${allProcessContent.join('\n')}
                 <ifl:property>
                     <key>subActivityType</key>
                     <value>ContentModifier</value>
-                </ifl:property>${headerProps}${propertyProps}
-                ${cm.bodyAction ? `<ifl:property>
-                    <key>body.type</key>
-                    <value>${cm.bodyAction.type}</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>body.value</key>
-                    <value>${this.escapeXml(cm.bodyAction.value || '')}</value>
-                </ifl:property>` : ''}
+                </ifl:property>${headerProps}${propertyProps}${bodyProps}
                 <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('ContentModifier')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty('ContentModifier', this.getComponentVersion('ContentModifier'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1810,6 +2515,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('XMLValidator')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty('XMLValidator', this.getComponentVersion('XMLValidator'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1858,6 +2564,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Encryptor')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(encType, this.getComponentVersion('Encryptor'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1894,6 +2601,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Decryptor')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(decType, this.getComponentVersion('Decryptor'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1938,6 +2646,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Signer')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(sigType, this.getComponentVersion('Signer'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1974,6 +2683,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Verifier')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(verType, this.getComponentVersion('Verifier'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -2041,6 +2751,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('DataStore')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(operationMapping[ds.operation], this.getComponentVersion('DataStore'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -2081,6 +2792,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Variable')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(variable.operation === 'Write' ? 'WriteVariables' : 'ReadVariables', this.getComponentVersion('Variable'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -2117,6 +2829,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('RequestReply')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(rr.externalCallType || 'RequestReply', this.getComponentVersion('RequestReply'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -2153,6 +2866,7 @@ ${allProcessContent.join('\n')}
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('ContentEnricher')}</value>
                 </ifl:property>
+${this.generateCmdVariantProperty(ce.type === 'PollEnrich' ? 'PollEnrich' : 'ContentEnricher', this.getComponentVersion('ContentEnricher'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -2221,6 +2935,7 @@ ${allProcessContent.join('\n')}
                     <key>sendToDeadLetter</key>
                     <value>true</value>
                 </ifl:property>` : ''}
+${this.generateCmdVariantProperty('SubProcess', this.getComponentVersion('SubProcess')).replace(/^                /gm, '                ')}
             </bpmn2:extensionElements>
 ${activities.join('\n')}
 ${sequenceFlows.join('\n')}
@@ -2332,7 +3047,13 @@ ${sequenceFlows.join('\n')}
 
         // Determine start event ID based on trigger type
         // MUST match the ID used in generateTimerStartEvent / generateProcess
-        const startEventId = design.triggerType === 'timer' && design.timerConfig?.id
+        // IMPORTANT: Mail/IMAP/POP3 sender adapters have built-in scheduling and should NOT
+        // create timer start events — they use a normal MessageStartEvent
+        const hasMailSenderAdapter = design.adapters?.some(a => 
+            a.direction === 'Sender' && ['Mail', 'IMAP', 'POP3'].includes(a.type)
+        );
+        const isTimerTriggeredDiag = !hasMailSenderAdapter && !!(design.triggerType === 'timer' || design.timerConfig);
+        const startEventId = isTimerTriggeredDiag && design.timerConfig?.id
             ? design.timerConfig.id
             : 'StartEvent_1';
 
@@ -2455,15 +3176,15 @@ ${sequenceFlows.join('\n')}
         const senderFlowId = senderAdapters.length > 0 ? senderAdapters[0].id : 'MessageFlow_1';
         const receiverFlowId = receiverAdapters.length > 0 ? receiverAdapters[0].id : 'MessageFlow_2';
 
-        // Sender message flow: from bottom of sender participant to top of process
-        edges.push(`            <bpmndi:BPMNEdge id="${senderFlowId}_gui" bpmnElement="${senderFlowId}">
+        // Sender message flow: from sender participant to start event
+        edges.push(`            <bpmndi:BPMNEdge id="${senderFlowId}_gui" bpmnElement="${senderFlowId}" sourceElement="Participant_1_gui" targetElement="StartEvent_1_gui">
                 <di:waypoint x="100" y="110"/>
                 <di:waypoint x="100" y="150"/>
             </bpmndi:BPMNEdge>`);
         // Receiver message flow: from bottom of process to top of receiver participant
         // Use dynamic positions based on processHeight and receiverY
         const processBottomY = 150 + processHeight;
-        edges.push(`            <bpmndi:BPMNEdge id="${receiverFlowId}_gui" bpmnElement="${receiverFlowId}">
+        edges.push(`            <bpmndi:BPMNEdge id="${receiverFlowId}_gui" bpmnElement="${receiverFlowId}" sourceElement="Participant_Process_gui" targetElement="Participant_2_gui">
                 <di:waypoint x="100" y="${processBottomY}"/>
                 <di:waypoint x="100" y="${receiverY}"/>
             </bpmndi:BPMNEdge>`);
@@ -2505,10 +3226,34 @@ ${sequenceFlows.join('\n')}
             });
         }
 
+        // Post-process all shapes and edges for SAP CPI compatibility:
+        // 1. Convert integer coordinates to float format (e.g., "50" -> "50.0")
+        // 2. Reorder dc:Bounds attributes to match SAP CPI expected format (height, width, x, y)
+        // 3. Add xsi:type="dc:Point" to all di:waypoint elements
+        // SAP CPI's graphical editor requires these exact formats to render the integration flow.
+        const postProcessDI = (line: string): string => {
+            // Convert dc:Bounds: x,y,width,height -> height,width,x,y with float values
+            line = line.replace(
+                /<dc:Bounds\s+x="([^"]*)"\s+y="([^"]*)"\s+width="([^"]*)"\s+height="([^"]*)"/g,
+                (_m, x, y, w, h) =>
+                    `<dc:Bounds height="${parseFloat(h).toFixed(1)}" width="${parseFloat(w).toFixed(1)}" x="${parseFloat(x).toFixed(1)}" y="${parseFloat(y).toFixed(1)}"`
+            );
+            // Add xsi:type="dc:Point" to waypoints and convert coords to float
+            line = line.replace(
+                /<di:waypoint\s+x="([^"]*)"\s+y="([^"]*)"/g,
+                (_m, x, y) =>
+                    `<di:waypoint x="${parseFloat(x).toFixed(1)}" xsi:type="dc:Point" y="${parseFloat(y).toFixed(1)}"`
+            );
+            return line;
+        };
+
+        const processedShapes = shapes.map(postProcessDI);
+        const processedEdges = edges.map(postProcessDI);
+
         return `    <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="Default Collaboration Diagram">
         <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="${collaborationId}">
-${shapes.join('\n')}
-${edges.join('\n')}
+${processedShapes.join('\n')}
+${processedEdges.join('\n')}
         </bpmndi:BPMNPlane>
     </bpmndi:BPMNDiagram>`;
     }

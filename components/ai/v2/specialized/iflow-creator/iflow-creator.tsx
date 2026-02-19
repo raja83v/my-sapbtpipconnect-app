@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { PackageSelection, IFlowDescription, IFlowDesign, UserModifications, CreationResult, WizardState } from "./types";
 import { PackageSelectionStep } from "./steps/package-selection";
 import { DescriptionInputStep } from "./steps/description-input";
@@ -11,7 +12,9 @@ import { AIDesignReviewStep } from "./steps/ai-design-review";
 import { ApprovalReview } from "./steps/approval-review";
 import { CreationProgress } from "./steps/creation-progress";
 import { createIFlowInSAPCPI } from "@/app/actions/create-iflow";
-import { Check } from "lucide-react";
+import { PipelineView } from "@/components/ai/pipeline/pipeline-view";
+import { startIFlowPipeline } from "@/app/actions/iflow-orchestrator";
+import { Check, Bot, Zap } from "lucide-react";
 
 interface IFlowCreatorProps {
     tenantId: string;
@@ -29,6 +32,12 @@ export function IFlowCreator({ tenantId }: IFlowCreatorProps) {
     const [wizardState, setWizardState] = useState<WizardState>({
         currentStep: 1,
     });
+
+    // Mode toggle: "classic" = existing single-pass, "pipeline" = multi-agent orchestration
+    const [mode, setMode] = useState<"classic" | "pipeline">("pipeline");
+    const [pipelineId, setPipelineId] = useState<string | null>(null);
+    const [pipelineStarting, setPipelineStarting] = useState(false);
+    const [pipelineError, setPipelineError] = useState<string | null>(null);
 
     const updatePackageSelection = (selection: PackageSelection) => {
         setWizardState(prev => ({
@@ -109,6 +118,33 @@ export function IFlowCreator({ tenantId }: IFlowCreatorProps) {
         setWizardState({
             currentStep: 1,
         });
+        setPipelineId(null);
+        setPipelineError(null);
+    };
+
+    // Pipeline mode: start multi-agent orchestration after step 2 (description)
+    const handleStartPipeline = async () => {
+        if (!wizardState.packageSelection || !wizardState.description) return;
+        setPipelineStarting(true);
+        setPipelineError(null);
+        try {
+            const result = await startIFlowPipeline(
+                tenantId,
+                wizardState.packageSelection,
+                wizardState.description
+            );
+            if (result.success && result.data) {
+                setPipelineId(result.data.pipelineId);
+            } else if (!result.success) {
+                console.error("Pipeline start failed:", result.error);
+                setPipelineError(result.error ?? "Unknown error starting pipeline");
+            }
+        } catch (error) {
+            console.error("Failed to start pipeline:", error);
+            setPipelineError(error instanceof Error ? error.message : "Unexpected error starting pipeline");
+        } finally {
+            setPipelineStarting(false);
+        }
     };
 
     const progress = ((wizardState.currentStep - 1) / (STEPS.length - 1)) * 100;
@@ -116,11 +152,36 @@ export function IFlowCreator({ tenantId }: IFlowCreatorProps) {
     return (
         <div className="container max-w-6xl mx-auto py-8 space-y-8">
             {/* Header */}
-            <div className="space-y-2">
-                <h1 className="text-3xl font-bold tracking-tight">iFlow Creator</h1>
-                <p className="text-muted-foreground">
-                    Create SAP CPI integration flows using AI-powered design
-                </p>
+            <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight">iFlow Creator</h1>
+                    <p className="text-muted-foreground">
+                        Create SAP CPI integration flows using AI-powered design
+                    </p>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border p-1">
+                    <Button
+                        variant={mode === "classic" ? "default" : "ghost"}
+                        size="sm"
+                        onClick={() => { setMode("classic"); setPipelineId(null); }}
+                        className="gap-1.5"
+                    >
+                        <Zap className="h-4 w-4" />
+                        Classic
+                    </Button>
+                    <Button
+                        variant={mode === "pipeline" ? "default" : "ghost"}
+                        size="sm"
+                        onClick={() => setMode("pipeline")}
+                        className="gap-1.5"
+                    >
+                        <Bot className="h-4 w-4" />
+                        Multi-Agent
+                        <Badge variant="secondary" className="ml-1 text-[10px] px-1.5 py-0">
+                            New
+                        </Badge>
+                    </Button>
+                </div>
             </div>
 
             {/* Progress Steps */}
@@ -178,6 +239,7 @@ export function IFlowCreator({ tenantId }: IFlowCreatorProps) {
 
             {/* Step Content */}
             <Card className="p-8">
+                {/* Steps 1-2 are shared between classic and pipeline modes */}
                 {wizardState.currentStep === 1 && (
                     <PackageSelectionStep
                         tenantId={tenantId}
@@ -191,12 +253,52 @@ export function IFlowCreator({ tenantId }: IFlowCreatorProps) {
                     <DescriptionInputStep
                         value={wizardState.description}
                         onChange={updateDescription}
-                        onNext={nextStep}
+                        onNext={() => {
+                            if (mode === "pipeline") {
+                                handleStartPipeline();
+                                nextStep();
+                            } else {
+                                nextStep();
+                            }
+                        }}
                         onBack={previousStep}
                     />
                 )}
 
-                {wizardState.currentStep === 3 && wizardState.description && (
+                {/* Pipeline mode: Show multi-agent pipeline view */}
+                {mode === "pipeline" && wizardState.currentStep >= 3 && (
+                    pipelineId ? (
+                        <PipelineView
+                            pipelineId={pipelineId}
+                            onComplete={(result) => {
+                                if (result.success) {
+                                    goToStep(5);
+                                    updateResult({ success: true, iflowId: '', packageId: '' });
+                                }
+                            }}
+                            onCancel={handleReset}
+                        />
+                    ) : pipelineStarting ? (
+                        <div className="flex flex-col items-center justify-center py-12 gap-3">
+                            <Bot className="h-8 w-8 animate-pulse text-primary" />
+                            <p className="text-muted-foreground">Starting multi-agent pipeline…</p>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center py-12 gap-3">
+                            <p className="text-muted-foreground">Pipeline failed to start. Please go back and try again.</p>
+                            {pipelineError && (
+                                <p className="text-sm text-destructive max-w-md text-center">{pipelineError}</p>
+                            )}
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={previousStep}>Go Back</Button>
+                                <Button variant="default" onClick={handleStartPipeline}>Retry</Button>
+                            </div>
+                        </div>
+                    )
+                )}
+
+                {/* Classic mode: Existing steps 3-5 */}
+                {mode === "classic" && wizardState.currentStep === 3 && wizardState.description && (
                     <AIDesignReviewStep
                         description={wizardState.description}
                         value={wizardState.design}
@@ -206,7 +308,7 @@ export function IFlowCreator({ tenantId }: IFlowCreatorProps) {
                     />
                 )}
 
-                {wizardState.currentStep === 4 && (
+                {mode === "classic" && wizardState.currentStep === 4 && (
                     <ApprovalReview
                         state={wizardState}
                         onBack={previousStep}

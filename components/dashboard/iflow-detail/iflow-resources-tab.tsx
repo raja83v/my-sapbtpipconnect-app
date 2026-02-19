@@ -1,8 +1,15 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -24,8 +31,11 @@ import {
   IconBraces,
   IconSettings,
   IconFolder,
+  IconEye,
 } from "@tabler/icons-react";
 import { IFlowDetailData } from "@/app/actions/iflows";
+import { ResourceViewer } from "./resource-viewer";
+import type { IFlowResource } from "@/lib/sap-cpi/client";
 
 interface IFlowResourcesTabProps {
   iflow: IFlowDetailData;
@@ -74,6 +84,20 @@ function formatFileSize(bytes: number): string {
 
 export function IFlowResourcesTab({ iflow, onRefresh }: IFlowResourcesTabProps) {
   const resources = iflow.configuration?.rawResources || [];
+  const [selectedResource, setSelectedResource] = useState<IFlowResource | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+
+  const handleResourceClick = useCallback((resource: IFlowResource) => {
+    // Binary files can't be viewed
+    const binaryTypes = ['jar'];
+    if (binaryTypes.includes(resource.type)) return;
+    setSelectedResource(resource);
+    setViewerOpen(true);
+  }, []);
+
+  const isViewable = useCallback((resource: IFlowResource) => {
+    return resource.type !== 'jar';
+  }, []);
 
   if (resources.length === 0) {
     return (
@@ -175,29 +199,62 @@ export function IFlowResourcesTab({ iflow, onRefresh }: IFlowResourcesTabProps) 
                       <TableHead>Name</TableHead>
                       <TableHead>Path</TableHead>
                       <TableHead className="text-right">Size</TableHead>
+                      <TableHead className="w-[60px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {typeResources.map((resource, idx) => (
-                      <TableRow key={idx}>
-                        <TableCell className="font-medium">
-                          <div className="flex items-center gap-2">
-                            {resourceTypeIcons[resource.type] || resourceTypeIcons.other}
-                            <span className="truncate max-w-[200px]" title={resource.name}>
-                              {resource.name}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <code className="text-xs bg-muted px-2 py-1 rounded truncate block max-w-[300px]" title={resource.path}>
-                            {resource.path}
-                          </code>
-                        </TableCell>
-                        <TableCell className="text-right text-muted-foreground">
-                          {formatFileSize(resource.size)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {typeResources.map((resource, idx) => {
+                      const viewable = isViewable(resource);
+                      return (
+                        <TableRow
+                          key={idx}
+                          className={viewable ? "cursor-pointer hover:bg-accent/50 transition-colors" : ""}
+                          onClick={() => viewable && handleResourceClick(resource)}
+                        >
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              {resourceTypeIcons[resource.type] || resourceTypeIcons.other}
+                              <span className="truncate max-w-[200px]" title={resource.name}>
+                                {resource.name}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <code className="text-xs bg-muted px-2 py-1 rounded truncate block max-w-[300px]" title={resource.path}>
+                              {resource.path}
+                            </code>
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {formatFileSize(resource.size)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {viewable && (
+                              <TooltipProvider delayDuration={300}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleResourceClick(resource);
+                                      }}
+                                    >
+                                      <IconEye className="h-4 w-4" />
+                                      <span className="sr-only">View {resource.name}</span>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left">
+                                    <p>View resource</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -205,6 +262,14 @@ export function IFlowResourcesTab({ iflow, onRefresh }: IFlowResourcesTabProps) 
           </Card>
         );
       })}
+
+      {/* Resource Viewer Sheet */}
+      <ResourceViewer
+        resource={selectedResource}
+        iflowId={iflow.id}
+        open={viewerOpen}
+        onOpenChange={setViewerOpen}
+      />
     </div>
   );
 }

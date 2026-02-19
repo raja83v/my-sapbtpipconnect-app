@@ -16,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
+    <ClerkProvider telemetry={false}>
       <ConvexClientProvider>
         <html lang="en" suppressHydrationWarning={true}>
           <body

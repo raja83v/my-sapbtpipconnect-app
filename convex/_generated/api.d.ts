@@ -15,6 +15,8 @@ import type * as billingMutations from "../billingMutations.js";
 import type * as cronJobs from "../cronJobs.js";
 import type * as crons from "../crons.js";
 import type * as iflowMutations from "../iflowMutations.js";
+import type * as iflowPipeline from "../iflowPipeline.js";
+import type * as iflowPipelineMutations from "../iflowPipelineMutations.js";
 import type * as iflows from "../iflows.js";
 import type * as lib_encryption from "../lib/encryption.js";
 import type * as sapSync from "../sapSync.js";
@@ -37,6 +39,8 @@ declare const fullApi: ApiFromModules<{
   cronJobs: typeof cronJobs;
   crons: typeof crons;
   iflowMutations: typeof iflowMutations;
+  iflowPipeline: typeof iflowPipeline;
+  iflowPipelineMutations: typeof iflowPipelineMutations;
   iflows: typeof iflows;
   "lib/encryption": typeof lib_encryption;
   sapSync: typeof sapSync;

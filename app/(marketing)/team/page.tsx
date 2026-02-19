@@ -170,7 +170,7 @@ export default function TeamPage() {
         })}
 
         {/* Join Us CTA */}
-        <div className="mt-16 rounded-xl border border-gray-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-12 text-center">
+        <div className="mt-16 rounded-xl border border-gray-200 bg-linear-to-br from-blue-50 to-indigo-50 p-12 text-center">
           <h2 className="font-display mb-4 text-3xl font-bold text-gray-900">
             Want to Join Us?
           </h2>
