@@ -1,9 +1,8 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
@@ -14,11 +13,7 @@ async function checkAdmin(): Promise<ActionResult<boolean>> {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
-    const user = await convex.query(api.users.getById, { 
-      userId: currentUser.id as Id<"users"> 
-    });
-
-    if (user?.role !== "admin") {
+    if (currentUser.role !== "admin") {
       return {
         success: false,
         error: "Unauthorized - Admin access required",
@@ -67,9 +62,43 @@ export async function getDashboardStats(): Promise<
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const stats = await convex.query(api.users.getAdminStats, {});
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
-    return { success: true, data: stats };
+    const [total, newUsers, activeUsers, previousPeriodNew] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({
+        where: { createdAt: { gte: thirtyDaysAgo } },
+      }),
+      prisma.user.count({
+        where: { lastLoginAt: { gte: thirtyDaysAgo } },
+      }),
+      prisma.user.count({
+        where: {
+          createdAt: {
+            gte: sixtyDaysAgo,
+            lt: thirtyDaysAgo,
+          },
+        },
+      }),
+    ]);
+
+    const trend = previousPeriodNew > 0
+      ? Math.round(((newUsers - previousPeriodNew) / previousPeriodNew) * 100)
+      : newUsers > 0 ? 100 : 0;
+
+    return {
+      success: true,
+      data: {
+        users: {
+          total,
+          new: newUsers,
+          active: activeUsers,
+          trend,
+        },
+      },
+    };
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
     return { success: false, error: "Failed to fetch dashboard statistics" };
@@ -82,19 +111,22 @@ export async function getRecentUsers(): Promise<ActionResult<RecentUser[]>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const users = await convex.query(api.users.listRecent, { limit: 5 });
+    const users = await prisma.user.findMany({
+      take: 5,
+      orderBy: { createdAt: "desc" },
+    });
 
-    return { 
-      success: true, 
-      data: users.map(u => ({
-        id: u._id,
+    return {
+      success: true,
+      data: users.map((u) => ({
+        id: u.id,
         email: u.email,
         name: u.name || null,
         image: u.image || null,
         role: u.role,
         status: u.status,
-        createdAt: new Date(u._creationTime),
-      }))
+        createdAt: u.createdAt,
+      })),
     };
   } catch (error) {
     console.error("Error fetching recent users:", error);
@@ -111,24 +143,30 @@ export async function getRecentActivity(): Promise<
 
   try {
     // Get recent users
-    const recentUsers = await convex.query(api.users.listRecent, { limit: 3 });
+    const recentUsers = await prisma.user.findMany({
+      take: 3,
+      orderBy: { createdAt: "desc" },
+    });
 
     // Get recent tenants
-    const recentTenants = await convex.query(api.tenants.listRecent, { limit: 3 });
+    const recentTenants = await prisma.cpiTenant.findMany({
+      take: 3,
+      orderBy: { createdAt: "desc" },
+    });
 
     // Combine and format activities
     const activities: ActivityItem[] = [
       ...recentUsers.map((user) => ({
-        id: `user-${user._id}`,
+        id: `user-${user.id}`,
         type: "user_registered" as const,
         description: `User "${user.name || user.email}" registered`,
-        timestamp: new Date(user._creationTime),
+        timestamp: user.createdAt,
       })),
       ...recentTenants.map((tenant) => ({
-        id: `tenant-${tenant._id}`,
+        id: `tenant-${tenant.id}`,
         type: "tenant_created" as const,
         description: `Tenant "${tenant.name}" created`,
-        timestamp: new Date(tenant._creationTime),
+        timestamp: tenant.createdAt,
       })),
     ];
 

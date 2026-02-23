@@ -3,7 +3,7 @@ import { syncTenantInternal } from "@/app/actions/tenant";
 
 /**
  * API route for cron job to sync a specific tenant
- * This is called by the Convex cron job
+ * This is called by the cron scheduler
  */
 export async function POST(request: NextRequest) {
     try {

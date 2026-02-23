@@ -12,13 +12,18 @@ import {
   Search, 
   Shield, 
   Zap,
-  CheckCircle2,
   TrendingUp,
   Users,
-  Building2
+  Building2,
+  Github,
+  Heart,
+  Server,
+  Lock,
+  Code2,
 } from "lucide-react";
 
 import { Container } from "@/components/marketing/container";
+import { siteConfig } from "@/lib/config";
 
 export default function Home() {
   return (
@@ -77,7 +82,7 @@ export default function Home() {
                   size="lg"
                   className="border-transparent px-6 text-sm shadow-xl shadow-indigo-950/30"
                 >
-                  <Link href="/sign-up">Start Free Trial</Link>
+                  <Link href="/sign-up">Get Started Free</Link>
                 </Button>
                 <Button
                   asChild
@@ -85,11 +90,14 @@ export default function Home() {
                   variant="outline"
                   className="px-6 text-sm"
                 >
-                  <Link href="#features">View Features</Link>
+                  <Link href={siteConfig.links.github} target="_blank" rel="noopener noreferrer">
+                    <Github className="mr-2 h-4 w-4" />
+                    Star on GitHub
+                  </Link>
                 </Button>
               </div>
               <span className="text-muted-foreground mt-4 block text-center text-sm">
-                14-day free trial • No credit card required
+                Free forever &middot; Self-hosted &middot; Open source
               </span>
             </div>
           </div>
@@ -227,163 +235,60 @@ export default function Home() {
         </Container>
       </section>
 
-      {/* Pricing Section */}
-      <section id="pricing" className="py-12 sm:py-16 bg-muted/50">
+      {/* Why Open Source Section */}
+      <section id="open-source" className="py-12 sm:py-16 bg-muted/50">
         <Container>
           <div className="mx-auto max-w-2xl text-center mb-12">
             <Badge className="mb-4" variant="outline">
-              Pricing Plans
+              Open Source
             </Badge>
             <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-              Choose the right plan for your team
+              Why Open Source?
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
-              Flexible pricing that scales with your SAP CPI monitoring needs
+              CPI Connect is built in the open because great tools should be accessible to everyone
             </p>
           </div>
 
-          <div className="grid gap-8 md:grid-cols-3 max-w-6xl mx-auto">
-            {/* Starter Plan */}
-            <Card className="flex flex-col">
+          <div className="grid gap-8 md:grid-cols-2 max-w-4xl mx-auto">
+            <Card>
               <CardHeader>
-                <CardTitle className="text-2xl">Starter</CardTitle>
-                <CardDescription>Perfect for small teams getting started</CardDescription>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">$299</span>
-                  <span className="text-muted-foreground">/month</span>
-                </div>
+                <Heart className="h-10 w-10 text-indigo-500 mb-2" />
+                <CardTitle>Free Forever</CardTitle>
+                <CardDescription>
+                  No pricing tiers, no feature gates, no surprise bills. Every feature is available to every user, always.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex-1">
-                <ul className="space-y-3">
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Up to 2 CPI tenants</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>50 iFlows monitoring</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>30-day data retention</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Email notifications</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Basic analytics</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>5 team members</span>
-                  </li>
-                </ul>
-                <Button className="w-full mt-8" variant="outline" asChild>
-                  <Link href="/sign-up">Start Free Trial</Link>
-                </Button>
-              </CardContent>
             </Card>
 
-            {/* Professional Plan */}
-            <Card className="flex flex-col border-indigo-500 border-2 relative">
-              <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">
-                Most Popular
-              </Badge>
+            <Card>
               <CardHeader>
-                <CardTitle className="text-2xl">Professional</CardTitle>
-                <CardDescription>For growing teams with multiple integrations</CardDescription>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">$899</span>
-                  <span className="text-muted-foreground">/month</span>
-                </div>
+                <Server className="h-10 w-10 text-indigo-500 mb-2" />
+                <CardTitle>Self-Hosted</CardTitle>
+                <CardDescription>
+                  Run CPI Connect on your own infrastructure. Docker Compose, Kubernetes, or bare metal — you choose.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex-1">
-                <ul className="space-y-3">
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Up to 10 CPI tenants</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Unlimited iFlows</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>90-day data retention</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Email, Slack & Teams notifications</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Advanced analytics & reporting</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>20 team members</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Priority support</span>
-                  </li>
-                </ul>
-                <Button className="w-full mt-8" asChild>
-                  <Link href="/sign-up">Start Free Trial</Link>
-                </Button>
-              </CardContent>
             </Card>
 
-            {/* Enterprise Plan */}
-            <Card className="flex flex-col">
+            <Card>
               <CardHeader>
-                <CardTitle className="text-2xl">Enterprise</CardTitle>
-                <CardDescription>For large organizations with complex needs</CardDescription>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">Custom</span>
-                </div>
+                <Lock className="h-10 w-10 text-indigo-500 mb-2" />
+                <CardTitle>Data Ownership</CardTitle>
+                <CardDescription>
+                  Your SAP credentials and integration data never leave your network. Full control, zero vendor lock-in.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex-1">
-                <ul className="space-y-3">
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Unlimited CPI tenants</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Unlimited iFlows</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Custom data retention</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>All notification channels</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Custom integrations & APIs</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Unlimited team members</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>Dedicated support & SLA</span>
-                  </li>
-                  <li className="flex items-start">
-                    <CheckCircle2 className="h-5 w-5 text-indigo-500 mr-2 mt-0.5" />
-                    <span>On-premise deployment option</span>
-                  </li>
-                </ul>
-                <Button className="w-full mt-8" variant="outline" asChild>
-                  <Link href="/sign-up">Contact Sales</Link>
-                </Button>
-              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <Code2 className="h-10 w-10 text-indigo-500 mb-2" />
+                <CardTitle>Community-Driven</CardTitle>
+                <CardDescription>
+                  Built by SAP integration professionals. Contribute features, report bugs, or fork and customize to your needs.
+                </CardDescription>
+              </CardHeader>
             </Card>
           </div>
         </Container>
@@ -394,7 +299,7 @@ export default function Home() {
         <Container>
           <div className="mx-auto max-w-2xl text-center mb-12">
             <Badge className="mb-4" variant="outline">
-              Client Success Stories
+              Community Stories
             </Badge>
             <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
               Trusted by SAP integration teams worldwide
@@ -550,7 +455,7 @@ export default function Home() {
               </span>
             </h2>
             <p className="mt-6 text-lg text-muted-foreground max-w-2xl mx-auto">
-              Join hundreds of teams using CPI Connect to monitor, analyze, and optimize their SAP integrations.
+              Join the growing community of teams using CPI Connect to monitor, analyze, and optimize their SAP integrations.
             </p>
             <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center items-center">
               <Button
@@ -558,7 +463,7 @@ export default function Home() {
                 size="lg"
                 className="px-8 shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/30 transition-shadow"
               >
-                <Link href="/sign-up">Start Free Trial</Link>
+                <Link href="/sign-up">Get Started Free</Link>
               </Button>
               <Button
                 asChild
@@ -566,11 +471,14 @@ export default function Home() {
                 variant="outline"
                 className="px-8"
               >
-                <Link href="#pricing">View Pricing</Link>
+                <Link href={siteConfig.links.github} target="_blank" rel="noopener noreferrer">
+                  <Github className="mr-2 h-4 w-4" />
+                  View on GitHub
+                </Link>
               </Button>
             </div>
             <p className="mt-6 text-sm text-muted-foreground">
-              14-day free trial • No credit card required • Cancel anytime
+              Free forever &middot; Self-hosted &middot; Open source
             </p>
           </div>
         </Container>

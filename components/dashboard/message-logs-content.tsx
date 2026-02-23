@@ -184,7 +184,7 @@ export function MessageLogsContent() {
     const loadFilterData = useCallback(async () => {
         setIsLoadingFilters(true);
         try {
-            // Fetch all iFlows from Convex - uses user's default tenant
+            // Fetch all iFlows - uses user's default tenant
             const iflowsResult = await getIFlowsForFilter();
             if (iflowsResult.success && iflowsResult.data) {
                 setIflows(iflowsResult.data);

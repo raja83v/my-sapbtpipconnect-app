@@ -1,34 +1,23 @@
-import { auth } from "@clerk/nextjs/server";
-import { convex, api } from "@/lib/convex";
+import { getCurrentUser } from "@/lib/auth-helpers";
 import { NextResponse } from "next/server";
 
 export async function GET() {
   try {
-    const { userId } = await auth();
+    const currentUser = await getCurrentUser();
 
-    if (!userId) {
+    if (!currentUser) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    // Find user by Clerk ID
-    const user = await convex.query(api.users.getByClerkId, { clerkId: userId });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "User not found" },
-        { status: 404 }
-      );
-    }
-
     return NextResponse.json({
-      onboardingCompleted: user.onboardingCompleted,
+      onboardingCompleted: currentUser.onboardingCompleted,
       user: {
-        id: user._id,
-        email: user.email,
-        name: user.name,
+        id: currentUser.id,
+        email: currentUser.email,
+        name: currentUser.name,
       },
     });
   } catch (error) {

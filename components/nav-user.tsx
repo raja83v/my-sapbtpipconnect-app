@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  IconCreditCard,
   IconDotsVertical,
   IconLogout,
   IconMoon,
@@ -27,7 +26,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { useClerk } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/auth-provider";
 import { useRouter } from "next/navigation";
 
 export function NavUser({
@@ -40,7 +39,7 @@ export function NavUser({
   };
 }) {
   const { isMobile } = useSidebar();
-  const { signOut } = useClerk();
+  const { signOut } = useAuth();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
 
@@ -113,12 +112,6 @@ export function NavUser({
               <Link href="/dashboard/settings" className="cursor-pointer">
                 <IconSettings className="mr-2 h-4 w-4" />
                 Settings
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/dashboard/settings/billing" className="cursor-pointer">
-                <IconCreditCard className="mr-2 h-4 w-4" />
-                Billing
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem

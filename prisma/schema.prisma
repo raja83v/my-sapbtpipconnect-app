@@ -1,0 +1,485 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// User & Auth Models
+// ============================================================================
+
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  name          String?
+  passwordHash  String?    // Optional - Supabase handles auth
+  supabaseId    String?    @unique
+  role          UserRole   @default(user)
+  status        UserStatus @default(ACTIVE)
+  emailVerified Boolean    @default(false)
+  image         String?
+  phone         String?
+  lastLoginAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @default(now()) @updatedAt
+
+  // Onboarding fields
+  onboardingCompleted Boolean @default(false)
+  onboardingData      Json?
+
+  // Admin plugin fields
+  banned     Boolean?
+  banReason  String?
+  banExpires DateTime?
+
+  // Relations
+  sessions        Session[]
+  accounts        Account[]
+  tenants         TenantMember[]
+  invitationsSent TenantInvitation[]
+  agentExecutions AIAgentExecution[]
+  pipelines       IFlowPipeline[]
+
+  // Default tenant
+  defaultTenantId String?
+  defaultTenant   CpiTenant? @relation("UserDefaultTenant", fields: [defaultTenantId], references: [id], onDelete: SetNull)
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Active tenant context
+  activeTenantId String?
+  activeTenant   CpiTenant? @relation(fields: [activeTenantId], references: [id], onDelete: SetNull)
+
+  // Admin impersonation
+  impersonatedBy String?
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ============================================================================
+// SAP CPI Tenant Models
+// ============================================================================
+
+model CpiTenant {
+  id          String @id @default(cuid())
+  name        String
+  slug        String @unique
+  description String?
+  image       String?
+
+  // SAP CPI Connection Details
+  tenantUrl         String
+  authType          AuthType @default(OAUTH)
+  authenticationUrl String?
+  clientId          String?
+  clientSecret      String?  // Encrypted before storage
+  tokenUrl          String?  // Deprecated - use authenticationUrl
+  username          String?
+  password          String?  // Encrypted before storage
+
+  // Tenant Status
+  status           TenantStatus @default(ACTIVE)
+  lastSyncAt       DateTime?
+  connectionTestAt DateTime?
+  isConnected      Boolean      @default(false)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  members         TenantMember[]
+  invitations     TenantInvitation[]
+  sessions        Session[]
+  defaultForUsers User[]  @relation("UserDefaultTenant")
+  iFlows          IFlow[]
+  pipelines       IFlowPipeline[]
+
+  @@index([status])
+  @@map("cpi_tenant")
+}
+
+// ============================================================================
+// iFlow Models
+// ============================================================================
+
+model IFlow {
+  id             String      @id @default(cuid())
+  iFlowId        String      // SAP CPI iFlow ID
+  name           String
+  packageName    String?
+  version        String?
+  status         IFlowStatus @default(STOPPED)
+  lastDeployedAt DateTime?
+  lastExecutedAt DateTime?
+
+  // Relations
+  tenantId   String
+  tenant     CpiTenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executions IFlowExecution[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, iFlowId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([updatedAt])
+  @@index([tenantId, status])
+  @@index([tenantId, updatedAt])
+  @@map("iflow")
+}
+
+model IFlowExecution {
+  id     String          @id @default(cuid())
+  messageId String       @unique // SAP CPI Message ID
+  status    ExecutionStatus
+  startTime DateTime
+  endTime   DateTime?
+  duration  Int?         // in milliseconds
+
+  // Payload data
+  requestPayload  String? @db.Text
+  responsePayload String? @db.Text
+  errorMessage    String? @db.Text
+  errorCategory   ErrorCategory?
+
+  // Metadata
+  sender        String?
+  receiver      String?
+  interfaceType String?
+
+  // Relations
+  iFlowId String
+  iFlow   IFlow @relation(fields: [iFlowId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([iFlowId])
+  @@index([status])
+  @@index([startTime])
+  @@map("iflow_execution")
+}
+
+// ============================================================================
+// Team & Membership Models
+// ============================================================================
+
+model TenantMember {
+  id       String   @id @default(cuid())
+  role     Role     @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  // Relations
+  userId   String
+  tenantId String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   CpiTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+  @@index([userId])
+  @@map("tenant_member")
+}
+
+model TenantInvitation {
+  id         String    @id @default(cuid())
+  email      String
+  role       Role      @default(MEMBER)
+  token      String    @unique @default(cuid())
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  // Relations
+  tenantId    String
+  invitedById String
+  tenant      CpiTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy   User      @relation(fields: [invitedById], references: [id])
+
+  @@index([email])
+  @@index([tenantId])
+  @@map("tenant_invitation")
+}
+
+// ============================================================================
+// AI Agent Models
+// ============================================================================
+
+model AIAgentExecution {
+  id        String        @id @default(cuid())
+  agentType AIAgentType
+  status    AIAgentStatus @default(RUNNING)
+
+  // Input/Output
+  input        String  @db.Text
+  output       String? @db.Text
+  errorMessage String? @db.Text
+
+  // Performance metrics
+  tokensUsed Int     @default(0)
+  duration   Int?    // in milliseconds
+  success    Boolean @default(false)
+
+  // Context
+  tenantId String?
+  iFlowId  String?
+
+  // Relations
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([agentType])
+  @@index([status])
+  @@index([createdAt])
+  @@map("ai_agent_execution")
+}
+
+// ============================================================================
+// iFlow Creator Multi-Agent Pipeline
+// ============================================================================
+
+model IFlowPipeline {
+  id       String @id @default(cuid())
+  userId   String
+  tenantId String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   CpiTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Current pipeline phase
+  phase PipelinePhase @default(INIT)
+
+  // Inputs
+  packageSelection    String  @db.Text
+  description         String  @db.Text
+  tenantCapabilities  String? @db.Text
+
+  // Agent outputs (populated progressively)
+  architectResult   String? @db.Text
+  reviewerResult    String? @db.Text
+  bpmn2Xml          String? @db.Text
+  bpmn2ScriptFiles  String? @db.Text
+  validatorResult   String? @db.Text
+  fixAttempts       String? @db.Text
+  summarizerResult  String? @db.Text
+  deploymentResult  String? @db.Text
+
+  // The final approved design (after review + fixes)
+  finalDesign String? @db.Text
+
+  // Error state
+  errorPhase       String?
+  errorMessage     String? @db.Text
+  errorRecoverable Boolean?
+
+  // Metrics
+  totalTokensUsed Int @default(0)
+  totalDuration   Int? // in milliseconds
+
+  // Timestamps
+  startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  // Relations
+  agentLogs IFlowPipelineAgentLog[]
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([phase])
+  @@index([userId, tenantId])
+  @@map("iflow_pipeline")
+}
+
+model IFlowPipelineAgentLog {
+  id         String @id @default(cuid())
+  pipelineId String
+  pipeline   IFlowPipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  agentName String // ARCHITECT | REVIEWER | VALIDATOR | FIX | SUMMARIZER
+
+  status PipelineAgentLogStatus @default(RUNNING)
+
+  // Input/Output
+  input        String? @db.Text
+  output       String? @db.Text
+  errorMessage String? @db.Text
+
+  // Metrics
+  tokensUsed Int @default(0)
+  duration   Int @default(0) // ms
+
+  // For Fix Agent retry tracking
+  attemptNumber Int?
+
+  // Timestamps
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([pipelineId])
+  @@index([pipelineId, agentName])
+  @@map("iflow_pipeline_agent_log")
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+enum UserRole {
+  user
+  admin
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum AuthType {
+  OAUTH
+  BASIC_AUTH
+  SERVICE_KEY
+}
+
+enum TenantStatus {
+  ACTIVE
+  INACTIVE
+  TESTING
+  ERROR
+}
+
+enum IFlowStatus {
+  STARTED
+  STOPPED
+  STARTING
+  STOPPING
+  ERROR
+}
+
+enum ExecutionStatus {
+  COMPLETED
+  FAILED
+  PROCESSING
+  SKIPPED
+  RETRY
+}
+
+enum ErrorCategory {
+  SYSTEM
+  NETWORK
+  MAPPING
+  SECURITY
+  TIMEOUT
+  BUSINESS_LOGIC
+  UNKNOWN
+}
+
+enum AIAgentType {
+  GENERAL_ASSISTANT
+  IFLOW_CREATOR
+  SMART_MONITOR
+  PERFORMANCE_OPTIMIZER
+  ERROR_DIAGNOSTICIAN
+  SECURITY_AUDITOR
+  DOCUMENTATION_GENERATOR
+  TEST_CASE_GENERATOR
+  COST_ANALYZER
+  PREDICTIVE_INSIGHTS
+}
+
+enum AIAgentStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PipelinePhase {
+  INIT
+  ARCHITECTURE
+  DESIGN_REVIEW
+  BPMN_GENERATION
+  VALIDATION
+  FIX_ATTEMPT
+  SUMMARIZATION
+  AWAITING_APPROVAL
+  DEPLOYING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PipelineAgentLogStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum OrganizationType {
+  ENTERPRISE
+  MID_MARKET
+  STARTUP
+  CONSULTING
+  EDUCATION
+  OTHER
+}

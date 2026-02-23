@@ -1,11 +1,10 @@
 import { Suspense } from "react";
-import SignUpAuth from "@/components/auth/sign-up";
-import SignUpSkeleton from "@/components/auth/sign-up-skeleton";
+import { SignUpForm } from "@/components/auth/sign-up-form";
 
 export default function SignUp() {
   return (
-    <Suspense fallback={<SignUpSkeleton />}>
-      <SignUpAuth />
+    <Suspense>
+      <SignUpForm />
     </Suspense>
   );
 }

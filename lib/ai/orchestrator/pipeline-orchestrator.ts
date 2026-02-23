@@ -1,36 +1,29 @@
 /**
  * Pipeline Orchestrator
- * 
+ *
  * Controls the multi-agent iFlow creation pipeline. Manages state transitions,
- * sequences agent execution, handles retries, and persists everything to Convex
- * for real-time UI updates.
- * 
+ * sequences agent execution, handles retries, and persists everything to PostgreSQL
+ * via Prisma for real-time UI updates (via polling).
+ *
  * Usage:
- *   const orchestrator = new PipelineOrchestrator(pipelineId, convexClient);
+ *   const orchestrator = new PipelineOrchestrator(pipelineId);
  *   await orchestrator.run(context);
  */
 
-import type { ConvexHttpClient } from 'convex/browser';
-import { api } from '@/convex/_generated/api';
-import type { Id } from '@/convex/_generated/dataModel';
+import { prisma } from '@/lib/db';
 import type { BaseAgent } from './agent-base';
 import type {
   PipelinePhase,
   PipelineContext,
   AgentResult,
-  AgentName,
   AgentLogStatus,
 } from './pipeline-state';
 import { isValidTransition } from './pipeline-state';
 
-// Pipeline mutations may not be in generated API yet — access dynamically
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const pipelineApi = (api as any).iflowPipelineMutations as Record<string, any>;
-
 const MAX_FIX_ATTEMPTS = 3;
 
 /**
- * Truncate a JSON string for log storage (Convex has field size limits)
+ * Truncate a JSON string for log storage
  */
 function truncateForLog(json: string, maxLength = 8000): string {
   if (json.length <= maxLength) return json;
@@ -38,13 +31,11 @@ function truncateForLog(json: string, maxLength = 8000): string {
 }
 
 export class PipelineOrchestrator {
-  private pipelineId: Id<'iflowPipelines'>;
-  private convex: ConvexHttpClient;
+  private pipelineId: string;
   private _currentPhase: PipelinePhase = 'INIT';
 
-  constructor(pipelineId: Id<'iflowPipelines'>, convexClient: ConvexHttpClient, initialPhase?: PipelinePhase) {
+  constructor(pipelineId: string, initialPhase?: PipelinePhase) {
     this.pipelineId = pipelineId;
-    this.convex = convexClient;
     if (initialPhase) {
       this._currentPhase = initialPhase;
     }
@@ -67,14 +58,14 @@ export class PipelineOrchestrator {
     console.log(`[Pipeline:${this.pipelineId}] Phase: ${this._currentPhase} → ${to}`);
     this._currentPhase = to;
 
-    await this.convex.mutation(pipelineApi.updatePhase, {
-      pipelineId: this.pipelineId,
-      phase: to,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: { phase: to },
     });
   }
 
   /**
-   * Run an agent with full logging to Convex.
+   * Run an agent with full logging to database.
    * Creates a log entry on start, updates it on completion/failure.
    */
   async runAgent<TInput, TOutput>(
@@ -84,34 +75,34 @@ export class PipelineOrchestrator {
     attemptNumber?: number
   ): Promise<AgentResult<TOutput>> {
     // Log start
-    const logId = await this.convex.mutation(
-      pipelineApi.logAgentStart,
-      {
+    const agentLog = await prisma.iFlowPipelineAgentLog.create({
+      data: {
         pipelineId: this.pipelineId,
         agentName: agent.name,
         input: truncateForLog(JSON.stringify(input)),
         attemptNumber,
-      }
-    );
+        status: 'RUNNING',
+      },
+    });
 
     // Execute
     const result = await agent.execute(input, context);
 
     // Log completion
     const logStatus: AgentLogStatus = result.success ? 'COMPLETED' : 'FAILED';
-    await this.convex.mutation(
-      pipelineApi.logAgentComplete,
-      {
-        logId,
+    await prisma.iFlowPipelineAgentLog.update({
+      where: { id: agentLog.id },
+      data: {
         status: logStatus,
         output: result.output
           ? truncateForLog(JSON.stringify(result.output))
           : undefined,
         errorMessage: result.error,
-        tokensUsed: result.tokensUsed,
-        duration: result.duration,
-      }
-    );
+        tokensUsed: result.tokensUsed ?? 0,
+        duration: result.duration ?? 0,
+        completedAt: new Date(),
+      },
+    });
 
     return result;
   }
@@ -123,11 +114,14 @@ export class PipelineOrchestrator {
     console.error(`[Pipeline:${this.pipelineId}] FAILED at ${phase}: ${message}`);
     this._currentPhase = 'FAILED';
 
-    await this.convex.mutation(pipelineApi.setError, {
-      pipelineId: this.pipelineId,
-      errorPhase: phase,
-      errorMessage: message,
-      errorRecoverable: recoverable,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
+        phase: 'FAILED',
+        errorPhase: phase,
+        errorMessage: message,
+        errorRecoverable: recoverable,
+      },
     });
   }
 
@@ -135,27 +129,25 @@ export class PipelineOrchestrator {
    * Store tenant capabilities
    */
   async setTenantCapabilities(capabilities: unknown): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setTenantCapabilities,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         tenantCapabilities: JSON.stringify(capabilities),
-      }
-    );
+      },
+    });
   }
 
   /**
    * Store architect result
    */
   async setArchitectResult(result: unknown, tokensUsed: number): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setArchitectResult,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         architectResult: JSON.stringify(result),
-        tokensUsed,
-      }
-    );
+        totalTokensUsed: { increment: tokensUsed },
+      },
+    });
   }
 
   /**
@@ -166,15 +158,14 @@ export class PipelineOrchestrator {
     tokensUsed: number,
     finalDesign?: unknown
   ): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setReviewerResult,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         reviewerResult: JSON.stringify(result),
         finalDesign: finalDesign ? JSON.stringify(finalDesign) : undefined,
-        tokensUsed,
-      }
-    );
+        totalTokensUsed: { increment: tokensUsed },
+      },
+    });
   }
 
   /**
@@ -184,27 +175,25 @@ export class PipelineOrchestrator {
     xml: string,
     scriptFiles?: { path: string; content: string }[]
   ): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setBpmn2Result,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         bpmn2Xml: xml,
         bpmn2ScriptFiles: scriptFiles ? JSON.stringify(scriptFiles) : undefined,
-      }
-    );
+      },
+    });
   }
 
   /**
    * Store validator result
    */
   async setValidatorResult(result: unknown): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setValidatorResult,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         validatorResult: JSON.stringify(result),
-      }
-    );
+      },
+    });
   }
 
   /**
@@ -215,42 +204,50 @@ export class PipelineOrchestrator {
     tokensUsed: number,
     updatedDesign?: unknown
   ): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.appendFixAttempt,
-      {
-        pipelineId: this.pipelineId,
-        fixAttempt: JSON.stringify(attempt),
-        updatedDesign: updatedDesign ? JSON.stringify(updatedDesign) : undefined,
-        tokensUsed,
-      }
-    );
+    // Get current fix attempts
+    const pipeline = await prisma.iFlowPipeline.findUnique({
+      where: { id: this.pipelineId },
+      select: { fixAttempts: true },
+    });
+
+    const existingAttempts = pipeline?.fixAttempts
+      ? JSON.parse(pipeline.fixAttempts)
+      : [];
+    existingAttempts.push(attempt);
+
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
+        fixAttempts: JSON.stringify(existingAttempts),
+        finalDesign: updatedDesign ? JSON.stringify(updatedDesign) : undefined,
+        totalTokensUsed: { increment: tokensUsed },
+      },
+    });
   }
 
   /**
    * Store summarizer result
    */
   async setSummarizerResult(result: unknown, tokensUsed: number): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setSummarizerResult,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         summarizerResult: JSON.stringify(result),
-        tokensUsed,
-      }
-    );
+        totalTokensUsed: { increment: tokensUsed },
+      },
+    });
   }
 
   /**
    * Store deployment result
    */
   async setDeploymentResult(result: unknown): Promise<void> {
-    await this.convex.mutation(
-      pipelineApi.setDeploymentResult,
-      {
-        pipelineId: this.pipelineId,
+    await prisma.iFlowPipeline.update({
+      where: { id: this.pipelineId },
+      data: {
         deploymentResult: JSON.stringify(result),
-      }
-    );
+      },
+    });
   }
 
   /**

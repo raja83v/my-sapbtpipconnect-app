@@ -2,7 +2,7 @@
  * Encryption utilities for Next.js
  *
  * This module provides encryption/decryption functions using Web Crypto API.
- * Uses AES-256-GCM algorithm - same as Convex backend.
+ * Uses AES-256-GCM algorithm for secure credential storage.
  */
 
 /**

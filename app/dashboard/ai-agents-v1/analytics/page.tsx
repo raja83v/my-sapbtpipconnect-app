@@ -1,11 +1,10 @@
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
+import { prisma } from "@/lib/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { agentConfigs } from "@/lib/ai/agent-types";
 import { TrendingUp, Zap, Clock, DollarSign } from "lucide-react";
-import { convex, api } from "@/lib/convex";
-import { Id } from "@/convex/_generated/dataModel";
 
 export default async function AgentAnalyticsPage() {
   const user = await getCurrentUser();
@@ -14,10 +13,11 @@ export default async function AgentAnalyticsPage() {
     redirect("/sign-in");
   }
 
-  // Get comprehensive analytics from Convex
-  const executions = await convex.query(api.aiAgents.listByUser, { 
-    userId: user.id as Id<"users">,
-    limit: 1000,
+  // Get comprehensive analytics
+  const executions = await prisma.aIAgentExecution.findMany({
+    where: { userId: user.id },
+    take: 1000,
+    orderBy: { createdAt: 'desc' },
   });
 
   const totalExecutions = executions.length;
@@ -196,7 +196,7 @@ export default async function AgentAnalyticsPage() {
                 const Icon = agent.icon;
 
                 return (
-                  <div key={execution._id} className="flex items-start gap-3 p-3 border rounded-lg">
+                  <div key={execution.id} className="flex items-start gap-3 p-3 border rounded-lg">
                     <div className={`flex h-8 w-8 items-center justify-center rounded-lg bg-${agent.color}-500/10 shrink-0`}>
                       <Icon className={`h-4 w-4 text-${agent.color}-500`} />
                     </div>
@@ -214,7 +214,7 @@ export default async function AgentAnalyticsPage() {
                         {execution.inputPrompt}
                       </p>
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        <span>{new Date(execution._creationTime).toLocaleString()}</span>
+                        <span>{new Date(execution.createdAt).toLocaleString()}</span>
                         <span>•</span>
                         <span>{execution.tokensUsed} tokens</span>
                         {execution.duration && (

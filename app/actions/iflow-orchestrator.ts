@@ -7,16 +7,14 @@
  * 3. cancelIFlowPipeline() — User cancels the pipeline
  * 4. retryIFlowPipeline() — Retry from ARCHITECTURE after failure
  *
- * These run on the server and persist all state to Convex in real-time
- * so the frontend can track progress via subscriptions.
+ * These run on the server and persist all state to the database in real-time
+ * so the frontend can track progress via polling.
  */
 
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
 import { decrypt } from "@/lib/encryption";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
@@ -73,48 +71,51 @@ export async function startIFlowPipeline(
     }
 
     // 2. Verify tenant access
-    const tenant = await convex.query(api.tenants.getById, {
-      id: tenantId as any,
-    });
+    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: user.id as any,
-      tenantId: tenantId as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: { userId_tenantId: { userId: user.id, tenantId } },
     });
     if (!membership) {
       return { success: false, error: "You don't have access to this tenant" };
     }
 
     // 3. Check for existing active pipeline — auto-cancel stale ones
-    const active = await (convex.query as any)((api as any).iflowPipeline?.getActivePipeline, {
-      userId: user.id as any,
-      tenantId: tenantId as any,
+    const active = await prisma.iFlowPipeline.findFirst({
+      where: {
+        userId: user.id,
+        tenantId,
+        phase: { notIn: ["COMPLETED", "CANCELLED", "FAILED"] },
+      },
     }).catch(() => null);
     if (active) {
       // Auto-cancel the stale pipeline so the user can start fresh
-      console.log(`[Pipeline] Auto-cancelling stale pipeline ${active._id} (phase: ${active.phase})`);
-      await (convex.mutation as any)((api as any).iflowPipelineMutations.updatePhase, {
-        pipelineId: active._id,
-        phase: "CANCELLED",
+      console.log(`[Pipeline] Auto-cancelling stale pipeline ${active.id} (phase: ${active.phase})`);
+      await prisma.iFlowPipeline.update({
+        where: { id: active.id },
+        data: { phase: "CANCELLED" },
       }).catch((err: unknown) => {
         console.error(`[Pipeline] Failed to auto-cancel stale pipeline:`, err);
       });
     }
 
     // 4. Create pipeline record
-    const pipelineId = await (convex.mutation as any)((api as any).iflowPipelineMutations.create, {
-      userId: user.id as any,
-      tenantId: tenantId as any,
-      packageSelection: JSON.stringify(packageSelection),
-      description: JSON.stringify(description),
+    const pipeline = await prisma.iFlowPipeline.create({
+      data: {
+        userId: user.id,
+        tenantId,
+        packageSelection: JSON.stringify(packageSelection),
+        description: JSON.stringify(description),
+      },
     });
+    const pipelineId = pipeline.id;
 
     // 5. Run the pipeline in the background (don't await)
     // We fire-and-forget so the client gets the pipelineId immediately
-    // and can track progress via Convex subscriptions
+    // and can track progress via polling
     runPipelineAsync(
       pipelineId,
       tenantId,
@@ -128,7 +129,7 @@ export async function startIFlowPipeline(
 
     return {
       success: true,
-      data: { pipelineId: pipelineId as string },
+      data: { pipelineId },
     };
   } catch (error) {
     console.error("Error starting pipeline:", error);
@@ -153,9 +154,8 @@ export async function approveIFlowPipeline(
     }
 
     // Fetch pipeline details
-    const pipeline = await (convex.query as any)((api as any).iflowPipeline.getByIdForUser, {
-      pipelineId: pipelineId as any,
-      userId: user.id as any,
+    const pipeline = await prisma.iFlowPipeline.findFirst({
+      where: { id: pipelineId, userId: user.id },
     });
 
     if (!pipeline) {
@@ -190,8 +190,8 @@ export async function approveIFlowPipeline(
     }
 
     // Get tenant for deployment
-    const tenant = await convex.query(api.tenants.getById, {
-      id: pipeline.tenantId as any,
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: pipeline.tenantId },
     });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -199,8 +199,7 @@ export async function approveIFlowPipeline(
 
     // Update phase
     const orchestrator = new PipelineOrchestrator(
-      pipelineId as unknown as Id<"iflowPipelines">,
-      convex,
+      pipelineId,
       "AWAITING_APPROVAL" // Pipeline is already in AWAITING_APPROVAL phase
     );
     await orchestrator.transition("DEPLOYING");
@@ -249,18 +248,17 @@ export async function cancelIFlowPipeline(
     const user = await getCurrentUser();
     if (!user) return { success: false, error: "Not authenticated" };
 
-    const pipeline = await (convex.query as any)((api as any).iflowPipeline.getByIdForUser, {
-      pipelineId: pipelineId as any,
-      userId: user.id as any,
+    const pipeline = await prisma.iFlowPipeline.findFirst({
+      where: { id: pipelineId, userId: user.id },
     });
 
     if (!pipeline) {
       return { success: false, error: "Pipeline not found or access denied" };
     }
 
-    await (convex.mutation as any)((api as any).iflowPipelineMutations.updatePhase, {
-      pipelineId: pipelineId as any,
-      phase: "CANCELLED",
+    await prisma.iFlowPipeline.update({
+      where: { id: pipelineId },
+      data: { phase: "CANCELLED" },
     });
 
     return { success: true, data: undefined };
@@ -283,9 +281,8 @@ export async function retryIFlowPipeline(
     const user = await getCurrentUser();
     if (!user) return { success: false, error: "Not authenticated" };
 
-    const pipeline = await (convex.query as any)((api as any).iflowPipeline.getByIdForUser, {
-      pipelineId: pipelineId as any,
-      userId: user.id as any,
+    const pipeline = await prisma.iFlowPipeline.findFirst({
+      where: { id: pipelineId, userId: user.id },
     });
 
     if (!pipeline) {
@@ -296,8 +293,8 @@ export async function retryIFlowPipeline(
       return { success: false, error: "Can only retry from FAILED state" };
     }
 
-    const tenant = await convex.query(api.tenants.getById, {
-      id: pipeline.tenantId as any,
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: pipeline.tenantId },
     });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -307,18 +304,18 @@ export async function retryIFlowPipeline(
     const description: IFlowDescription = JSON.parse(pipeline.description);
 
     // Reset to ARCHITECTURE and re-run
-    await (convex.mutation as any)((api as any).iflowPipelineMutations.updatePhase, {
-      pipelineId: pipelineId as any,
-      phase: "ARCHITECTURE",
+    await prisma.iFlowPipeline.update({
+      where: { id: pipelineId },
+      data: { phase: "ARCHITECTURE" },
     });
 
     runPipelineAsync(
-      pipelineId as unknown as Id<"iflowPipelines">,
-      pipeline.tenantId as string,
+      pipelineId,
+      pipeline.tenantId,
       user.id,
       packageSelection,
       description,
-      tenant
+      tenant as any
     ).catch((err) => {
       console.error(`[Pipeline:${pipelineId}] Retry error:`, err);
     });
@@ -337,14 +334,14 @@ export async function retryIFlowPipeline(
 // ============================================================================
 
 async function runPipelineAsync(
-  pipelineId: Id<"iflowPipelines">,
+  pipelineId: string,
   tenantId: string,
   userId: string,
   packageSelection: PackageSelection,
   description: IFlowDescription,
   tenant: Record<string, unknown>
 ): Promise<void> {
-  const orchestrator = new PipelineOrchestrator(pipelineId, convex);
+  const orchestrator = new PipelineOrchestrator(pipelineId);
 
   // Instantiate agents
   const architectAgent = new ArchitectAgent();
@@ -379,7 +376,7 @@ async function runPipelineAsync(
     await orchestrator.setTenantCapabilities(tenantCapabilities);
 
     const context: PipelineContext = {
-      pipelineId: pipelineId as string,
+      pipelineId,
       tenantId,
       userId,
       tenantCapabilities,
@@ -646,7 +643,7 @@ async function runPipelineAsync(
 
     // Build a partial pipeline state for the summarizer
     const pipelineState = {
-      id: pipelineId as string,
+      id: pipelineId,
       phase: "SUMMARIZATION" as const,
       startedAt: Date.now() - 30000, // approximate
       updatedAt: Date.now(),

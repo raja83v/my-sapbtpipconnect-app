@@ -4,13 +4,11 @@
  * Pipeline Progress Tracker
  *
  * Real-time progress display for the multi-agent iFlow pipeline.
- * Uses Convex subscription to track pipeline phase changes.
+ * Polls the pipeline API to track pipeline phase changes.
  * Shows each agent as a step with status indicators.
  */
 
-import { useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -109,9 +107,33 @@ function getPhaseIndex(phase: PipelinePhase): number {
 export function PipelineProgressTracker({
   pipelineId,
 }: PipelineProgressTrackerProps) {
-  const pipeline = useQuery((api as any).iflowPipeline.getById, {
-    pipelineId: pipelineId as any,
-  });
+  const [pipeline, setPipeline] = useState<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchPipeline() {
+      try {
+        const response = await fetch(`/api/pipelines/${pipelineId}`);
+        if (response.ok && !cancelled) {
+          const data = await response.json();
+          setPipeline(data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch pipeline:", error);
+      }
+    }
+
+    fetchPipeline();
+
+    // Poll every 3 seconds while pipeline is active
+    const interval = setInterval(fetchPipeline, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pipelineId]);
 
   if (!pipeline) {
     return (

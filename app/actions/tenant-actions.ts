@@ -1,11 +1,8 @@
 "use server";
 
-import { api } from "@/convex/_generated/api";
-import { fetchMutation, fetchQuery } from "convex/nextjs";
+import { requireAuth } from "@/lib/auth-helpers";
+import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/encryption";
-import { auth } from "@clerk/nextjs/server";
-import { Id } from "@/convex/_generated/dataModel";
-import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 /**
  * Create a new tenant with encrypted credentials
@@ -22,54 +19,50 @@ export async function createTenant(data: {
     username?: string;
     password?: string;
 }) {
-    const { userId } = await auth();
-
-    if (!userId) {
-        throw new Error("Unauthorized");
-    }
-
-    // Check subscription limit for tenants
-    const limitCheck = await checkSubscriptionLimit("tenants");
-    if (!limitCheck.success) {
-        throw new Error(limitCheck.error || "Failed to check subscription limit");
-    }
-
-    if (!limitCheck.data?.allowed) {
-        const { current, max } = limitCheck.data || { current: 0, max: 0 };
-        throw new Error(`Tenant limit reached (${current}/${max}). Please upgrade your plan to add more tenants.`);
-    }
+    const user = await requireAuth();
 
     // Encrypt sensitive data before storing
-    const encryptedData = {
-        ...data,
-        clientSecret: data.clientSecret ? await encrypt(data.clientSecret) : undefined,
-        password: data.password ? await encrypt(data.password) : undefined,
-    };
+    const encryptedClientSecret = data.clientSecret ? await encrypt(data.clientSecret) : undefined;
+    const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
 
-    // Get user's Convex ID
-    const convexUser = await fetchQuery(api.users.getByClerkId, { clerkId: userId });
+    // Create tenant with encrypted credentials and add user as owner
+    const tenant = await prisma.$transaction(async (tx) => {
+        const newTenant = await tx.cpiTenant.create({
+            data: {
+                name: data.name,
+                slug: data.slug,
+                description: data.description,
+                tenantUrl: data.tenantUrl,
+                authType: data.authType || "OAUTH",
+                authenticationUrl: data.authenticationUrl,
+                clientId: data.clientId,
+                clientSecret: encryptedClientSecret,
+                username: data.username,
+                password: encryptedPassword,
+                status: "ACTIVE",
+            },
+        });
 
-    if (!convexUser) {
-        throw new Error("User not found");
-    }
+        // Add user as OWNER
+        await tx.tenantMember.create({
+            data: {
+                userId: user.id,
+                tenantId: newTenant.id,
+                role: "OWNER",
+            },
+        });
 
-    // Create tenant with encrypted credentials
-    const tenantId = await fetchMutation(api.tenantMutations.create, {
-        ...encryptedData,
-        ownerId: convexUser._id,
+        return newTenant;
     });
 
-    // Increment tenant usage after successful creation
-    await incrementUsage("tenants");
-
-    return tenantId;
+    return tenant.id;
 }
 
 /**
  * Update tenant with encrypted credentials
  */
 export async function updateTenant(data: {
-    id: Id<"cpiTenants">;
+    id: string;
     name?: string;
     slug?: string;
     description?: string;
@@ -83,41 +76,42 @@ export async function updateTenant(data: {
     status?: "ACTIVE" | "INACTIVE" | "TESTING" | "ERROR";
     isConnected?: boolean;
 }) {
-    const { userId } = await auth();
-
-    if (!userId) {
-        throw new Error("Unauthorized");
-    }
+    await requireAuth();
 
     // Encrypt sensitive data if provided
-    const encryptedData = {
-        ...data,
-        clientSecret: data.clientSecret ? await encrypt(data.clientSecret) : undefined,
-        password: data.password ? await encrypt(data.password) : undefined,
-    };
+    const updateData: any = { ...data };
+    delete updateData.id;
+
+    if (data.clientSecret) {
+        updateData.clientSecret = await encrypt(data.clientSecret);
+    }
+    if (data.password) {
+        updateData.password = await encrypt(data.password);
+    }
 
     // Update tenant with encrypted credentials
-    const tenantId = await fetchMutation(api.tenantMutations.update, encryptedData);
+    await prisma.cpiTenant.update({
+        where: { id: data.id },
+        data: updateData,
+    });
 
-    return tenantId;
+    return data.id;
 }
 
 /**
  * Test tenant connection and mark as connected if successful
  */
-export async function testTenantConnection(tenantId: Id<"cpiTenants">) {
-    const { userId } = await auth();
-
-    if (!userId) {
-        throw new Error("Unauthorized");
-    }
+export async function testTenantConnection(tenantId: string) {
+    await requireAuth();
 
     // This would call the SAP sync test connection action
     // For now, just mark as connected
-    await fetchMutation(api.tenantMutations.update, {
-        id: tenantId,
-        isConnected: true,
-        connectionTestAt: Date.now(),
+    await prisma.cpiTenant.update({
+        where: { id: tenantId },
+        data: {
+            isConnected: true,
+            connectionTestAt: new Date(),
+        },
     });
 
     return { success: true };

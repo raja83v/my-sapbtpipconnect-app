@@ -1,11 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { streamText } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runText } from "@/lib/ai/runtime/text";
 import { createSAPCPIClient, type SAPCPICredentials } from "@/lib/sap-cpi/client";
 import * as prompts from "@/lib/ai/prompts";
 import {
@@ -58,9 +56,8 @@ export async function getIFlowsForCostAnalyzer(params: {
         const { tenantId } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -68,8 +65,8 @@ export async function getIFlowsForCostAnalyzer(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await convex.query(api.tenants.getById, {
-            id: tenantId as any,
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
         });
 
         if (!tenant) {
@@ -154,25 +151,24 @@ export async function getCostMetrics(params: {
 
         // Merge custom pricing with defaults, ensuring all values are valid numbers
         const pricingConfig: CostPricingConfig = {
-            costPerExecution: Number.isFinite(customPricing?.costPerExecution) 
-                ? customPricing.costPerExecution 
+            costPerExecution: Number.isFinite(customPricing?.costPerExecution)
+                ? customPricing.costPerExecution
                 : DEFAULT_PRICING_CONFIG.costPerExecution,
-            costPerMBTransferred: Number.isFinite(customPricing?.costPerMBTransferred) 
-                ? customPricing.costPerMBTransferred 
+            costPerMBTransferred: Number.isFinite(customPricing?.costPerMBTransferred)
+                ? customPricing.costPerMBTransferred
                 : DEFAULT_PRICING_CONFIG.costPerMBTransferred,
-            costPerMinuteRuntime: Number.isFinite(customPricing?.costPerMinuteRuntime) 
-                ? customPricing.costPerMinuteRuntime 
+            costPerMinuteRuntime: Number.isFinite(customPricing?.costPerMinuteRuntime)
+                ? customPricing.costPerMinuteRuntime
                 : DEFAULT_PRICING_CONFIG.costPerMinuteRuntime,
             currency: customPricing?.currency || DEFAULT_PRICING_CONFIG.currency,
-            monthlyBaseCost: Number.isFinite(customPricing?.monthlyBaseCost) 
-                ? customPricing.monthlyBaseCost 
+            monthlyBaseCost: Number.isFinite(customPricing?.monthlyBaseCost)
+                ? customPricing.monthlyBaseCost
                 : DEFAULT_PRICING_CONFIG.monthlyBaseCost,
         };
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -180,8 +176,8 @@ export async function getCostMetrics(params: {
         }
 
         // Get tenant details
-        const tenant = await convex.query(api.tenants.getById, {
-            id: tenantId as any,
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
         });
 
         if (!tenant) {
@@ -374,9 +370,8 @@ export async function analyzeCostsWithAI(params: {
         const { tenantId, costAnalysis, budgetThreshold } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -387,39 +382,32 @@ export async function analyzeCostsWithAI(params: {
         const contextPrompt = buildCostAnalysisPrompt(costAnalysis, budgetThreshold);
 
         // Generate AI insights
-        const result = await streamText({
-            model: aiModel,
+        const result = await runText({
             system: prompts.COST_ANALYZER_PROMPT,
             prompt: contextPrompt,
             temperature: 0.4,
         });
-
-        // Collect the response
-        let fullText = "";
-        for await (const chunk of result.textStream) {
-            fullText += chunk;
-        }
-
-        // Get token usage
-        const usage = await result.usage;
-        const totalTokens = usage?.totalTokens || 0;
+        const fullText = result.text;
+        const totalTokens = result.usage.totalTokens || 0;
 
         // Track execution in database
         const durationMs = Date.now() - startTime;
-        await convex.mutation(api.aiAgentMutations.trackExecution, {
-            agentType: "COST_ANALYZER",
-            tenantId: tenantId,
-            userId: currentUser.id as any,
-            tokensUsed: totalTokens,
-            duration: durationMs,
-            success: true,
-            input: JSON.stringify({
-                periodDays: costAnalysis.periodDays,
-                iflowCount: costAnalysis.summary.iflowCount,
-                totalCost: costAnalysis.summary.totalCost,
-                budgetThreshold,
-            }),
-            output: fullText.substring(0, 500), // Store summary
+        await prisma.aIAgentExecution.create({
+            data: {
+                agentType: "COST_ANALYZER",
+                tenantId: tenantId,
+                userId: currentUser.id,
+                tokensUsed: totalTokens,
+                duration: durationMs,
+                success: true,
+                input: JSON.stringify({
+                    periodDays: costAnalysis.periodDays,
+                    iflowCount: costAnalysis.summary.iflowCount,
+                    totalCost: costAnalysis.summary.totalCost,
+                    budgetThreshold,
+                }),
+                output: fullText.substring(0, 500), // Store summary
+            },
         });
 
         // Parse AI response into structured insights

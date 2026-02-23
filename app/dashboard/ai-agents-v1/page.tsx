@@ -7,8 +7,7 @@ import { agentConfigs, agentCategories, type AIAgentType } from "@/lib/ai/agent-
 import { getAgentBySlugV2 } from "@/lib/ai/agent-types-v2";
 import { ArrowRight, Sparkles, TrendingUp, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { convex, api } from "@/lib/convex";
-import { Id } from "@/convex/_generated/dataModel";
+import { prisma } from "@/lib/db";
 
 export default async function AIAgentsPage() {
   // getCurrentUser is cached via React's cache(), so this is efficient
@@ -20,10 +19,18 @@ export default async function AIAgentsPage() {
     return null;
   }
 
-  // Get usage statistics for the user from Convex
-  const agentStats = await convex.query(api.aiAgents.getStatsByUser, {
-    userId: user.id as Id<"users">
+  // Get usage statistics for the user from Prisma
+  const agentStatsRaw = await prisma.aIAgentExecution.groupBy({
+    by: ['agentType'],
+    where: { userId: user.id },
+    _count: { id: true },
+    _sum: { tokensUsed: true },
   });
+  const agentStats = agentStatsRaw.map(stat => ({
+    agentType: stat.agentType,
+    executions: stat._count.id,
+    tokens: stat._sum.tokensUsed || 0,
+  }));
 
   const statsMap = new Map(
     agentStats.map((stat) => [

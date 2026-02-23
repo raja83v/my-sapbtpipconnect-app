@@ -1,11 +1,9 @@
-import { Id } from "@/convex/_generated/dataModel";
-
 /**
  * User type returned from getCurrentUser() action
  * Matches the select fields from the user query
  */
 export type CurrentUser = {
-  id: Id<"users">;
+  id: string;
   email: string;
   name: string | null;
   image: string | null;
@@ -14,7 +12,7 @@ export type CurrentUser = {
   status: "ACTIVE" | "SUSPENDED" | "DELETED";
   emailVerified: boolean;
   onboardingCompleted: boolean;
-  defaultTenantId: Id<"cpiTenants"> | null;
+  defaultTenantId: string | null;
   createdAt: Date;
 } | null;
 

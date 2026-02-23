@@ -14,8 +14,7 @@
  * Model: gemini-2.5-flash-lite (prototype)
  */
 
-import { generateText, type LanguageModel } from 'ai';
-import { google } from '@ai-sdk/google';
+import type { LanguageModel } from 'ai';
 import { BaseAgent } from '../agent-base';
 import type {
   PipelineContext,
@@ -26,6 +25,7 @@ import type {
   TenantCapabilities,
 } from '../pipeline-state';
 import type { IFlowDesign } from '@/components/ai/v2/specialized/iflow-creator/types';
+import { runText } from '@/lib/ai/runtime/text';
 
 // ============================================================================
 // Constants
@@ -58,7 +58,7 @@ export interface FixAgentOutput {
 
 export class FixAgent extends BaseAgent<FixAgentInput, FixAgentOutput> {
   readonly name = 'FIX' as const;
-  readonly model: LanguageModel = google('gemini-2.5-flash-lite');
+  readonly model: LanguageModel | null = null;
   readonly description = 'Fixes validation errors in iFlow design and BPMN2 XML';
 
   protected async run(
@@ -174,23 +174,24 @@ ${tenantCapabilities.availableAdapters.join(', ')}
 
 Respond with the corrected JSON, then list changes.`;
 
-    const { text, usage } = await generateText({
-      model: this.model,
+    const result = await runText({
       system:
         'You are an SAP CPI integration expert. Fix the design errors precisely. Respond with valid JSON followed by a CHANGES section.',
       prompt,
-      maxOutputTokens: 8000,
+      maxTokens: 8000,
       temperature: 0.1,
+      modelKind: 'orchestrator',
     });
+    const text = result.text;
 
-    const tokensUsed = usage?.totalTokens ?? 0;
+    const tokensUsed = result.usage.totalTokens ?? 0;
     const { fixedDesign, changes } = parsePatchDesignResponse(text, errors);
 
     // Determine which errors are fixed
     const fixedErrorIds = new Set(changes.map((c) => c.errorId));
     const remainingErrors = errors.filter((e) => !fixedErrorIds.has(e.id));
 
-    const result: FixAttempt['result'] =
+    const fixResultStatus: FixAttempt['result'] =
       remainingErrors.length === 0
         ? 'FIXED'
         : remainingErrors.length < errors.length
@@ -204,7 +205,7 @@ Respond with the corrected JSON, then list changes.`;
           errorsToFix: errors,
           strategy: 'PATCH_DESIGN',
           changes,
-          result,
+          result: fixResultStatus,
           remainingErrors,
         },
         updatedDesign: fixedDesign || undefined,
@@ -275,22 +276,23 @@ ${truncatedXml}
 
 Respond with the corrected XML, then list changes.`;
 
-    const { text, usage } = await generateText({
-      model: this.model,
+    const result = await runText({
       system:
         'You are a BPMN2 XML expert for SAP CPI. Fix structural XML errors precisely. Return valid BPMN2 XML.',
       prompt,
-      maxOutputTokens: 10000,
+      maxTokens: 10000,
       temperature: 0.1,
+      modelKind: 'orchestrator',
     });
+    const text = result.text;
 
-    const tokensUsed = usage?.totalTokens ?? 0;
+    const tokensUsed = result.usage.totalTokens ?? 0;
     const { fixedXml, changes } = parsePatchXmlResponse(text, structuralErrors);
 
     const fixedIds = new Set(changes.map((c) => c.errorId));
     const remainingErrors = errors.filter((e) => !fixedIds.has(e.id));
 
-    const result: FixAttempt['result'] =
+    const fixResultStatus: FixAttempt['result'] =
       remainingErrors.length === 0
         ? 'FIXED'
         : remainingErrors.length < errors.length
@@ -304,7 +306,7 @@ Respond with the corrected XML, then list changes.`;
           errorsToFix: errors,
           strategy: 'PATCH_XML',
           changes,
-          result,
+          result: fixResultStatus,
           remainingErrors,
         },
         updatedXml: fixedXml || undefined,

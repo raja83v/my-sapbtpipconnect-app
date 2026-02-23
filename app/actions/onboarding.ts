@@ -1,8 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/encryption";
 
 export interface OnboardingData {
@@ -43,8 +42,8 @@ export async function completeOnboarding(data: OnboardingData) {
         .replace(/[^a-z0-9]/g, "-");
 
       // Check if slug is already taken
-      const existingTenant = await convex.query(api.tenants.getBySlug, {
-        slug: tenantSlug,
+      const existingTenant = await prisma.cpiTenant.findUnique({
+        where: { slug: tenantSlug },
       });
 
       if (existingTenant) {
@@ -55,21 +54,35 @@ export async function completeOnboarding(data: OnboardingData) {
       const encryptedClientSecret = data.clientSecret ? await encrypt(data.clientSecret) : undefined;
       const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
 
-      // Create CPI tenant with owner
-      const tenantId = await convex.mutation(api.tenantMutations.create, {
-        name: data.tenantName!,
-        slug: tenantSlug,
-        tenantUrl: data.tenantUrl!,
-        authType: data.authType || "OAUTH",
-        authenticationUrl: data.authenticationUrl || data.tokenUrl,
-        clientId: data.clientId,
-        clientSecret: encryptedClientSecret,
-        username: data.username,
-        password: encryptedPassword,
-        status: "TESTING",
-        isConnected: true,
-        connectionTestAt: Date.now(),
-        ownerId: currentUser.id as any,
+      // Create CPI tenant with owner membership in a transaction
+      const tenant = await prisma.$transaction(async (tx) => {
+        const newTenant = await tx.cpiTenant.create({
+          data: {
+            name: data.tenantName!,
+            slug: tenantSlug,
+            tenantUrl: data.tenantUrl!,
+            authType: data.authType || "OAUTH",
+            authenticationUrl: data.authenticationUrl || data.tokenUrl,
+            clientId: data.clientId,
+            clientSecret: encryptedClientSecret,
+            username: data.username,
+            password: encryptedPassword,
+            status: "TESTING",
+            isConnected: true,
+            connectionTestAt: new Date(),
+          },
+        });
+
+        // Add current user as OWNER
+        await tx.tenantMember.create({
+          data: {
+            userId: currentUser.id,
+            tenantId: newTenant.id,
+            role: "OWNER",
+          },
+        });
+
+        return newTenant;
       });
 
       // Update user with onboarding completion
@@ -80,15 +93,16 @@ export async function completeOnboarding(data: OnboardingData) {
         completedAt: new Date().toISOString(),
       };
 
-      await convex.mutation(api.userMutations.update, {
-        id: currentUser.id as any,
-        onboardingCompleted: true,
-        ...(data.firstName && { name: data.firstName }),
-        onboardingData,
-        defaultTenantId: tenantId,
+      await prisma.user.update({
+        where: { id: currentUser.id },
+        data: {
+          onboardingCompleted: true,
+          ...(data.firstName && { name: data.firstName }),
+          onboardingData,
+          defaultTenantId: tenant.id,
+        },
       });
 
-      const tenant = await convex.query(api.tenants.getById, { id: tenantId });
       return { success: true, tenant };
     }
 
@@ -99,22 +113,36 @@ export async function completeOnboarding(data: OnboardingData) {
         .replace(/[^a-z0-9]/g, "-");
 
       // Check if slug is already taken
-      const existingTenant = await convex.query(api.tenants.getBySlug, {
-        slug: tenantSlug,
+      const existingTenant = await prisma.cpiTenant.findUnique({
+        where: { slug: tenantSlug },
       });
 
       if (existingTenant) {
         throw new Error("Workspace name already exists. Please choose another.");
       }
 
-      // Create tenant (as workspace equivalent)
-      const tenantId = await convex.mutation(api.tenantMutations.create, {
-        name: data.workspaceName!,
-        slug: tenantSlug,
-        tenantUrl: "", // No tenant URL for workspace-style creation
-        authType: "OAUTH",
-        status: "ACTIVE",
-        ownerId: currentUser.id as any,
+      // Create tenant (as workspace equivalent) with owner membership
+      const tenant = await prisma.$transaction(async (tx) => {
+        const newTenant = await tx.cpiTenant.create({
+          data: {
+            name: data.workspaceName!,
+            slug: tenantSlug,
+            tenantUrl: "", // No tenant URL for workspace-style creation
+            authType: "OAUTH",
+            status: "ACTIVE",
+          },
+        });
+
+        // Add current user as OWNER
+        await tx.tenantMember.create({
+          data: {
+            userId: currentUser.id,
+            tenantId: newTenant.id,
+            role: "OWNER",
+          },
+        });
+
+        return newTenant;
       });
 
       // Update user with onboarding completion
@@ -127,15 +155,16 @@ export async function completeOnboarding(data: OnboardingData) {
         completedAt: new Date().toISOString(),
       };
 
-      await convex.mutation(api.userMutations.update, {
-        id: currentUser.id as any,
-        onboardingCompleted: true,
-        ...(data.firstName && { name: data.firstName }),
-        onboardingData,
-        defaultTenantId: tenantId,
+      await prisma.user.update({
+        where: { id: currentUser.id },
+        data: {
+          onboardingCompleted: true,
+          ...(data.firstName && { name: data.firstName }),
+          onboardingData,
+          defaultTenantId: tenant.id,
+        },
       });
 
-      const tenant = await convex.query(api.tenants.getById, { id: tenantId });
       return { success: true, workspace: tenant }; // Return as workspace for compatibility
     }
 
@@ -155,17 +184,19 @@ export async function updateOnboardingData(data: Partial<OnboardingData>) {
     }
 
     // Get current user with onboarding data
-    const user = await convex.query(api.users.getById, {
-      id: currentUser.id as any,
+    const user = await prisma.user.findUnique({
+      where: { id: currentUser.id },
     });
 
     const currentData = (user?.onboardingData || {}) as OnboardingData;
 
-    await convex.mutation(api.userMutations.update, {
-      id: currentUser.id as any,
-      onboardingData: {
-        ...currentData,
-        ...data,
+    await prisma.user.update({
+      where: { id: currentUser.id },
+      data: {
+        onboardingData: {
+          ...currentData,
+          ...data,
+        },
       },
     });
 

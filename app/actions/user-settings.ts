@@ -1,8 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import {
@@ -27,11 +26,11 @@ export async function updateUserProfile(
     const validatedData = updateProfileSchema.parse(input);
 
     // Update user profile
-    await convex.mutation(api.userMutations.update, {
-      userId: currentUser.id as any,
+    await prisma.user.update({
+      where: { id: currentUser.id },
       data: {
         name: validatedData.name,
-        phone: validatedData.phone === "" ? undefined : validatedData.phone,
+        phone: validatedData.phone === "" ? null : validatedData.phone,
       },
     });
 
@@ -67,11 +66,9 @@ export async function deleteUserAccount(): Promise<ActionResult<void>> {
     }
 
     // Soft delete by setting status to DELETED
-    await convex.mutation(api.userMutations.update, {
-      userId: currentUser.id as any,
-      data: {
-        status: "DELETED",
-      },
+    await prisma.user.update({
+      where: { id: currentUser.id },
+      data: { status: "DELETED" },
     });
 
     // Revalidate paths

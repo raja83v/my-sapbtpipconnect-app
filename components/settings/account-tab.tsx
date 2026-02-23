@@ -25,13 +25,13 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { deleteUserAccount } from "@/app/actions/user-settings";
-import { useClerk } from "@clerk/nextjs";
+import { useAuth } from "@/components/auth/auth-provider";
 
 export function AccountTab() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const router = useRouter();
-  const { signOut } = useClerk();
+  const { signOut } = useAuth();
 
   async function handleDeleteAccount() {
     setIsDeleting(true);

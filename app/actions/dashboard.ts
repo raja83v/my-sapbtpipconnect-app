@@ -1,8 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
 import { cache } from "react";
 
@@ -87,45 +86,44 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
       return { success: false, error: "Not authenticated" };
     }
 
-    // Get user's accessible tenants
-    const userTenants = await convex.query(api.tenants.listForUser, { 
-      userId: currentUser.id as any 
+    // Get user's accessible tenants via memberships
+    const memberships = await prisma.tenantMember.findMany({
+      where: { userId: currentUser.id },
+      include: { tenant: true },
     });
 
-    const accessibleTenantIds = userTenants.map((t: any) => t._id);
-
-    if (accessibleTenantIds.length === 0) {
+    if (memberships.length === 0) {
       return {
         success: true,
         data: {
           stats: {
-            totalTenants: 0,
-            activeTenants: 0,
-            totalIFlows: 0,
-            activeIFlows: 0,
-            stoppedIFlows: 0,
-            errorIFlows: 0,
-            totalExecutions: 0,
-            successfulExecutions: 0,
-            failedExecutions: 0,
-            successRate: 0,
-            totalAIExecutions: 0,
-            totalTokensUsed: 0,
+            totalTenants: 0, activeTenants: 0, totalIFlows: 0,
+            activeIFlows: 0, stoppedIFlows: 0, errorIFlows: 0,
+            totalExecutions: 0, successfulExecutions: 0, failedExecutions: 0,
+            successRate: 0, totalAIExecutions: 0, totalTokensUsed: 0,
           },
-          tenants: [],
-          recentExecutions: [],
-          iFlowStatuses: [],
-          aiAgentUsage: [],
-          recentActivity: [],
-          executionTrend: [],
+          tenants: [], recentExecutions: [], iFlowStatuses: [],
+          aiAgentUsage: [], recentActivity: [], executionTrend: [],
         },
       };
     }
 
-    // Get AI agent usage
-    const aiStats = await convex.query(api.aiAgents.getUsageStats, { 
-      userId: currentUser.id as any 
-    }) || { totalExecutions: 0, totalTokensUsed: 0, byAgentType: {} };
+    const accessibleTenantIds = memberships.map((m) => m.tenantId);
+
+    // Get AI agent usage stats
+    const aiStatsRaw = await prisma.aIAgentExecution.groupBy({
+      by: ["agentType"],
+      where: { userId: currentUser.id },
+      _count: { agentType: true },
+      _sum: { tokensUsed: true },
+    });
+    const totalAIExecutions = await prisma.aIAgentExecution.count({
+      where: { userId: currentUser.id },
+    });
+    const totalTokensUsed = await prisma.aIAgentExecution.aggregate({
+      where: { userId: currentUser.id },
+      _sum: { tokensUsed: true },
+    });
 
     // Process each tenant
     const tenantData: TenantSummary[] = [];
@@ -137,31 +135,51 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
     let totalExecutions = 0;
     let successfulExecutions = 0;
     let failedExecutions = 0;
-    
-    // Aggregate execution trend data by date
+
     const executionTrendMap = new Map<string, { success: number; failed: number }>();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    for (const tenant of userTenants) {
-      const tenantDetail = tenant as any;
-      
-      // Get iFlow count and stats
-      const iflowStats = await convex.query(api.iflows.getStatsByTenant, { 
-        tenantId: tenantDetail._id 
-      });
-      
-      // Get execution stats
-      const execStats = await convex.query(api.iflows.getExecutionStatsByTenant, { 
-        tenantId: tenantDetail._id,
-        daysBack: 30,
-      });
-      
-      // Get iFlows for status summary - prioritize STARTED (active) iFlows
-      const iflows = await convex.query(api.iflows.listByTenant, { 
-        tenantId: tenantDetail._id,
-        limit: 20,
+    for (const membership of memberships) {
+      const tenant = membership.tenant;
+
+      // Get iFlow status counts
+      const statusCounts = await prisma.iFlow.groupBy({
+        by: ["status"],
+        where: { tenantId: tenant.id },
+        _count: { status: true },
       });
 
-      // Sort to prioritize STARTED iFlows first
+      const iflowTotal = statusCounts.reduce((sum, s) => sum + s._count.status, 0);
+      const started = statusCounts.find((s) => s.status === "STARTED")?._count.status ?? 0;
+      const stopped = statusCounts.find((s) => s.status === "STOPPED")?._count.status ?? 0;
+      const error = statusCounts.find((s) => s.status === "ERROR")?._count.status ?? 0;
+
+      // Get execution stats for last 30 days
+      const tenantIFlowIds = await prisma.iFlow.findMany({
+        where: { tenantId: tenant.id },
+        select: { id: true },
+      });
+      const iFlowIds = tenantIFlowIds.map((i) => i.id);
+
+      const execCounts = iFlowIds.length > 0
+        ? await prisma.iFlowExecution.groupBy({
+            by: ["status"],
+            where: { iFlowId: { in: iFlowIds }, startTime: { gte: thirtyDaysAgo } },
+            _count: { status: true },
+          })
+        : [];
+
+      const tenantTotalExecs = execCounts.reduce((sum, s) => sum + s._count.status, 0);
+      const tenantCompleted = execCounts.find((s) => s.status === "COMPLETED")?._count.status ?? 0;
+      const tenantFailed = execCounts.find((s) => s.status === "FAILED")?._count.status ?? 0;
+
+      // Get iFlows for status summary - prioritize STARTED
+      const iflows = await prisma.iFlow.findMany({
+        where: { tenantId: tenant.id },
+        take: 20,
+        orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+      });
+
       const sortedIFlows = [...iflows].sort((a, b) => {
         if (a.status === "STARTED" && b.status !== "STARTED") return -1;
         if (a.status !== "STARTED" && b.status === "STARTED") return 1;
@@ -169,43 +187,29 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
       });
 
       tenantData.push({
-        id: tenantDetail._id,
-        name: tenantDetail.name,
-        slug: tenantDetail.slug,
-        status: tenantDetail.status,
-        isConnected: tenantDetail.isConnected,
-        iFlowCount: iflowStats.total,
-        lastSyncAt: tenantDetail.lastSyncAt ? new Date(tenantDetail.lastSyncAt) : null,
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        status: tenant.status,
+        isConnected: tenant.isConnected,
+        iFlowCount: iflowTotal,
+        lastSyncAt: tenant.lastSyncAt,
       });
 
-      totalIFlows += iflowStats.total;
-      activeIFlows += iflowStats.started;
-      stoppedIFlows += iflowStats.stopped;
-      errorIFlows += iflowStats.error;
+      totalIFlows += iflowTotal;
+      activeIFlows += started;
+      stoppedIFlows += stopped;
+      errorIFlows += error;
+      totalExecutions += tenantTotalExecs;
+      successfulExecutions += tenantCompleted;
+      failedExecutions += tenantFailed;
 
-      totalExecutions += execStats.total;
-      successfulExecutions += execStats.completed;
-      failedExecutions += execStats.failed;
-
-      // Aggregate execution trend data from this tenant
-      if (execStats.byDate) {
-        for (const [date, data] of Object.entries(execStats.byDate)) {
-          const existing = executionTrendMap.get(date) || { success: 0, failed: 0 };
-          const dateData = data as { completed: number; failed: number };
-          executionTrendMap.set(date, {
-            success: existing.success + (dateData.completed || 0),
-            failed: existing.failed + (dateData.failed || 0),
-          });
-        }
-      }
-
-      // Add iFlow statuses - include up to 10 from each tenant, prioritizing active ones
       for (const iflow of sortedIFlows.slice(0, 10)) {
         allIFlowStatuses.push({
           name: iflow.name,
           status: iflow.status,
-          tenantName: tenantDetail.name,
-          lastExecutedAt: iflow.lastExecutedAt ? new Date(iflow.lastExecutedAt) : null,
+          tenantName: tenant.name,
+          lastExecutedAt: iflow.lastExecutedAt,
           executionCount: 0,
           successCount: 0,
           failedCount: 0,
@@ -213,44 +217,53 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
       }
     }
 
-    // Sort all iFlow statuses to prioritize STARTED ones globally
     allIFlowStatuses.sort((a, b) => {
       if (a.status === "STARTED" && b.status !== "STARTED") return -1;
       if (a.status !== "STARTED" && b.status === "STARTED") return 1;
       return 0;
     });
 
-    // Get recent executions
-    const recentExecs = await convex.query(api.iflows.getRecentExecutionsForTenants, {
-      tenantIds: accessibleTenantIds as any[],
-      limit: 10,
+    // Get recent executions across all accessible tenants
+    const allIFlowIds = await prisma.iFlow.findMany({
+      where: { tenantId: { in: accessibleTenantIds } },
+      select: { id: true, name: true, tenantId: true },
     });
+    const iFlowMap = new Map(allIFlowIds.map((i) => [i.id, i]));
+    const tenantMap = new Map(memberships.map((m) => [m.tenantId, m.tenant.name]));
 
-    // Get tenant names map
-    const tenantMap = new Map(userTenants.map((t: any) => [t._id, t.name]));
+    const recentExecs = allIFlowIds.length > 0
+      ? await prisma.iFlowExecution.findMany({
+          where: { iFlowId: { in: allIFlowIds.map((i) => i.id) } },
+          take: 10,
+          orderBy: { startTime: "desc" },
+        })
+      : [];
 
-    const recentExecutions: RecentExecution[] = recentExecs.map((e: any) => ({
-      id: e._id,
-      messageId: e.messageId,
-      status: e.status,
-      startTime: new Date(e.startTime),
-      duration: e.duration ?? null,
-      iFlowName: e.iFlowName || "Unknown",
-      iFlowId: e.iFlowId,
-      tenantName: tenantMap.get(e.tenantId) || "Unknown",
-      errorCategory: e.errorCategory ?? null,
-    }));
+    const recentExecutions: RecentExecution[] = recentExecs.map((e) => {
+      const iflow = iFlowMap.get(e.iFlowId);
+      return {
+        id: e.id,
+        messageId: e.messageId,
+        status: e.status,
+        startTime: e.startTime,
+        duration: e.duration ?? null,
+        iFlowName: iflow?.name || "Unknown",
+        iFlowId: e.iFlowId,
+        tenantName: iflow ? (tenantMap.get(iflow.tenantId) || "Unknown") : "Unknown",
+        errorCategory: e.errorCategory ?? null,
+      };
+    });
 
     const successRate = totalExecutions > 0 ? (successfulExecutions / totalExecutions) * 100 : 0;
 
-    // Format AI agent usage - byAgentType returns { count, tokens } for getUsageStats
-    const aiAgentUsage: AIAgentUsage[] = Object.entries(aiStats.byAgentType || {}).map(([agentType, count]: [string, any]) => ({
-      agentType,
-      count: typeof count === 'number' ? count : (count?.count || 0),
-      tokensUsed: typeof count === 'number' ? 0 : (count?.tokensUsed || count?.tokens || 0),
+    // Format AI agent usage
+    const aiAgentUsage: AIAgentUsage[] = aiStatsRaw.map((s) => ({
+      agentType: s.agentType,
+      count: s._count.agentType,
+      tokensUsed: s._sum.tokensUsed ?? 0,
     }));
 
-    // Build execution trend from aggregated stats
+    // Build execution trend (last 7 days)
     const executionTrend: { date: string; success: number; failed: number }[] = [];
     for (let i = 6; i >= 0; i--) {
       const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
@@ -284,8 +297,8 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
           successfulExecutions,
           failedExecutions,
           successRate,
-          totalAIExecutions: aiStats.totalExecutions || 0,
-          totalTokensUsed: aiStats.totalTokensUsed || 0,
+          totalAIExecutions,
+          totalTokensUsed: totalTokensUsed._sum.tokensUsed ?? 0,
         },
         tenants: tenantData,
         recentExecutions,

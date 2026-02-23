@@ -10,13 +10,13 @@
  * Model: gemini-2.5-flash-lite (prototype)
  */
 
-import { generateText, type LanguageModel } from 'ai';
-import { google } from '@ai-sdk/google';
+import type { LanguageModel } from 'ai';
 import { BaseAgent } from '../agent-base';
 import type { PipelineContext, TenantCapabilities } from '../pipeline-state';
 import { createIFlowDesignPrompt, IFLOW_CREATOR_SYSTEM_PROMPT } from '@/lib/ai/prompts-iflow-creator';
 import type { IFlowDescription, IFlowDesign } from '@/components/ai/v2/specialized/iflow-creator/types';
 import { cleanAIJson, fixUnescapedQuotesStateMachine, tryFixAtPosition } from '../utils/json-cleaner';
+import { runText } from '@/lib/ai/runtime/text';
 
 // ============================================================================
 // Input / Output Types
@@ -38,7 +38,7 @@ export interface ArchitectOutput {
 
 export class ArchitectAgent extends BaseAgent<ArchitectInput, ArchitectOutput> {
   readonly name = 'ARCHITECT' as const;
-  readonly model: LanguageModel = google('gemini-2.5-flash-lite');
+  readonly model: LanguageModel | null = null;
   readonly description = 'Generates iFlow design from natural language requirements';
 
   protected async run(
@@ -51,13 +51,14 @@ export class ArchitectAgent extends BaseAgent<ArchitectInput, ArchitectOutput> {
     const userPrompt = buildEnhancedPrompt(description, tenantCapabilities);
 
     // Call AI model
-    const { text, usage } = await generateText({
-      model: this.model,
+    const result = await runText({
       system: IFLOW_CREATOR_SYSTEM_PROMPT,
       prompt: userPrompt,
-      maxOutputTokens: 8000,
+      maxTokens: 8000,
       temperature: 0.3, // Low temperature for more deterministic design
+      modelKind: 'orchestrator',
     });
+    const text = result.text;
 
     // Log raw response stats for debugging
     console.log(`[ArchitectAgent] Raw response: ${text.length} chars, has markdown: ${text.includes('\`\`\`')}, has newlines: ${text.includes('\\n')}`);
@@ -72,7 +73,7 @@ export class ArchitectAgent extends BaseAgent<ArchitectInput, ArchitectOutput> {
     // Extract rationale (if the AI included it)
     const rationale = extractRationale(text, design);
 
-    const tokensUsed = (usage?.totalTokens ?? 0);
+    const tokensUsed = result.usage.totalTokens ?? 0;
 
     return {
       output: { design, rationale },

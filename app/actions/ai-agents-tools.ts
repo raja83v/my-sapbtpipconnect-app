@@ -8,11 +8,10 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { generateText } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runText } from "@/lib/ai/runtime/text";
+import { runWithTools } from "@/lib/ai/runtime/tools";
 import * as prompts from "@/lib/ai/prompts";
 import { revalidatePath } from "next/cache";
 import type { AIAgentType } from "@/lib/ai/agent-types";
@@ -104,7 +103,7 @@ async function buildToolContext(
   const contextParts: string[] = [];
 
   // Get tenant information
-  const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+  const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
   if (tenant) {
     contextParts.push(`**Current Tenant:** ${tenant.name}`);
     contextParts.push(`**Status:** ${tenant.status}`);
@@ -113,7 +112,7 @@ async function buildToolContext(
 
   // Get specific iFlow if provided
   if (iflowId) {
-    const iflow = await convex.query(api.iflows.getById, { id: iflowId as any });
+    const iflow = await prisma.iFlow.findUnique({ where: { id: iflowId } });
     if (iflow) {
       contextParts.push(`**Selected iFlow:** ${iflow.name} (${iflow.iFlowId})`);
       contextParts.push(`**Status:** ${iflow.status}`);
@@ -406,9 +405,8 @@ export async function executeAgentWithTools(
     } = params;
 
     // Validate tenant access
-    const membership = await convex.query(api.tenants.getMembership, {
-      tenantId: tenantId as any,
-      userId: currentUser.id as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: { userId_tenantId: { userId: currentUser.id, tenantId } },
     });
 
     if (!membership) {
@@ -416,9 +414,7 @@ export async function executeAgentWithTools(
     }
 
     // Get tenant
-    const tenant = await convex.query(api.tenants.getById, {
-      id: tenantId as any
-    });
+    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
@@ -432,14 +428,17 @@ export async function executeAgentWithTools(
       : getBaseSystemPrompt(agentType);
 
     // Create execution record
-    const executionId = await convex.mutation(api.aiAgentMutations.create, {
-      userId: currentUser.id as any,
-      agentType: agentType,
-      inputPrompt: prompt,
-      tenantId: tenantId as any,
-      iFlowId: iflowId as any,
-      status: "RUNNING",
+    const execution = await prisma.aIAgentExecution.create({
+      data: {
+        userId: currentUser.id,
+        agentType: agentType,
+        input: prompt,
+        tenantId: tenantId,
+        iFlowId: iflowId,
+        status: "RUNNING",
+      },
     });
+    const executionId = execution.id;
 
     try {
       // Build the full prompt
@@ -459,8 +458,7 @@ export async function executeAgentWithTools(
 
         if (!sapClient) {
           // Fall back to non-tool execution
-          result = await generateText({
-            model: aiModel,
+          result = await runText({
             system: systemPrompt,
             prompt: fullPrompt,
             temperature: 0.7,
@@ -470,8 +468,7 @@ export async function executeAgentWithTools(
           const tools = createAgentTools(sapClient as SAPCPIClient, currentUser.id, tenantId);
 
           // Execute with tools
-          result = await generateText({
-            model: aiModel,
+          result = await runWithTools({
             system: systemPrompt,
             prompt: fullPrompt,
             temperature: 0.7,
@@ -479,28 +476,20 @@ export async function executeAgentWithTools(
           });
 
           // Collect tool call results
-          if (result.steps) {
-            for (const step of result.steps) {
-              if (step.toolCalls) {
-                for (const toolCall of step.toolCalls) {
-                  const toolResult = step.toolResults?.find(
-                    (r: { toolCallId: string; result?: unknown }) => r.toolCallId === toolCall.toolCallId
-                  );
-                  toolCalls.push({
-                    toolName: toolCall.toolName,
-                    parameters: (toolCall as { args?: Record<string, unknown> }).args as Record<string, unknown> || {},
-                    result: (toolResult as { result?: unknown })?.result,
-                    cached: ((toolResult as { result?: { cached?: boolean } })?.result as { cached?: boolean })?.cached,
-                  });
-                }
-              }
+          if (result.toolCalls) {
+            for (const call of result.toolCalls) {
+              toolCalls.push({
+                toolName: call.toolName,
+                parameters: call.args as Record<string, unknown> || {},
+                result: call.result,
+                cached: ((call.result as { cached?: boolean } | undefined)?.cached),
+              });
             }
           }
         }
       } else {
         // Execute without tools
-        result = await generateText({
-          model: aiModel,
+        result = await runText({
           system: systemPrompt,
           prompt: fullPrompt,
           temperature: 0.7,
@@ -511,15 +500,19 @@ export async function executeAgentWithTools(
       const duration = Date.now() - startTime;
 
       // Estimate tokens used
-      const tokensUsed = result.usage?.totalTokens
+      const tokensUsed = result.usage.totalTokens
         ?? Math.ceil((systemPrompt.length + fullPrompt.length + response.length) / 4);
 
       // Update execution record
-      await convex.mutation(api.aiAgentMutations.complete, {
-        executionId,
-        response,
-        tokensUsed: tokensUsed as number,
-        duration,
+      await prisma.aIAgentExecution.update({
+        where: { id: executionId },
+        data: {
+          status: "COMPLETED",
+          output: response,
+          tokensUsed: tokensUsed as number,
+          duration,
+          success: true,
+        },
       });
 
       revalidatePath("/dashboard/ai-agents");
@@ -536,10 +529,13 @@ export async function executeAgentWithTools(
       };
     } catch (aiError) {
       // Update execution record with error
-      await convex.mutation(api.aiAgentMutations.fail, {
-        executionId,
-        errorMessage: aiError instanceof Error ? aiError.message : "AI generation failed",
-        duration: Date.now() - startTime,
+      await prisma.aIAgentExecution.update({
+        where: { id: executionId },
+        data: {
+          status: "FAILED",
+          errorMessage: aiError instanceof Error ? aiError.message : "AI generation failed",
+          duration: Date.now() - startTime,
+        },
       });
 
       throw aiError;
@@ -652,9 +648,8 @@ export async function sendChatMessageWithTools(params: {
     } = params;
 
     // Validate tenant access
-    const membership = await convex.query(api.tenants.getMembership, {
-      tenantId: tenantId as any,
-      userId: currentUser.id as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: { userId_tenantId: { userId: currentUser.id, tenantId } },
     });
 
     if (!membership) {
@@ -662,9 +657,7 @@ export async function sendChatMessageWithTools(params: {
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, {
-      id: tenantId as any,
-    });
+    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -767,8 +760,7 @@ ${message}`;
         // Create tools for Vercel AI SDK
         const tools = createChatTools(sapClient as SAPCPIClient, currentUser.id, tenantId);
 
-        result = await generateText({
-          model: aiModel,
+        result = await runWithTools({
           system: systemPrompt,
           prompt: fullPrompt,
           temperature: 0.7,
@@ -776,36 +768,30 @@ ${message}`;
         });
 
         // Collect tool call results
-        if (result.steps) {
-          for (const step of result.steps) {
-            if (step.toolCalls) {
-              for (const toolCall of step.toolCalls) {
-                const toolResult = step.toolResults?.find(
-                  (r: { toolCallId: string }) => r.toolCallId === toolCall.toolCallId
-                );
-
-                // The tool result is the direct return value from the execute function
-                // It's stored in the 'result' property of the toolResult object
-                const resultData = (toolResult as { result?: { success?: boolean; data?: unknown; error?: string; duration?: number; cached?: boolean } } | undefined)?.result;
-                const toolCallRecord = {
-                  id: toolCall.toolCallId,
-                  toolName: toolCall.toolName,
-                  parameters: (toolCall as { args?: Record<string, unknown> }).args as Record<string, unknown> || {},
-                  status: resultData?.success ? "completed" as const : "failed" as const,
-                  result: resultData?.data,
-                  error: resultData?.error,
-                  duration: resultData?.duration,
-                  cached: resultData?.cached,
-                };
-                toolCalls.push(toolCallRecord);
-              }
-            }
+        if (result.toolCalls) {
+          for (const call of result.toolCalls) {
+            const resultData = call.result as {
+              success?: boolean;
+              data?: unknown;
+              error?: string;
+              duration?: number;
+              cached?: boolean;
+            } | undefined;
+            toolCalls.push({
+              id: call.toolCallId,
+              toolName: call.toolName,
+              parameters: call.args as Record<string, unknown> || {},
+              status: resultData?.success ? "completed" : "failed",
+              result: resultData?.data,
+              error: resultData?.error,
+              duration: resultData?.duration,
+              cached: resultData?.cached,
+            });
           }
         }
       } else {
         // Fallback to non-tool execution
-        result = await generateText({
-          model: aiModel,
+        result = await runText({
           system: systemPrompt,
           prompt: fullPrompt,
           temperature: 0.7,
@@ -813,8 +799,7 @@ ${message}`;
       }
     } else {
       // Execute without tools
-      result = await generateText({
-        model: aiModel,
+      result = await runText({
         system: systemPrompt,
         prompt: fullPrompt,
         temperature: 0.7,
@@ -825,21 +810,24 @@ ${message}`;
     const duration = Date.now() - startTime;
 
     // Calculate tokens
-    const tokensUsed = result.usage?.totalTokens
+    const tokensUsed = result.usage.totalTokens
       ?? Math.ceil((message.length + response.length) / 4);
 
     // Track execution
     try {
-      await convex.mutation(api.aiAgentMutations.trackExecution, {
-        userId: currentUser.id as any,
-        agentType: "GENERAL_ASSISTANT",
-        tenantId: tenantId || undefined,
-        iflowId: iflowId || undefined,
-        input: message,
-        output: response,
-        tokensUsed: tokensUsed as number,
-        duration,
-        success: true,
+      await prisma.aIAgentExecution.create({
+        data: {
+          userId: currentUser.id,
+          agentType: "GENERAL_ASSISTANT",
+          tenantId: tenantId || undefined,
+          iFlowId: iflowId || undefined,
+          input: message,
+          output: response,
+          tokensUsed: tokensUsed as number,
+          duration,
+          success: true,
+          status: "COMPLETED",
+        },
       });
     } catch (trackError) {
       console.error("Failed to track execution:", trackError);

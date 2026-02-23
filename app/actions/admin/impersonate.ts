@@ -1,10 +1,8 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { convex, api } from "@/lib/convex";
-import { revalidatePath } from "next/cache";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
@@ -15,11 +13,7 @@ async function checkAdmin(): Promise<ActionResult<boolean>> {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
-    const user = await convex.query(api.users.getById, { 
-      id: currentUser.id as Id<"users">
-    });
-
-    if (user?.role !== "admin") {
+    if (currentUser.role !== "admin") {
       return { success: false, error: "Unauthorized - Admin access required" };
     }
 
@@ -57,12 +51,11 @@ export async function getImpersonationStatus(): Promise<
       };
     }
 
-    // Get the session from database to check impersonatedBy field
-    const sessions = await convex.query(api.users.getActiveSessions, { 
-      userId: currentUser.id as Id<"users">
+    // Get the latest session to check impersonatedBy field
+    const latestSession = await prisma.session.findFirst({
+      where: { userId: currentUser.id },
+      orderBy: { createdAt: "desc" },
     });
-
-    const latestSession = sessions[0];
 
     if (!latestSession?.impersonatedBy) {
       return {
@@ -72,13 +65,13 @@ export async function getImpersonationStatus(): Promise<
     }
 
     // Get user details
-    const user = await convex.query(api.users.getById, { 
-      id: currentUser.id as Id<"users">
+    const user = await prisma.user.findUnique({
+      where: { id: currentUser.id },
     });
 
     // Get admin user details
-    const adminUser = await convex.query(api.users.getById, { 
-      id: latestSession.impersonatedBy as Id<"users">
+    const adminUser = await prisma.user.findUnique({
+      where: { id: latestSession.impersonatedBy },
     });
 
     return {
@@ -86,13 +79,13 @@ export async function getImpersonationStatus(): Promise<
       data: {
         isImpersonating: true,
         impersonatedUser: user ? {
-          id: user._id,
+          id: user.id,
           email: user.email,
           name: user.name || null,
           image: user.image || null,
         } : undefined,
         adminUser: adminUser ? {
-          id: adminUser._id,
+          id: adminUser.id,
           email: adminUser.email,
           name: adminUser.name || null,
         } : undefined,
@@ -111,8 +104,8 @@ export async function impersonateUser(userId: string): Promise<ActionResult> {
 
   try {
     // Check if target user exists
-    const targetUser = await convex.query(api.users.getById, { 
-      id: userId as Id<"users">
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
     });
 
     if (!targetUser) {
@@ -138,11 +131,11 @@ export async function impersonateUser(userId: string): Promise<ActionResult> {
       return { success: false, error: "Cannot impersonate yourself" };
     }
 
-    // Note: Impersonation requires auth provider integration
-    // This is a placeholder - actual implementation depends on Clerk impersonation feature
-    return { 
-      success: false, 
-      error: "Impersonation requires Clerk integration - feature not yet implemented" 
+    // TODO: Implement JWT-based impersonation
+    // This would create a new session for the target user with the admin's ID in impersonatedBy
+    return {
+      success: false,
+      error: "Impersonation feature not yet implemented for custom JWT auth",
     };
   } catch (error: any) {
     console.error("Error impersonating user:", error);
@@ -162,10 +155,10 @@ export async function stopImpersonating(): Promise<ActionResult> {
       return { success: false, error: "Not currently impersonating" };
     }
 
-    // Note: Requires auth provider integration
-    return { 
-      success: false, 
-      error: "Stop impersonation requires Clerk integration - feature not yet implemented" 
+    // TODO: Implement stop impersonation
+    return {
+      success: false,
+      error: "Stop impersonation feature not yet implemented for custom JWT auth",
     };
   } catch (error: any) {
     console.error("Error stopping impersonation:", error);

@@ -52,12 +52,10 @@ export class BPMN2Generator {
 
     /**
      * Generate the cmdVariantUri property for a callActivity element.
-     * SAP CPI uses this to look up the component's property sheet metadata.
-     * Without it, clicking an element shows "Unable to render property sheet. Metadata not available or not registered".
-     * Note: Flow step cmdVariantUri does NOT include version — SAP CPI resolves it automatically.
+     * For FlowstepVariant we include a 3-part version suffix (x.y.z) to match SAP designer metadata lookup.
      */
-    private getCmdVariantUri(subActivityType: string, _componentVersion: string): string {
-        return `ctype::FlowstepVariant/cname::${subActivityType}`;
+    private getCmdVariantUri(subActivityType: string, componentVersion: string): string {
+        return `ctype::FlowstepVariant/cname::${subActivityType}/version::${this.toThreePartVersion(componentVersion)}`;
     }
 
     /**
@@ -68,6 +66,17 @@ export class BPMN2Generator {
                     <key>cmdVariantUri</key>
                     <value>${this.getCmdVariantUri(subActivityType, componentVersion)}</value>
                 </ifl:property>`;
+    }
+
+    /**
+     * Convert "1.6" -> "1.6.0", keep "1.0.3" as-is.
+     */
+    private toThreePartVersion(version: string): string {
+        const raw = (version || '1.0').trim();
+        const parts = raw.split('.');
+        if (parts.length >= 3) return raw;
+        if (parts.length === 2) return `${parts[0]}.${parts[1]}.0`;
+        return `${parts[0] || '1'}.0.0`;
     }
 
     /**
@@ -423,35 +432,22 @@ export class BPMN2Generator {
                     case 'log':
                     case 'trace':
                     case 'error':
-                        if (!existsInArray(normalized.contentModifiers!, step.id)) {
-                            const headerAction = step.type === 'error' ? 'Create' : 'Add';
-                            normalized.contentModifiers!.push({ 
-                                id: step.id, 
-                                name: step.name, 
-                                headerAction,
-                                headerName: step.type === 'error' ? 'CamelError' : 'Log',
-                                headerValue: step.name || config?.message || 'Log entry',
-                                ...config 
-                            });
+                        if (!existsInArray(normalized.scripts!, step.id)) {
+                            normalized.scripts!.push(this.createGeneratedScriptFromStep(
+                                step.id,
+                                step.name,
+                                String(step.type),
+                                config
+                            ));
                         }
                         break;
                     default:
-                        // For totally unknown types, create as content modifier to ensure flow continuity
-                        console.warn(`[BPMN2Generator] Unknown step type "${step.type}" for step "${step.id}", creating as content modifier`);
-                        if (!existsInArray(normalized.contentModifiers!, step.id)) {
-                            normalized.contentModifiers!.push({ 
-                                id: step.id, 
-                                name: step.name || `${step.type} Step`,
-                                headerAction: 'Add',
-                                headerName: 'ProcessedBy',
-                                headerValue: step.id,
-                                ...config 
-                            });
-                        }
+                        // Skip unknown step types to avoid generating unsupported components.
+                        console.warn(`[BPMN2Generator] Unknown step type "${step.type}" for step "${step.id}", skipping`);
                 }
             }
         }
-        
+
         // Also extract steps from localProcesses' internal steps
         if (normalized.localProcesses) {
             for (const localProcess of normalized.localProcesses) {
@@ -483,6 +479,42 @@ export class BPMN2Generator {
     }
 
     /**
+     * Build a conservative Groovy script step from non-portable/unsupported step types.
+     */
+    private createGeneratedScriptFromStep(
+        id: string,
+        name: string,
+        sourceType: string,
+        config?: Record<string, unknown>
+    ): ScriptConfig {
+        const safeName = (name || id || 'GeneratedStep').trim();
+        const safePathId = (id || safeName || 'generated_step')
+            .replace(/[^a-zA-Z0-9._-]/g, '_');
+        const summary = config ? this.escapeXml(JSON.stringify(config).slice(0, 300)) : '';
+
+        const scriptContent = `import com.sap.gateway.ip.core.customdev.util.Message
+
+def Message processData(Message message) {
+    def body = message.getBody(String)
+    // Generated from unsupported/non-portable step type: ${sourceType}
+    // Original step: ${safeName}
+    ${summary ? `// Original config (truncated): ${summary}` : '// No original config provided'}
+    message.setBody(body)
+    return message
+}`;
+
+        return {
+            id,
+            name: safeName,
+            type: 'groovy',
+            purpose: `Auto-converted from ${sourceType}`,
+            scriptPath: `src/main/resources/script/${safePathId}.groovy`,
+            scriptContent,
+            complexity: 'low',
+        };
+    }
+
+    /**
      * Public access to sanitizeDesign for pre-validation in the pipeline orchestrator.
      * Fixes invalid references (e.g., router targets pointing to non-existent elements)
      * and normalizes the design structure.
@@ -502,9 +534,19 @@ export class BPMN2Generator {
 
         // Fix router targets that reference non-existent elements
         if (normalized.routers) {
-            normalized.routers = normalized.routers.map(router => ({
-                ...router,
-                routingConditions: router.routingConditions ? router.routingConditions.map(condition => {
+            normalized.routers = normalized.routers
+                // Drop trivial routers that do not provide real branching logic.
+                .filter(router => {
+                    const routeCount = router.routingConditions?.length ?? 0;
+                    if (routeCount < 2) {
+                        console.warn(`[BPMN2Generator] Removing trivial router "${router.id}" (only ${routeCount} route condition)`);
+                        return false;
+                    }
+                    return true;
+                })
+                .map(router => ({
+                    ...router,
+                    routingConditions: router.routingConditions ? router.routingConditions.map(condition => {
                     if (!validIds.has(condition.targetId)) {
                         console.warn(`[BPMN2Generator] Router condition "${condition.name}" targets non-existent element "${condition.targetId}", redirecting to EndEvent_1`);
                         return { ...condition, targetId: 'EndEvent_1' };
@@ -1659,15 +1701,7 @@ ${this.generateAdapterProperties(sanitizedAdapter)}
             design.encryptors.forEach(enc => allElements.push({ id: enc.id, type: 'encryptor' }));
         }
 
-        // If no elements, add a simple content modifier with consistent ID
-        // IMPORTANT: Must match the ID used in generateBPMNDiagram for the fallback shape
-        if (allElements.length === 0) {
-            const contentModifierId = 'CallActivity_Default';
-            activities.push(this.generateContentModifier(contentModifierId, 'Content Modifier', `SequenceFlow_${sequenceCounter}`, `SequenceFlow_${sequenceCounter + 1}`));
-            sequenceFlows.push(`        <bpmn2:sequenceFlow id="SequenceFlow_${sequenceCounter}" sourceRef="${previousId}" targetRef="${contentModifierId}"/>`);
-            previousId = contentModifierId;
-            sequenceCounter++;
-        }
+        // If no process elements exist, connect start event directly to end event.
 
         // Generate activities based on element type
         for (const element of allElements) {
@@ -1885,6 +1919,10 @@ ${allProcessContent.join('\n')}
      * Generate a content modifier activity
      */
     private generateContentModifier(id: string, name: string, incoming: string, outgoing: string): string {
+        const emptyCm: ContentModifierConfig = { id, name };
+        const tableProps = this.generateContentModifierTableProperties(emptyCm);
+        const wrapContent = '';
+
         return `        <bpmn2:callActivity id="${id}" name="${this.escapeXml(name)}">
             <bpmn2:extensionElements>
                 <ifl:property>
@@ -1893,21 +1931,22 @@ ${allProcessContent.join('\n')}
                 </ifl:property>
                 <ifl:property>
                     <key>subActivityType</key>
-                    <value>ContentModifier</value>
+                    <value>Enricher</value>
                 </ifl:property>
                 <ifl:property>
-                    <key>body.type</key>
-                    <value>static</value>
+                    <key>bodyType</key>
+                    <value>constant</value>
                 </ifl:property>
+${tableProps}
                 <ifl:property>
-                    <key>body.value</key>
-                    <value></value>
+                    <key>wrapContent</key>
+                    <value>${wrapContent}</value>
                 </ifl:property>
                 <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('ContentModifier')}</value>
                 </ifl:property>
-${this.generateCmdVariantProperty('ContentModifier', this.getComponentVersion('ContentModifier'))}
+${this.generateCmdVariantProperty('Enricher', this.getComponentVersion('ContentModifier'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
@@ -1922,10 +1961,8 @@ ${this.generateCmdVariantProperty('ContentModifier', this.getComponentVersion('C
             : script.type === 'javascript' ? 'JavaScriptScript'
                 : 'XSLTScript';
 
-        // Use scriptContent if available, otherwise fall back to scriptPath
-        const scriptValue = script.scriptContent
-            ? this.escapeXml(script.scriptContent)
-            : (script.scriptPath ? this.escapeXml(script.scriptPath) : '');
+        // SAP CPI expects a resource path here, not inline script content.
+        const scriptValue = this.escapeXml(this.normalizeScriptPath(script));
 
         return `        <bpmn2:callActivity id="${script.id}" name="${this.escapeXml(script.name)}">
             <bpmn2:extensionElements>
@@ -1958,30 +1995,42 @@ ${this.generateCmdVariantProperty(scriptType, this.getComponentVersion('Script')
      * For AI-generated flows, we include a placeholder that shows what mapping is needed
      */
     private generateMapping(mapping: MappingConfig, incoming: string, outgoing: string): string {
+        if (mapping.type === 'ContentModifier') {
+            return this.generateContentModifier(mapping.id, mapping.name, incoming, outgoing);
+        }
+        if (mapping.type === 'Enricher') {
+            return this.generateContentModifier(mapping.id, mapping.name, incoming, outgoing);
+        }
+
         // For MessageMapping, we need to specify the mapping resource
         // The resource file needs to be created separately
         const isMessageMapping = mapping.type === 'MessageMapping';
-        const resourceName = isMessageMapping ? `${mapping.id}_mapping` : '';
+        const isXsltMapping = mapping.type === 'XSLTMapping';
+        const subType = isXsltMapping ? 'XSLTMapping' : 'MessageMapping';
+        const resourceName = `${mapping.id}_mapping`;
         
         // Build property list for mappings
         let mappingProperties = `                <ifl:property>
                     <key>activityType</key>
-                    <value>Enricher</value>
+                    <value>Mapping</value>
                 </ifl:property>
                 <ifl:property>
                     <key>subActivityType</key>
-                    <value>${isMessageMapping ? 'MessageMapping' : 'ContentModifier'}</value>
+                    <value>${subType}</value>
                 </ifl:property>
                 <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('MessageMapping')}</value>
                 </ifl:property>
-${this.generateCmdVariantProperty(isMessageMapping ? 'MessageMapping' : 'ContentModifier', this.getComponentVersion('MessageMapping'))}`;
+${this.generateCmdVariantProperty(subType, this.getComponentVersion('MessageMapping'))}`;
         
         // For MessageMapping, add resource reference if we have mapping details
-        if (isMessageMapping) {
+        if (isMessageMapping || isXsltMapping) {
             // Include mapping resource name - this helps SAP CPI know what resource to look for
             // The actual .mmap file needs to be created separately
+            const mappingPath = isXsltMapping
+                ? `src/main/resources/mapping/${resourceName}`
+                : `mapping/${resourceName}.mmap`;
             mappingProperties += `
                 <ifl:property>
                     <key>mappingname</key>
@@ -1989,11 +2038,11 @@ ${this.generateCmdVariantProperty(isMessageMapping ? 'MessageMapping' : 'Content
                 </ifl:property>
                 <ifl:property>
                     <key>mappingpath</key>
-                    <value>mapping/${resourceName}.mmap</value>
+                    <value>${mappingPath}</value>
                 </ifl:property>
                 <ifl:property>
                     <key>mappingType</key>
-                    <value>MessageMapping</value>
+                    <value>${subType}</value>
                 </ifl:property>`;
                 
             // Add source/target type hints if available
@@ -2027,6 +2076,41 @@ ${mappingProperties}
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
         </bpmn2:callActivity>`;
+    }
+
+    /**
+     * Ensure script reference points to the path used inside the ZIP package.
+     */
+    private normalizeScriptPath(script: ScriptConfig): string {
+        const extension = script.type === 'javascript' ? '.js'
+            : script.type === 'xslt' ? '.xslt'
+                : '.groovy';
+
+        const fallbackFileName = script.name.endsWith(extension)
+            ? script.name
+            : `${script.name}${extension}`;
+
+        const rawPath = (script.scriptPath || fallbackFileName).trim().replace(/\\/g, '/');
+        if (!rawPath) {
+            return `script/${fallbackFileName}`;
+        }
+
+        // SAP CPI BPMN2 expects bundle-relative paths (e.g., script/name.groovy)
+        // NOT full ZIP entry paths (src/main/resources/script/name.groovy).
+        // The ZIP structure uses src/main/resources/ prefix, but the BPMN2 reference
+        // must be relative to the bundle root for SAP CPI runtime to resolve it.
+        if (rawPath.startsWith('src/main/resources/')) {
+            return rawPath.replace('src/main/resources/', '');
+        }
+        if (rawPath.startsWith('script/')) {
+            return rawPath;
+        }
+        if (rawPath.startsWith('src/')) {
+            // Handle other src/ paths by stripping prefix
+            return rawPath.replace(/^src\/main\/resources\//, '');
+        }
+        // Bare filename — prefix with script/ folder
+        return `script/${rawPath}`;
     }
 
     // ========================================================================
@@ -2425,44 +2509,11 @@ ${this.generateCmdVariantProperty(converterMapping.subType, this.getComponentVer
      * Generate content modifier step
      */
     private generateContentModifierStep(cm: ContentModifierConfig, incoming: string, outgoing: string): string {
-        const headerProps = cm.headerActions?.map(h => `
-                <ifl:property>
-                    <key>header.${h.name}.action</key>
-                    <value>${h.action}</value>
-                </ifl:property>
-                ${h.value ? `<ifl:property>
-                    <key>header.${h.name}.value</key>
-                    <value>${this.escapeXml(h.value)}</value>
-                </ifl:property>` : ''}`).join('') || '';
-
-        const propertyProps = cm.propertyActions?.map(p => `
-                <ifl:property>
-                    <key>property.${p.name}.action</key>
-                    <value>${p.action}</value>
-                </ifl:property>
-                ${p.value ? `<ifl:property>
-                    <key>property.${p.name}.value</key>
-                    <value>${this.escapeXml(p.value)}</value>
-                </ifl:property>` : ''}`).join('') || '';
-
-        // Include body properties - use provided bodyAction or default to empty static
-        const bodyProps = cm.bodyAction ? `
-                <ifl:property>
-                    <key>body.type</key>
-                    <value>${cm.bodyAction.type}</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>body.value</key>
-                    <value>${this.escapeXml(cm.bodyAction.value || '')}</value>
-                </ifl:property>` : `
-                <ifl:property>
-                    <key>body.type</key>
-                    <value>static</value>
-                </ifl:property>
-                <ifl:property>
-                    <key>body.value</key>
-                    <value></value>
-                </ifl:property>`;
+        const bodyType = cm.bodyAction
+            ? (cm.bodyAction.type === 'XPath' ? 'xpath' : cm.bodyAction.type === 'Expression' ? 'expression' : 'constant')
+            : 'constant';
+        const wrapContent = this.escapeXml(cm.bodyAction?.value || '');
+        const tableProps = this.generateContentModifierTableProperties(cm);
 
         return `        <bpmn2:callActivity id="${cm.id}" name="${this.escapeXml(cm.name)}">
             <bpmn2:extensionElements>
@@ -2472,17 +2523,75 @@ ${this.generateCmdVariantProperty(converterMapping.subType, this.getComponentVer
                 </ifl:property>
                 <ifl:property>
                     <key>subActivityType</key>
-                    <value>ContentModifier</value>
-                </ifl:property>${headerProps}${propertyProps}${bodyProps}
+                    <value>Enricher</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>bodyType</key>
+                    <value>${bodyType}</value>
+                </ifl:property>
+${tableProps}
+                <ifl:property>
+                    <key>wrapContent</key>
+                    <value>${wrapContent}</value>
+                </ifl:property>
                 <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('ContentModifier')}</value>
                 </ifl:property>
-${this.generateCmdVariantProperty('ContentModifier', this.getComponentVersion('ContentModifier'))}
+${this.generateCmdVariantProperty('Enricher', this.getComponentVersion('ContentModifier'))}
             </bpmn2:extensionElements>
             <bpmn2:incoming>${incoming}</bpmn2:incoming>
             <bpmn2:outgoing>${outgoing}</bpmn2:outgoing>
         </bpmn2:callActivity>`;
+    }
+
+    private generateContentModifierTableProperties(cm: ContentModifierConfig): string {
+        const toCellType = (type?: string): string => {
+            if (!type) return 'constant';
+            const normalized = type.toLowerCase();
+            if (normalized.includes('xpath')) return 'xpath';
+            if (normalized.includes('expression')) return 'expression';
+            if (normalized.includes('header')) return 'header';
+            if (normalized.includes('property')) return 'property';
+            return 'constant';
+        };
+
+        const toRow = (
+            action: string,
+            type: string,
+            value: string,
+            name: string,
+            dataType?: string
+        ): string => this.escapeXml(`<row><cell id='Action'>${action}</cell><cell id='Type'>${type}</cell><cell id='Value'>${value}</cell><cell id='Default'></cell><cell id='Name'>${name}</cell><cell id='Datatype'>${dataType || ''}</cell></row>`);
+
+        const headerRows = (cm.headerActions || []).map(h =>
+            toRow(
+                h.action || 'Create',
+                toCellType(h.type),
+                h.value || '',
+                h.name || '',
+                h.dataType
+            )
+        ).join('');
+
+        const propertyRows = (cm.propertyActions || []).map(p =>
+            toRow(
+                p.action || 'Create',
+                toCellType(p.type),
+                p.value || '',
+                p.name || '',
+                p.dataType
+            )
+        ).join('');
+
+        return `                <ifl:property>
+                    <key>propertyTable</key>
+                    <value>${propertyRows}</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>headerTable</key>
+                    <value>${headerRows}</value>
+                </ifl:property>`;
     }
 
     /**
@@ -2887,7 +2996,18 @@ ${this.generateCmdVariantProperty(ce.type === 'PollEnrich' ? 'PollEnrich' : 'Con
         // Start event
         activities.push(`            <bpmn2:startEvent id="${esp.id}_ErrorStart" name="Error Start">
                 <bpmn2:outgoing>${esp.id}_Flow_1</bpmn2:outgoing>
-                <bpmn2:errorEventDefinition/>
+                <bpmn2:errorEventDefinition>
+                    <bpmn2:extensionElements>
+                        <ifl:property>
+                            <key>cmdVariantUri</key>
+                            <value>ctype::FlowstepVariant/cname::ErrorStartEvent</value>
+                        </ifl:property>
+                        <ifl:property>
+                            <key>activityType</key>
+                            <value>StartErrorEvent</value>
+                        </ifl:property>
+                    </bpmn2:extensionElements>
+                </bpmn2:errorEventDefinition>
             </bpmn2:startEvent>`);
 
         let previousId = `${esp.id}_ErrorStart`;
@@ -2915,7 +3035,18 @@ ${this.generateCmdVariantProperty(ce.type === 'PollEnrich' ? 'PollEnrich' : 'Con
         const finalFlow = `${esp.id}_Flow_${flowCounter}`;
         activities.push(`            <bpmn2:endEvent id="${esp.id}_ErrorEnd" name="Error End">
                 <bpmn2:incoming>${finalFlow}</bpmn2:incoming>
-                <bpmn2:errorEventDefinition/>
+                <bpmn2:errorEventDefinition>
+                    <bpmn2:extensionElements>
+                        <ifl:property>
+                            <key>cmdVariantUri</key>
+                            <value>ctype::FlowstepVariant/cname::ErrorEndEvent</value>
+                        </ifl:property>
+                        <ifl:property>
+                            <key>activityType</key>
+                            <value>EndErrorEvent</value>
+                        </ifl:property>
+                    </bpmn2:extensionElements>
+                </bpmn2:errorEventDefinition>
             </bpmn2:endEvent>`);
 
         // Final sequence flow
@@ -2928,14 +3059,14 @@ ${this.generateCmdVariantProperty(ce.type === 'PollEnrich' ? 'PollEnrich' : 'Con
                     <value>${this.getComponentVersion('SubProcess')}</value>
                 </ifl:property>
                 <ifl:property>
-                    <key>processType</key>
-                    <value>exception</value>
+                    <key>activityType</key>
+                    <value>ErrorEventSubProcessTemplate</value>
                 </ifl:property>
                 ${esp.sendToDeadLetter ? `<ifl:property>
                     <key>sendToDeadLetter</key>
                     <value>true</value>
                 </ifl:property>` : ''}
-${this.generateCmdVariantProperty('SubProcess', this.getComponentVersion('SubProcess')).replace(/^                /gm, '                ')}
+${this.generateCmdVariantProperty('ErrorEventSubProcessTemplate', this.getComponentVersion('SubProcess')).replace(/^                /gm, '                ')}
             </bpmn2:extensionElements>
 ${activities.join('\n')}
 ${sequenceFlows.join('\n')}
@@ -3076,22 +3207,6 @@ ${sequenceFlows.join('\n')}
             xPos += elementSpacing;
             seqNum++;
         });
-
-        // If no elements, we need to account for the auto-generated content modifier
-        // Note: The content modifier ID is generated with UUID in generateProcess
-        // so we use a consistent shape approach
-        if (allElementIds.length === 0) {
-            // Add a placeholder shape for the auto-generated content modifier
-            shapes.push(`            <bpmndi:BPMNShape id="CallActivity_Default_gui" bpmnElement="CallActivity_Default">
-                <dc:Bounds x="${xPos}" y="${yPos - 10}" width="48" height="48"/>
-            </bpmndi:BPMNShape>`);
-            edges.push(`            <bpmndi:BPMNEdge id="SequenceFlow_${seqNum}_gui" bpmnElement="SequenceFlow_${seqNum}">
-                <di:waypoint x="${xPos - elementSpacing + 32}" y="${yPos + 16}"/>
-                <di:waypoint x="${xPos}" y="${yPos + 16}"/>
-            </bpmndi:BPMNEdge>`);
-            xPos += elementSpacing;
-            seqNum++;
-        }
 
         // End event shape
         shapes.push(`            <bpmndi:BPMNShape id="EndEvent_1_gui" bpmnElement="EndEvent_1">

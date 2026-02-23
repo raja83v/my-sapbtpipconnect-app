@@ -1106,10 +1106,15 @@ export class SAPCPIClient {
                     console.warn('[SAP CPI Client] Skipping script without path');
                     return;
                 }
-                // Ensure script paths are properly formatted
-                const scriptPath = script.path.startsWith('src/')
-                    ? script.path
-                    : `src/main/resources/script/${script.path}`;
+                // Ensure script paths are properly formatted and aligned with BPMN script references
+                const normalizedPath = script.path.trim().replace(/\\/g, '/');
+                const scriptPath = normalizedPath.startsWith('src/main/resources/script/')
+                    ? normalizedPath
+                    : normalizedPath.startsWith('script/')
+                        ? `src/main/resources/${normalizedPath}`
+                        : normalizedPath.startsWith('src/')
+                            ? normalizedPath
+                            : `src/main/resources/script/${normalizedPath}`;
                 zip.addFile(scriptPath, Buffer.from(script.content, 'utf-8'));
             });
         }

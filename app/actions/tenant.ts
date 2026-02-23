@@ -1,12 +1,10 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { encrypt, decrypt } from "@/lib/encryption";
 import type { ActionResult } from "@/types/actions";
 import { revalidatePath } from "next/cache";
-import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 // Configuration for execution sync
 const EXECUTION_SYNC_CONFIG = {
@@ -45,25 +43,26 @@ export async function getUserTenants(): Promise<ActionResult<TenantWithRole[]>> 
       return { success: false, error: "Not authenticated" };
     }
 
-    const tenantsData = await convex.query(api.tenants.listForUser, {
-      userId: currentUser.id as any
+    const memberships = await prisma.tenantMember.findMany({
+      where: { userId: currentUser.id },
+      include: { tenant: true },
+      orderBy: { joinedAt: "desc" },
     });
 
-    // listForUser returns tenant data directly with memberRole merged in (not nested)
-    const tenants: TenantWithRole[] = tenantsData.map((item: any) => ({
-      id: item._id,
-      name: item.name,
-      slug: item.slug,
-      description: item.description ?? null,
-      tenantUrl: item.tenantUrl,
-      authType: item.authType,
-      status: item.status,
-      isConnected: item.isConnected,
-      lastSyncAt: item.lastSyncAt ? new Date(item.lastSyncAt) : null,
-      connectionTestAt: item.connectionTestAt ? new Date(item.connectionTestAt) : null,
-      createdAt: new Date(item._creationTime),
-      updatedAt: new Date(item._creationTime),
-      memberRole: item.memberRole,
+    const tenants: TenantWithRole[] = memberships.map((m) => ({
+      id: m.tenant.id,
+      name: m.tenant.name,
+      slug: m.tenant.slug,
+      description: m.tenant.description ?? null,
+      tenantUrl: m.tenant.tenantUrl,
+      authType: m.tenant.authType,
+      status: m.tenant.status,
+      isConnected: m.tenant.isConnected,
+      lastSyncAt: m.tenant.lastSyncAt,
+      connectionTestAt: m.tenant.connectionTestAt,
+      createdAt: m.tenant.createdAt,
+      updatedAt: m.tenant.updatedAt,
+      memberRole: m.role,
     }));
 
     return { success: true, data: tenants };
@@ -99,9 +98,13 @@ export async function getTenantById(tenantId: string): Promise<ActionResult<{
     }
 
     // Check if user has access to this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: tenantId as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -109,7 +112,9 @@ export async function getTenantById(tenantId: string): Promise<ActionResult<{
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -128,16 +133,16 @@ export async function getTenantById(tenantId: string): Promise<ActionResult<{
     return {
       success: true,
       data: {
-        id: tenant._id,
+        id: tenant.id,
         name: tenant.name,
         slug: tenant.slug,
         description: tenant.description ?? null,
         tenantUrl: tenant.tenantUrl,
-        tmUrl: tenant.tenantUrl, // tmUrl is the same as tenantUrl for SAP CPI
+        tmUrl: tenant.tenantUrl,
         authType: tenant.authType,
-        authenticationUrl: tenant.authenticationUrl,
-        clientId: tenant.clientId,
-        username: tenant.username,
+        authenticationUrl: tenant.authenticationUrl ?? undefined,
+        clientId: tenant.clientId ?? undefined,
+        username: tenant.username ?? undefined,
         password: decryptedPassword,
         status: tenant.status,
         isConnected: tenant.isConnected,
@@ -161,9 +166,13 @@ export async function setDefaultTenant(tenantId: string): Promise<ActionResult<v
     }
 
     // Verify user has access to this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: tenantId as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -171,9 +180,9 @@ export async function setDefaultTenant(tenantId: string): Promise<ActionResult<v
     }
 
     // Update user's default tenant
-    await convex.mutation(api.userMutations.update, {
-      id: currentUser.id as any,
-      defaultTenantId: tenantId as any,
+    await prisma.user.update({
+      where: { id: currentUser.id },
+      data: { defaultTenantId: tenantId },
     });
 
     revalidatePath("/dashboard");
@@ -205,20 +214,6 @@ export async function createTenant(data: {
       return { success: false, error: "Not authenticated" };
     }
 
-    // Check subscription limit for tenants
-    const limitCheck = await checkSubscriptionLimit("tenants");
-    if (!limitCheck.success) {
-      return { success: false, error: limitCheck.error };
-    }
-
-    if (!limitCheck.data?.allowed) {
-      const { current, max } = limitCheck.data || { current: 0, max: 0 };
-      return {
-        success: false,
-        error: `Tenant limit reached (${current}/${max}). Please upgrade your plan to add more tenants.`,
-      };
-    }
-
     const tenantSlug = data.tenantName
       .toLowerCase()
       .replace(/[^a-z0-9]/g, "-")
@@ -226,7 +221,9 @@ export async function createTenant(data: {
       .replace(/^-|-$/g, "");
 
     // Check if tenant slug already exists
-    const existingTenant = await convex.query(api.tenants.getBySlug, { slug: tenantSlug });
+    const existingTenant = await prisma.cpiTenant.findUnique({
+      where: { slug: tenantSlug },
+    });
 
     if (existingTenant) {
       return { success: false, error: "Tenant name already exists. Please choose another." };
@@ -238,48 +235,57 @@ export async function createTenant(data: {
 
     // Test OAuth connection if credentials provided
     let isConnected = false;
-    let connectionTestAt: number | undefined;
+    let connectionTestAt: Date | undefined;
 
     if (data.authType === "OAUTH" && data.authenticationUrl && data.clientId && data.clientSecret) {
       try {
         console.log("Testing OAuth connection...");
         await getSAPToken(data.authenticationUrl, data.clientId, data.clientSecret);
         isConnected = true;
-        connectionTestAt = Date.now();
+        connectionTestAt = new Date();
         console.log("✅ OAuth connection successful");
       } catch (error) {
         console.warn("⚠️ OAuth connection failed:", error instanceof Error ? error.message : "Unknown error");
-        // Don't fail tenant creation, just mark as not connected
         isConnected = false;
       }
     }
 
-    // Create tenant and add user as owner
-    const tenantId = await convex.mutation(api.tenantMutations.create, {
-      name: data.tenantName,
-      slug: tenantSlug,
-      description: data.description,
-      tenantUrl: data.tenantUrl,
-      authType: data.authType,
-      authenticationUrl: data.authenticationUrl,
-      clientId: data.clientId,
-      clientSecret: encryptedClientSecret,
-      username: data.username,
-      password: encryptedPassword,
-      isConnected,
-      connectionTestAt,
-      ownerId: currentUser.id as any,
+    // Create tenant and add user as owner in a transaction
+    const tenant = await prisma.$transaction(async (tx) => {
+      const newTenant = await tx.cpiTenant.create({
+        data: {
+          name: data.tenantName,
+          slug: tenantSlug,
+          description: data.description,
+          tenantUrl: data.tenantUrl,
+          authType: data.authType,
+          authenticationUrl: data.authenticationUrl,
+          clientId: data.clientId,
+          clientSecret: encryptedClientSecret,
+          username: data.username,
+          password: encryptedPassword,
+          isConnected,
+          connectionTestAt,
+        },
+      });
+
+      // Add user as OWNER
+      await tx.tenantMember.create({
+        data: {
+          userId: currentUser.id,
+          tenantId: newTenant.id,
+          role: "OWNER",
+        },
+      });
+
+      return newTenant;
     });
 
-    // Increment tenant usage after successful creation
-    await incrementUsage("tenants");
-
     revalidatePath("/dashboard/settings");
-    return { success: true, data: { tenantId } };
+    return { success: true, data: { tenantId: tenant.id } };
   } catch (error) {
     console.error("Error creating tenant:", error);
     const errorMessage = error instanceof Error ? error.message : "Failed to create tenant";
-    console.error("Detailed error:", errorMessage);
     return { success: false, error: errorMessage };
   }
 }
@@ -309,9 +315,13 @@ export async function updateTenant(
     }
 
     // Check if user has admin rights on this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: tenantId as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
@@ -339,9 +349,9 @@ export async function updateTenant(
     if (data.username !== undefined) updateData.username = data.username;
     if (data.password) updateData.password = await encrypt(data.password);
 
-    await convex.mutation(api.tenantMutations.update, {
-      id: tenantId as any,
-      ...updateData,
+    await prisma.cpiTenant.update({
+      where: { id: tenantId },
+      data: updateData,
     });
 
     revalidatePath("/dashboard/settings");
@@ -364,17 +374,21 @@ export async function deleteTenant(tenantId: string): Promise<ActionResult<void>
     }
 
     // Check if user is the owner of this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: tenantId as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!membership || membership.role !== "OWNER") {
       return { success: false, error: "Only the owner can delete this tenant" };
     }
 
-    await convex.mutation(api.tenantMutations.deleteTenant, {
-      id: tenantId as any,
+    await prisma.cpiTenant.delete({
+      where: { id: tenantId },
     });
 
     revalidatePath("/dashboard/settings");
@@ -463,7 +477,6 @@ function categorizeError(errorMessage: string | null): "SYSTEM" | "NETWORK" | "M
 
 /**
  * Sync execution logs for all iFlows from SAP CPI in a single API call
- * This is optimized for performance - fetches all logs at once instead of per-iFlow
  */
 export async function syncTenantExecutions(
   tenantId: string,
@@ -484,9 +497,9 @@ export async function syncTenantExecutions(
   let totalSynced = 0;
 
   try {
-    // Get all iFlows for this tenant to map logs to
-    const iFlows = await convex.query(api.iflows.listByTenant, {
-      tenantId: tenantId as any
+    // Get all iFlows for this tenant
+    const iFlows = await prisma.iFlow.findMany({
+      where: { tenantId },
     });
 
     if (iFlows.length === 0) {
@@ -494,7 +507,7 @@ export async function syncTenantExecutions(
       return { synced: 0, errors: 0 };
     }
 
-    // Build a map of iFlow IDs (multiple formats) to database IDs
+    // Build a map of iFlow IDs to database IDs
     const convertToUnderscoreFormat = (id: string): string => {
       return id.replace(/([a-z])([A-Z])/g, '$1_$2');
     };
@@ -510,7 +523,7 @@ export async function syncTenantExecutions(
         iflow.name.toLowerCase(),
       ];
       for (const variant of variants) {
-        iFlowMap.set(variant, { id: iflow._id, name: iflow.name });
+        iFlowMap.set(variant, { id: iflow.id, name: iflow.name });
       }
     }
 
@@ -567,7 +580,7 @@ export async function syncTenantExecutions(
 
     // Process and filter logs
     const logsToInsert: any[] = [];
-    const iFlowLastExecuted = new Map<string, number>();
+    const iFlowLastExecuted = new Map<string, Date>();
 
     for (const log of allLogs) {
       const logDate = parseSAPDate(log.LogEnd) || parseSAPDate(log.LogStart);
@@ -588,8 +601,8 @@ export async function syncTenantExecutions(
       logsToInsert.push({
         messageId,
         status: mapExecutionStatus(log.Status),
-        startTime: startTime.getTime(),
-        endTime: endTime?.getTime(),
+        startTime,
+        endTime,
         duration,
         sender: log.Sender || undefined,
         receiver: log.Receiver || undefined,
@@ -602,8 +615,8 @@ export async function syncTenantExecutions(
       // Track latest execution per iFlow
       if (startTime) {
         const current = iFlowLastExecuted.get(iflowMatch.id);
-        if (!current || startTime.getTime() > current) {
-          iFlowLastExecuted.set(iflowMatch.id, startTime.getTime());
+        if (!current || startTime > current) {
+          iFlowLastExecuted.set(iflowMatch.id, startTime);
         }
       }
     }
@@ -612,19 +625,48 @@ export async function syncTenantExecutions(
 
     if (logsToInsert.length === 0) return { synced: 0, errors: 0 };
 
-    // Batch insert using Convex mutation
-    const result = await convex.mutation(api.iflowMutations.batchCreateExecutions, {
-      executions: logsToInsert,
-    });
+    // Batch insert executions using Prisma
+    // Use skipDuplicates to avoid errors on existing messageIds
+    let created = 0;
+    for (const log of logsToInsert) {
+      try {
+        await prisma.iFlowExecution.upsert({
+          where: { messageId: log.messageId },
+          create: {
+            messageId: log.messageId,
+            status: log.status,
+            startTime: log.startTime,
+            endTime: log.endTime,
+            duration: log.duration,
+            sender: log.sender,
+            receiver: log.receiver,
+            interfaceType: log.interfaceType,
+            errorMessage: log.errorMessage,
+            errorCategory: log.errorCategory,
+            iFlowId: log.iFlowId,
+          },
+          update: {
+            status: log.status,
+            endTime: log.endTime,
+            duration: log.duration,
+            errorMessage: log.errorMessage,
+            errorCategory: log.errorCategory,
+          },
+        });
+        created++;
+      } catch {
+        // Skip duplicates or errors
+      }
+    }
 
-    totalSynced = result.created;
+    totalSynced = created;
 
     // Update lastExecutedAt for affected iFlows
     for (const [id, time] of iFlowLastExecuted.entries()) {
       try {
-        await convex.mutation(api.iflowMutations.update, {
-          id: id as any,
-          lastExecutedAt: time,
+        await prisma.iFlow.update({
+          where: { id },
+          data: { lastExecutedAt: time },
         });
       } catch {
         // Ignore errors
@@ -645,7 +687,9 @@ export async function syncTenantExecutions(
  */
 export async function syncTenantInternal(tenantId: string): Promise<ActionResult<{ iflows: number; executions: number }>> {
   try {
-    const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -679,7 +723,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
     const iflowsData = await iflowsResponse.json();
     const runtimeIflows = iflowsData.d?.results || [];
 
-    // Create a map of iFlow ID to runtime info (status, deployedOn, etc.)
+    // Create a map of iFlow ID to runtime info
     const runtimeMap = new Map<string, any>();
     for (const iflow of runtimeIflows) {
       runtimeMap.set(iflow.Id, iflow);
@@ -695,14 +739,12 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
       },
     });
 
-    // Map iFlow ID to package ID
     const packageMap = new Map<string, string>();
 
     if (packagesResponse.ok) {
       const packagesData = await packagesResponse.json();
       const packages = packagesData.d?.results || [];
 
-      // For each package, fetch its design-time artifacts
       for (const pkg of packages) {
         try {
           const artifactsUrl = `${tenant.tenantUrl}/api/v1/IntegrationPackages('${pkg.Id}')/IntegrationDesigntimeArtifacts`;
@@ -717,41 +759,64 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
           if (artifactsResponse.ok) {
             const artifactsData = await artifactsResponse.json();
             const artifacts = artifactsData.d?.results || [];
-
             for (const artifact of artifacts) {
               packageMap.set(artifact.Id, pkg.Id);
             }
           }
         } catch (err) {
-          // Continue with other packages if one fails
           console.warn(`Failed to fetch artifacts for package ${pkg.Id}:`, err);
         }
       }
     }
 
-    // Batch sync iFlows using Convex - combine runtime status with package info
+    // Batch sync iFlows using Prisma
     const iflowsToSync = runtimeIflows.map((iflow: any) => ({
       iFlowId: iflow.Id,
       name: iflow.Name || iflow.Id,
       packageName: packageMap.get(iflow.Id) || undefined,
       version: iflow.Version,
       status: iflow.Status === "STARTED" ? "STARTED" as const : "STOPPED" as const,
-      lastDeployedAt: iflow.DeployedOn ? new Date(iflow.DeployedOn).getTime() : undefined,
+      lastDeployedAt: iflow.DeployedOn ? new Date(iflow.DeployedOn) : undefined,
     }));
 
-    await convex.mutation(api.iflowMutations.batchUpsert, {
-      tenantId: tenantId as any,
-      iFlows: iflowsToSync,
-    });
+    // Upsert iFlows
+    for (const iflowData of iflowsToSync) {
+      await prisma.iFlow.upsert({
+        where: {
+          tenantId_iFlowId: {
+            tenantId,
+            iFlowId: iflowData.iFlowId,
+          },
+        },
+        create: {
+          tenantId,
+          iFlowId: iflowData.iFlowId,
+          name: iflowData.name,
+          packageName: iflowData.packageName,
+          version: iflowData.version,
+          status: iflowData.status,
+          lastDeployedAt: iflowData.lastDeployedAt,
+        },
+        update: {
+          name: iflowData.name,
+          packageName: iflowData.packageName,
+          version: iflowData.version,
+          status: iflowData.status,
+          lastDeployedAt: iflowData.lastDeployedAt,
+        },
+      });
+    }
 
     // Sync executions
     const executionResult = await syncTenantExecutions(tenantId, accessToken, tenant.tenantUrl, { silent: true });
 
     // Update tenant
-    await convex.mutation(api.tenantMutations.update, {
-      id: tenantId as any,
-      lastSyncAt: Date.now(),
-      isConnected: true,
+    await prisma.cpiTenant.update({
+      where: { id: tenantId },
+      data: {
+        lastSyncAt: new Date(),
+        isConnected: true,
+      },
     });
 
     return {
@@ -762,9 +827,9 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
     console.error(`Error syncing tenant ${tenantId}:`, error);
 
     try {
-      await convex.mutation(api.tenantMutations.update, {
-        id: tenantId as any,
-        isConnected: false,
+      await prisma.cpiTenant.update({
+        where: { id: tenantId },
+        data: { isConnected: false },
       });
     } catch {
       // Ignore update errors
@@ -789,9 +854,13 @@ export async function syncTenantIFlows(
     }
 
     // Check if user has access to this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: tenantId as any,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -799,7 +868,9 @@ export async function syncTenantIFlows(
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -846,7 +917,6 @@ export async function syncTenantIFlows(
     const iflowsData = await iflowsResponse.json();
     const runtimeIflows = iflowsData.d?.results || [];
 
-    // Debug: Log first iFlow structure to understand the API response
     if (runtimeIflows.length > 0) {
       console.log('[Sync] Sample iFlow from API:', JSON.stringify(runtimeIflows[0], null, 2));
     }
@@ -870,7 +940,6 @@ export async function syncTenantIFlows(
 
         console.log(`[Sync] Found ${packages.length} packages, fetching artifacts...`);
 
-        // For each package, fetch its design-time artifacts
         for (const pkg of packages) {
           try {
             const artifactsUrl = `${tenant.tenantUrl}/api/v1/IntegrationPackages('${pkg.Id}')/IntegrationDesigntimeArtifacts`;
@@ -885,7 +954,6 @@ export async function syncTenantIFlows(
             if (artifactsResponse.ok) {
               const artifactsData = await artifactsResponse.json();
               const artifacts = artifactsData.d?.results || [];
-
               for (const artifact of artifacts) {
                 packageMap.set(artifact.Id, pkg.Id);
               }
@@ -901,7 +969,7 @@ export async function syncTenantIFlows(
       console.warn('[Sync] Failed to fetch packages, continuing without package info:', err);
     }
 
-    // Batch sync iFlows using Convex
+    // Batch sync iFlows
     console.time('iFlow sync');
 
     const iflowsToSync = runtimeIflows.map((iflow: any) => ({
@@ -910,65 +978,57 @@ export async function syncTenantIFlows(
       packageName: packageMap.get(iflow.Id) || undefined,
       version: iflow.Version,
       status: iflow.Status === "STARTED" ? "STARTED" as const : "STOPPED" as const,
-      lastDeployedAt: iflow.DeployedOn ? new Date(iflow.DeployedOn).getTime() : undefined,
+      lastDeployedAt: iflow.DeployedOn ? new Date(iflow.DeployedOn) : undefined,
     }));
 
-    // Check subscription limit for iFlows before syncing
-    // We need to determine how many NEW iFlows would be created
-    const existingIFlows = await convex.query(api.iflows.listByTenant, {
-      tenantId: tenantId as any,
-    });
-    const existingIFlowIds = new Set(existingIFlows.map((iflow: any) => iflow.iFlowId));
-    const newIFlowsCount = iflowsToSync.filter(iflow => !existingIFlowIds.has(iflow.iFlowId)).length;
+    let created = 0;
+    let updated = 0;
 
-    if (newIFlowsCount > 0) {
-      // Check if we can add these new iFlows
-      const limitCheck = await checkSubscriptionLimit("iflows");
-      if (!limitCheck.success) {
-        return { success: false, error: limitCheck.error };
-      }
+    for (const iflowData of iflowsToSync) {
+      const existing = await prisma.iFlow.findUnique({
+        where: {
+          tenantId_iFlowId: {
+            tenantId,
+            iFlowId: iflowData.iFlowId,
+          },
+        },
+      });
 
-      if (!limitCheck.data?.allowed) {
-        const { current, max } = limitCheck.data || { current: 0, max: 0 };
-        // Calculate how many we can still add
-        const remainingSlots = max === -1 ? Infinity : Math.max(0, max - current);
+      await prisma.iFlow.upsert({
+        where: {
+          tenantId_iFlowId: {
+            tenantId,
+            iFlowId: iflowData.iFlowId,
+          },
+        },
+        create: {
+          tenantId,
+          iFlowId: iflowData.iFlowId,
+          name: iflowData.name,
+          packageName: iflowData.packageName,
+          version: iflowData.version,
+          status: iflowData.status,
+          lastDeployedAt: iflowData.lastDeployedAt,
+        },
+        update: {
+          name: iflowData.name,
+          packageName: iflowData.packageName,
+          version: iflowData.version,
+          status: iflowData.status,
+          lastDeployedAt: iflowData.lastDeployedAt,
+        },
+      });
 
-        if (remainingSlots === 0) {
-          return {
-            success: false,
-            error: `iFlow limit reached (${current}/${max}). Please upgrade your plan to sync more iFlows.`,
-          };
-        }
-
-        // Filter to only sync existing iFlows + as many new ones as we can fit
-        const newIFlowsToAdd = iflowsToSync
-          .filter(iflow => !existingIFlowIds.has(iflow.iFlowId))
-          .slice(0, remainingSlots);
-        const existingIFlowsToUpdate = iflowsToSync.filter(iflow => existingIFlowIds.has(iflow.iFlowId));
-
-        // Replace iflowsToSync with the limited set
-        iflowsToSync.length = 0;
-        iflowsToSync.push(...existingIFlowsToUpdate, ...newIFlowsToAdd);
-
-        console.log(`[Sync] Limited to ${newIFlowsToAdd.length} new iFlows due to subscription limit`);
-      }
-    }
-
-    const syncResult = await convex.mutation(api.iflowMutations.batchUpsert, {
-      tenantId: tenantId as any,
-      iFlows: iflowsToSync,
-    });
-
-    // Increment iFlow usage for newly created iFlows
-    if (syncResult.created > 0) {
-      for (let i = 0; i < syncResult.created; i++) {
-        await incrementUsage("iflows");
+      if (existing) {
+        updated++;
+      } else {
+        created++;
       }
     }
 
-    const syncedCount = syncResult.created + syncResult.updated;
+    const syncedCount = created + updated;
     console.timeEnd('iFlow sync');
-    console.log(`Synced ${syncedCount} iFlows (${syncResult.updated} updated, ${syncResult.created} created)`);
+    console.log(`Synced ${syncedCount} iFlows (${updated} updated, ${created} created)`);
 
     // Sync executions if enabled
     let executionsSynced = 0;
@@ -986,10 +1046,12 @@ export async function syncTenantIFlows(
     }
 
     // Update tenant's last sync time
-    await convex.mutation(api.tenantMutations.update, {
-      id: tenantId as any,
-      lastSyncAt: Date.now(),
-      isConnected: true,
+    await prisma.cpiTenant.update({
+      where: { id: tenantId },
+      data: {
+        lastSyncAt: new Date(),
+        isConnected: true,
+      },
     });
 
     revalidatePath("/dashboard/settings");
@@ -1008,9 +1070,9 @@ export async function syncTenantIFlows(
 
     // Update tenant connection status
     try {
-      await convex.mutation(api.tenantMutations.update, {
-        id: tenantId as any,
-        isConnected: false,
+      await prisma.cpiTenant.update({
+        where: { id: tenantId },
+        data: { isConnected: false },
       });
     } catch (updateError) {
       console.error("Failed to update tenant connection status:", updateError);
@@ -1022,4 +1084,3 @@ export async function syncTenantIFlows(
     };
   }
 }
-

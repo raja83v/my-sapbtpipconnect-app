@@ -1,15 +1,13 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
 import { getCachedToken, cacheToken } from "@/lib/token-cache";
 import { decrypt } from "@/lib/encryption";
-import { generateText } from "ai";
-import { aiModel } from "@/lib/ai/client";
-import { 
-    createSAPCPIClient, 
+import { runText } from "@/lib/ai/runtime/text";
+import {
+    createSAPCPIClient,
     type MessageProcessingLog,
     type MessageRunStep,
     type MessageAttachment,
@@ -178,6 +176,28 @@ function transformLog(
     };
 }
 
+/**
+ * Resolve the tenant ID - use provided, fallback to default, then first accessible
+ */
+async function resolveTenantId(userId: string, providedTenantId?: string): Promise<string | undefined> {
+    if (providedTenantId) return providedTenantId;
+
+    // Use user's default tenant
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { defaultTenantId: true },
+    });
+    if (user?.defaultTenantId) return user.defaultTenantId;
+
+    // Fallback to first accessible tenant
+    const firstMembership = await prisma.tenantMember.findFirst({
+        where: { userId },
+        select: { tenantId: true },
+        orderBy: { joinedAt: "asc" },
+    });
+    return firstMembership?.tenantId;
+}
+
 // ============================================================================
 // Server Actions
 // ============================================================================
@@ -195,51 +215,41 @@ export async function getAllMessageLogs(
             return { success: false, error: "Not authenticated" };
         }
 
-        const { 
-            tenantId: providedTenantId, 
-            page = 1, 
-            pageSize = 50, 
-            status, 
+        const {
+            tenantId: providedTenantId,
+            page = 1,
+            pageSize = 50,
+            status,
             iFlowId,
-            fromDate, 
+            fromDate,
             toDate,
-            searchQuery 
+            searchQuery
         } = params;
 
         // Determine which tenant to use
-        let tenantId = providedTenantId;
-        
-        if (!tenantId) {
-            // Use user's default tenant
-            const user = await convex.query(api.users.getById, { id: currentUser.id as any });
-            tenantId = user?.defaultTenantId ? String(user.defaultTenantId) : undefined;
-            
-            if (!tenantId) {
-                // Fallback to first accessible tenant
-                const userTenants = await convex.query(api.tenants.listForUser, { 
-                    userId: currentUser.id as any 
-                });
-                if (userTenants.length > 0) {
-                    tenantId = String(userTenants[0]._id);
-                }
-            }
-        }
+        const tenantId = await resolveTenantId(currentUser.id, providedTenantId);
 
         if (!tenantId) {
             return { success: false, error: "No tenant available" };
         }
 
         // Get tenant details
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check access
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {
@@ -252,7 +262,7 @@ export async function getAllMessageLogs(
         }
 
         // Get or refresh token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
 
         if (!accessToken) {
             const decryptedClientSecret = await decrypt(tenant.clientSecret);
@@ -261,7 +271,7 @@ export async function getAllMessageLogs(
                 tenant.clientId,
                 decryptedClientSecret
             );
-            cacheToken(tenant._id, accessToken);
+            cacheToken(tenant.id, accessToken);
         }
 
         // Create SAP CPI client
@@ -309,7 +319,7 @@ export async function getAllMessageLogs(
                 top: pageSize,
             });
 
-            const transformedLogs = logs.map(log => transformLog(log, tenant._id, tenant.name));
+            const transformedLogs = logs.map(log => transformLog(log, tenant.id, tenant.name));
 
             // Client-side pagination for iFlow filter (SAP API doesn't support skip with specific iFlow filter well)
             const startIndex = (page - 1) * pageSize;
@@ -331,17 +341,17 @@ export async function getAllMessageLogs(
         // Get all message logs
         const response = await client.getAllMessageProcessingLogs(filterParams);
 
-        const transformedLogs = response.results.map(log => 
-            transformLog(log, tenant._id, tenant.name)
+        const transformedLogs = response.results.map(log =>
+            transformLog(log, tenant.id, tenant.name)
         );
 
         const total = response.count || transformedLogs.length;
 
-        // Cache failed messages for AI analysis (in Convex)
+        // Cache failed messages for AI analysis (in database)
         const failedLogs = transformedLogs.filter(log => log.status === 'FAILED');
         if (failedLogs.length > 0) {
             // Fire and forget - don't await this
-            cacheFailedMessages(failedLogs, tenant._id).catch(err => 
+            cacheFailedMessages(failedLogs, tenant.id).catch(err =>
                 console.warn('Failed to cache failed messages:', err)
             );
         }
@@ -381,39 +391,29 @@ export async function getMessageLogDetail(
         }
 
         // Determine which tenant to use
-        let tenantId = providedTenantId;
-        
-        if (!tenantId) {
-            // Use user's default tenant
-            const user = await convex.query(api.users.getById, { id: currentUser.id as any });
-            tenantId = user?.defaultTenantId ? String(user.defaultTenantId) : undefined;
-            
-            if (!tenantId) {
-                // Fallback to first accessible tenant
-                const userTenants = await convex.query(api.tenants.listForUser, { 
-                    userId: currentUser.id as any 
-                });
-                if (userTenants.length > 0) {
-                    tenantId = String(userTenants[0]._id);
-                }
-            }
-        }
+        const tenantId = await resolveTenantId(currentUser.id, providedTenantId);
 
         if (!tenantId) {
             return { success: false, error: "No tenant available" };
         }
 
         // Get tenant
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check access
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {
@@ -426,7 +426,7 @@ export async function getMessageLogDetail(
         }
 
         // Get token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
 
         if (!accessToken) {
             const decryptedClientSecret = await decrypt(tenant.clientSecret);
@@ -435,7 +435,7 @@ export async function getMessageLogDetail(
                 tenant.clientId,
                 decryptedClientSecret
             );
-            cacheToken(tenant._id, accessToken);
+            cacheToken(tenant.id, accessToken);
         }
 
         // Create client
@@ -459,7 +459,7 @@ export async function getMessageLogDetail(
             client.getMessageErrorText(messageGuid),
         ]);
 
-        const transformedLog = transformLog(logDetails, tenant._id, tenant.name);
+        const transformedLog = transformLog(logDetails, tenant.id, tenant.name);
 
         return {
             success: true,
@@ -505,23 +505,7 @@ export async function getIFlowsForFilter(
         }
 
         // Determine which tenant to use
-        let resolvedTenantId = tenantId;
-        
-        if (!resolvedTenantId) {
-            // Use user's default tenant
-            const user = await convex.query(api.users.getById, { id: currentUser.id as any });
-            resolvedTenantId = user?.defaultTenantId ? String(user.defaultTenantId) : undefined;
-            
-            if (!resolvedTenantId) {
-                // Fallback to first accessible tenant
-                const userTenants = await convex.query(api.tenants.listForUser, { 
-                    userId: currentUser.id as any 
-                });
-                if (userTenants.length > 0) {
-                    resolvedTenantId = String(userTenants[0]._id);
-                }
-            }
-        }
+        const resolvedTenantId = await resolveTenantId(currentUser.id, tenantId);
 
         if (!resolvedTenantId) {
             return { success: false, error: "No tenant available" };
@@ -530,16 +514,22 @@ export async function getIFlowsForFilter(
         // If a package is specified, fetch iFlows from SAP CPI for that package
         if (packageId) {
             // Get tenant details
-            const tenant = await convex.query(api.tenants.getById, { id: resolvedTenantId as any });
+            const tenant = await prisma.cpiTenant.findUnique({
+                where: { id: resolvedTenantId },
+            });
 
             if (!tenant) {
                 return { success: false, error: "Tenant not found" };
             }
 
             // Check access
-            const membership = await convex.query(api.tenants.getMembership, {
-                userId: currentUser.id as any,
-                tenantId: resolvedTenantId as any,
+            const membership = await prisma.tenantMember.findUnique({
+                where: {
+                    userId_tenantId: {
+                        userId: currentUser.id,
+                        tenantId: resolvedTenantId,
+                    },
+                },
             });
 
             if (!membership) {
@@ -553,14 +543,14 @@ export async function getIFlowsForFilter(
             const decryptedClientSecret = await decrypt(tenant.clientSecret);
 
             // Get or refresh token
-            let accessToken = getCachedToken(tenant._id);
+            let accessToken = getCachedToken(tenant.id);
             if (!accessToken) {
                 accessToken = await getSAPToken(
                     tenant.authenticationUrl,
                     tenant.clientId,
                     decryptedClientSecret
                 );
-                cacheToken(tenant._id, accessToken);
+                cacheToken(tenant.id, accessToken);
             }
 
             // Fetch iFlows for specific package from SAP CPI
@@ -592,14 +582,20 @@ export async function getIFlowsForFilter(
             return { success: true, data: result };
         }
 
-        // Otherwise, get all iFlows from Convex
-        const iflows = await convex.query(api.iflows.listByTenant, {
-            tenantId: resolvedTenantId as any,
-            limit: 1000,
+        // Otherwise, get all iFlows from database
+        const iflows = await prisma.iFlow.findMany({
+            where: { tenantId: resolvedTenantId },
+            select: {
+                id: true,
+                iFlowId: true,
+                name: true,
+                packageName: true,
+            },
+            orderBy: { name: "asc" },
         });
 
-        const result = iflows.map((iflow: any) => ({
-            id: iflow._id,
+        const result = iflows.map((iflow) => ({
+            id: iflow.id,
             iFlowId: iflow.iFlowId,
             name: iflow.name,
             packageName: iflow.packageName || null,
@@ -626,16 +622,22 @@ export async function getPackagesForFilter(
         }
 
         // Get tenant details
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check access
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {
@@ -649,14 +651,14 @@ export async function getPackagesForFilter(
         const decryptedClientSecret = await decrypt(tenant.clientSecret);
 
         // Get or refresh token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
         if (!accessToken) {
             accessToken = await getSAPToken(
                 tenant.authenticationUrl,
                 tenant.clientId,
                 decryptedClientSecret
             );
-            cacheToken(tenant._id, accessToken);
+            cacheToken(tenant.id, accessToken);
         }
 
         // Fetch packages from SAP CPI
@@ -692,46 +694,49 @@ export async function getPackagesForFilter(
 }
 
 /**
- * Cache failed messages in Convex for AI analysis
+ * Cache failed messages in database for AI analysis
  * This allows the AI Error Diagnostician to access historical failed messages
  */
 async function cacheFailedMessages(
     logs: GlobalMessageLog[],
     tenantId: string
 ): Promise<void> {
-    // Get iFlow IDs to map to Convex IDs
-    const iflowIds = [...new Set(logs.map(l => l.iFlowId).filter(Boolean))];
-    
     for (const log of logs) {
         if (!log.iFlowId) continue;
 
         try {
-            // Find the iFlow in Convex
-            const iflow = await convex.query(api.iflows.getByTenantAndIFlowId, {
-                tenantId: tenantId as any,
-                iFlowId: log.iFlowId,
+            // Find the iFlow in database
+            const iflow = await prisma.iFlow.findUnique({
+                where: {
+                    tenantId_iFlowId: {
+                        tenantId,
+                        iFlowId: log.iFlowId,
+                    },
+                },
             });
 
             if (!iflow) continue;
 
-            // Check if already cached
-            const existing = await convex.query(api.iflows.getExecutionByMessageId, {
-                messageId: log.messageGuid,
+            // Check if already cached (upsert by messageId)
+            const existing = await prisma.iFlowExecution.findUnique({
+                where: { messageId: log.messageGuid },
             });
 
             if (existing) continue;
 
             // Cache the failed execution
-            await convex.mutation(api.iflowMutations.createExecution, {
-                messageId: log.messageGuid,
-                status: "FAILED",
-                startTime: new Date(log.logStart).getTime(),
-                endTime: log.logEnd ? new Date(log.logEnd).getTime() : undefined,
-                duration: log.duration || undefined,
-                sender: log.sender || undefined,
-                receiver: log.receiver || undefined,
-                errorMessage: `Status: ${log.status}. Use AI Error Explainer for detailed analysis.`,
-                iFlowId: iflow._id,
+            await prisma.iFlowExecution.create({
+                data: {
+                    messageId: log.messageGuid,
+                    status: "FAILED",
+                    startTime: new Date(log.logStart),
+                    endTime: log.logEnd ? new Date(log.logEnd) : undefined,
+                    duration: log.duration || undefined,
+                    sender: log.sender || undefined,
+                    receiver: log.receiver || undefined,
+                    errorMessage: `Status: ${log.status}. Use AI Error Explainer for detailed analysis.`,
+                    iFlowId: iflow.id,
+                },
             });
         } catch (err) {
             // Silently fail - this is a best-effort cache
@@ -756,27 +761,29 @@ export async function downloadMessageAttachment(
         }
 
         // Get tenant ID - use provided one or fall back to user's default
-        let tenantId = providedTenantId;
+        const tenantId = await resolveTenantId(currentUser.id, providedTenantId);
+
         if (!tenantId) {
-            // Get user's default tenant
-            const user = await convex.query(api.users.getById, { id: currentUser.id });
-            if (!user?.defaultTenantId) {
-                return { success: false, error: "No tenant selected. Please select a tenant first." };
-            }
-            tenantId = user.defaultTenantId;
+            return { success: false, error: "No tenant selected. Please select a tenant first." };
         }
 
         // Get tenant
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check access
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {
@@ -784,7 +791,7 @@ export async function downloadMessageAttachment(
         }
 
         // Get token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
 
         if (!accessToken) {
             if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
@@ -796,7 +803,7 @@ export async function downloadMessageAttachment(
                 tenant.clientId,
                 decryptedClientSecret
             );
-            cacheToken(tenant._id, accessToken);
+            cacheToken(tenant.id, accessToken);
         }
 
         // Create client and download
@@ -836,7 +843,7 @@ export async function downloadMessageAttachment(
 
 /**
  * Diagnose execution error using AI - works with SAP artifact ID
- * This is used from the Message Logs page where we have SAP IDs, not Convex IDs
+ * This is used from the Message Logs page where we have SAP IDs, not DB IDs
  */
 export async function diagnoseMessageLogError(
     tenantId: string,
@@ -853,28 +860,38 @@ export async function diagnoseMessageLogError(
         }
 
         // Get tenant
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check access
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {
             return { success: false, error: "Access denied" };
         }
 
-        // Try to find the iFlow in Convex by artifact ID (optional)
+        // Try to find the iFlow in database by artifact ID (optional)
         let iflow = null;
         if (iFlowArtifactId) {
-            iflow = await convex.query(api.iflows.getByTenantAndIFlowId, {
-                tenantId: tenantId as any,
-                iFlowId: iFlowArtifactId,
+            iflow = await prisma.iFlow.findUnique({
+                where: {
+                    tenantId_iFlowId: {
+                        tenantId,
+                        iFlowId: iFlowArtifactId,
+                    },
+                },
             });
         }
 
@@ -884,16 +901,16 @@ export async function diagnoseMessageLogError(
         }
 
         const decryptedClientSecret = await decrypt(tenant.clientSecret);
-        
+
         // Get or refresh token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
         if (!accessToken) {
             accessToken = await getSAPToken(
                 tenant.authenticationUrl,
                 tenant.clientId,
                 decryptedClientSecret
             );
-            cacheToken(tenant._id, accessToken);
+            cacheToken(tenant.id, accessToken);
         }
 
         // Fetch error details from SAP CPI
@@ -936,7 +953,7 @@ export async function diagnoseMessageLogError(
             if (runSteps && runSteps.length > 0) {
                 const failedSteps = runSteps.filter(s => s.Status === "FAILED" || s.Error);
                 if (failedSteps.length > 0) {
-                    runStepsContext = "\n\nFailed Steps:\n" + failedSteps.map(s => 
+                    runStepsContext = "\n\nFailed Steps:\n" + failedSteps.map(s =>
                         `- ${s.Activity || s.StepId}: ${s.Error || s.Status}`
                     ).join("\n");
                 }
@@ -956,7 +973,7 @@ export async function diagnoseMessageLogError(
 3. Suggested solutions or next steps
 
 Integration Flow: ${iFlowName}
-${iflow?.description ? `Description: ${iflow.description}` : ""}
+${(iflow as { description?: string } | null)?.description ? `Description: ${(iflow as { description?: string }).description}` : ""}
 
 Error Details:
 ${errorDetails}
@@ -965,13 +982,11 @@ ${runStepsContext}
 Provide a clear, actionable response formatted in markdown.`;
 
         try {
-            const result = await generateText({
-                model: aiModel,
+            const result = await runText({
                 prompt,
                 temperature: 0.3,
                 maxTokens: 1024,
             });
-
             const diagnosis = result.text;
 
             if (!diagnosis || diagnosis.trim().length === 0) {

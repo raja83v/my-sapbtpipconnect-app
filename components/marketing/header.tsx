@@ -23,6 +23,7 @@ import {
   Croissant,
   Smartphone,
   Cloud,
+  Github,
 } from "lucide-react";
 import { useMedia } from "@/hooks/use-media";
 import {
@@ -125,6 +126,7 @@ const mobileLinks: MobileLink[] = [
   },
   { name: "Help", href: "/help" },
   { name: "Blog", href: "/blog" },
+  { name: "GitHub", href: siteConfig.links.github },
 ];
 
 export function Header() {
@@ -206,6 +208,16 @@ export function Header() {
 
             <div className="max-lg:in-data-[state=active]:mt-6 in-data-[state=active]:flex mb-6 hidden w-full flex-wrap items-center justify-end space-y-8 md:flex-nowrap lg:m-0 lg:flex lg:w-fit lg:gap-6 lg:space-y-0 lg:border-transparent lg:bg-transparent lg:p-0 lg:shadow-none dark:shadow-none dark:lg:bg-transparent">
               <div className="flex w-full flex-col space-y-3 sm:flex-row sm:gap-3 sm:space-y-0 md:w-fit">
+                <Button asChild variant="ghost" size="icon" className="hidden sm:inline-flex">
+                  <Link
+                    href={siteConfig.links.github}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="GitHub"
+                  >
+                    <Github className="h-4 w-4" />
+                  </Link>
+                </Button>
                 <Button asChild variant="outline" size="sm">
                   <Link href="/sign-in">
                     <span>Login</span>

@@ -1,17 +1,14 @@
 export const siteConfig = {
   name: "CPI Connect",
-  title: "CPI Connect – SAP CPI Monitoring & Analytics Platform",
+  title: "CPI Connect – Open-Source SAP CPI Monitoring & Analytics Platform",
   description:
-    "CPI Connect is a cloud-based monitoring and analytics platform for SAP Cloud Platform Integration. Real-time insights into iFlows, payloads, message statuses, and performance metrics.",
+    "CPI Connect is a free, open-source, self-hosted monitoring and analytics platform for SAP Cloud Platform Integration. Real-time insights into iFlows, payloads, message statuses, and performance metrics — with full data ownership.",
   url: "https://www.cpiconnect.io",
   ogImage: "/og.png",
-  upgrade: {
-    label: "Upgrade to CPI Connect Enterprise",
-    href: "https://www.cpiconnect.io/pricing",
-  },
   links: {
     twitter: "https://x.com/cpiconnect",
     linkedin: "https://www.linkedin.com/company/cpiconnect",
+    github: "https://github.com/raja83v/my-sapbtpipconnect-app",
   },
   keywords: [
     "SAP CPI monitoring",

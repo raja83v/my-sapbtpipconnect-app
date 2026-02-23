@@ -1,12 +1,8 @@
-import { Suspense } from "react";
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import { prisma } from "@/lib/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -33,16 +29,36 @@ export default async function AnalyticsPage() {
     }
 
     // Get usage statistics
-    const stats = await convex.query(api.aiAgents.getUsageStats, {
-        userId: user.id as Id<"users">,
-        daysBack: 30,
-    });
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    // Get recent executions
-    const recentExecutions = await convex.query(api.aiAgents.listByUser, {
-        userId: user.id as Id<"users">,
-        limit: 50,
-    });
+    const [aggregates, byAgentTypeRaw, recentExecutions] = await Promise.all([
+        prisma.aIAgentExecution.aggregate({
+            where: { userId: user.id, createdAt: { gte: thirtyDaysAgo } },
+            _count: { id: true },
+            _sum: { tokensUsed: true },
+            _avg: { duration: true },
+        }),
+        prisma.aIAgentExecution.groupBy({
+            by: ['agentType'],
+            where: { userId: user.id, createdAt: { gte: thirtyDaysAgo } },
+            _count: { id: true },
+        }),
+        prisma.aIAgentExecution.findMany({
+            where: { userId: user.id },
+            take: 50,
+            orderBy: { createdAt: 'desc' },
+        }),
+    ]);
+
+    const stats = {
+        totalExecutions: aggregates._count.id,
+        totalTokensUsed: aggregates._sum.tokensUsed || 0,
+        avgDuration: aggregates._avg.duration || 0,
+        byAgentType: Object.fromEntries(
+            byAgentTypeRaw.map(s => [s.agentType, s._count.id])
+        ) as Record<string, number>,
+    };
 
     // Calculate additional metrics
     const totalTokens = stats.totalTokensUsed;
@@ -195,7 +211,7 @@ export default async function AnalyticsPage() {
                                         if (!agent) return null;
 
                                         const Icon = agent.icon;
-                                        const date = new Date(execution._creationTime);
+                                        const date = new Date(execution.createdAt);
                                         const statusColor = execution.status === "COMPLETED"
                                             ? "text-green-500"
                                             : execution.status === "FAILED"
@@ -204,7 +220,7 @@ export default async function AnalyticsPage() {
 
                                         return (
                                             <div
-                                                key={execution._id}
+                                                key={execution.id}
                                                 className="flex items-start gap-4 p-4 rounded-lg border hover:bg-muted/50 transition-colors"
                                             >
                                                 <div className={`p-2 rounded-lg bg-${agent.color}-500/10 flex-shrink-0`}>

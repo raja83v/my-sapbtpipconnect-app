@@ -7,10 +7,7 @@
  * Shows: headline, confidence, components, design score, risks, timeline, agent metrics.
  */
 
-import { useState, useTransition } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import { useState, useEffect, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -50,9 +47,33 @@ export function PipelineApprovalDashboard({
   pipelineId,
   onComplete,
 }: PipelineApprovalDashboardProps) {
-  const pipeline = useQuery((api as any).iflowPipeline.getById, {
-    pipelineId: pipelineId as any,
-  });
+  const [pipeline, setPipeline] = useState<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchPipeline() {
+      try {
+        const response = await fetch(`/api/pipelines/${pipelineId}`);
+        if (response.ok && !cancelled) {
+          const data = await response.json();
+          setPipeline(data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch pipeline:", error);
+      }
+    }
+
+    fetchPipeline();
+
+    // Poll every 3 seconds while pipeline is active
+    const interval = setInterval(fetchPipeline, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pipelineId]);
 
   const [isApproving, startApproving] = useTransition();
   const [isCancelling, startCancelling] = useTransition();

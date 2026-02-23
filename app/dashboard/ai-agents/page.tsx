@@ -1,20 +1,14 @@
 import { Suspense } from "react";
 import { getCurrentUser } from "@/app/actions/user";
-import { getUserSubscription } from "@/app/actions/billing";
 import { redirect } from "next/navigation";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import { prisma } from "@/lib/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Sparkles, TrendingUp, Zap, Bot, ArrowUpRight } from "lucide-react";
+import { Sparkles, TrendingUp, Zap } from "lucide-react";
 import Link from "next/link";
 import { AgentCard } from "@/components/ai/v2/shared/agent-card";
 import { agentConfigsV2, agentCategoriesV2, getHighPriorityAgents } from "@/lib/ai/agent-types-v2";
-import { LimitReachedBanner } from "@/components/billing";
-import type { PlanType } from "@/lib/stripe-config";
 
 export const metadata = {
     title: "AI Agents V2 | CPI Connect",
@@ -28,23 +22,18 @@ export default async function AIAgentsV2Page() {
         redirect("/sign-in");
     }
 
-    // Get usage statistics and subscription data
-    const [agentStats, subscriptionResult] = await Promise.all([
-        convex.query(api.aiAgents.getStatsByUser, {
-            userId: user.id as Id<"users">,
-        }),
-        getUserSubscription(),
-    ]);
-
-    // Get subscription data
-    const subscription = subscriptionResult.success ? subscriptionResult.data?.subscription : null;
-    const plan = (subscription?.plan || "FREE") as PlanType;
-    const aiCallsCurrent = subscription?.currentAIAgentCalls || 0;
-    const aiCallsMax = subscription?.maxAIAgentCalls || 100;
-    const aiCallsRemaining = aiCallsMax === -1 ? Infinity : Math.max(0, aiCallsMax - aiCallsCurrent);
-    const aiCallsPercent = aiCallsMax === -1 ? 0 : Math.min((aiCallsCurrent / aiCallsMax) * 100, 100);
-    const isAICallsLow = aiCallsMax !== -1 && aiCallsPercent >= 80;
-    const isAICallsExhausted = aiCallsMax !== -1 && aiCallsCurrent >= aiCallsMax;
+    // Get usage statistics from Prisma
+    const agentStatsRaw = await prisma.aIAgentExecution.groupBy({
+        by: ['agentType'],
+        where: { userId: user.id },
+        _count: { id: true },
+        _sum: { tokensUsed: true },
+    });
+    const agentStats = agentStatsRaw.map(stat => ({
+        agentType: stat.agentType,
+        executions: stat._count.id,
+        tokens: stat._sum.tokensUsed || 0,
+    }));
 
     const statsMap = new Map(
         agentStats.map((stat) => [
@@ -83,49 +72,8 @@ export default async function AIAgentsV2Page() {
                 </Button>
             </div>
 
-            {/* AI Calls Limit Banner */}
-            {isAICallsExhausted && (
-                <LimitReachedBanner
-                    limitType="aiAgentCalls"
-                    current={aiCallsCurrent}
-                    max={aiCallsMax}
-                    currentPlan={plan}
-                    variant="error"
-                    dismissible={false}
-                />
-            )}
-
             {/* Usage Summary */}
-            <div className="grid gap-4 md:grid-cols-4">
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">AI Calls Remaining</CardTitle>
-                        <Bot className={`h-4 w-4 ${isAICallsExhausted ? "text-destructive" : isAICallsLow ? "text-yellow-600" : "text-muted-foreground"}`} />
-                    </CardHeader>
-                    <CardContent>
-                        <div className={`text-2xl font-bold ${isAICallsExhausted ? "text-destructive" : isAICallsLow ? "text-yellow-600" : ""}`}>
-                            {aiCallsMax === -1 ? "∞" : aiCallsRemaining.toLocaleString()}
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                            {aiCallsMax === -1 ? "Unlimited" : `${aiCallsCurrent}/${aiCallsMax} used`}
-                        </p>
-                        {aiCallsMax !== -1 && (
-                            <Progress
-                                value={aiCallsPercent}
-                                className={`h-1.5 mt-2 ${aiCallsPercent >= 100 ? "[&>div]:bg-destructive" : aiCallsPercent >= 80 ? "[&>div]:bg-yellow-500" : ""}`}
-                            />
-                        )}
-                        {isAICallsLow && plan !== "ENTERPRISE" && (
-                            <Button asChild variant="link" size="sm" className="px-0 mt-1 h-auto">
-                                <Link href="/dashboard/settings/billing" className="text-xs">
-                                    <Zap className="mr-1 h-3 w-3" />
-                                    Upgrade for more
-                                    <ArrowUpRight className="ml-1 h-3 w-3" />
-                                </Link>
-                            </Button>
-                        )}
-                    </CardContent>
-                </Card>
+            <div className="grid gap-4 md:grid-cols-3">
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <CardTitle className="text-sm font-medium">Total Interactions</CardTitle>

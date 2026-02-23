@@ -14,8 +14,7 @@
  * Model: gemini-2.5-flash-lite (prototype)
  */
 
-import { generateText, type LanguageModel } from 'ai';
-import { google } from '@ai-sdk/google';
+import type { LanguageModel } from 'ai';
 import { BaseAgent } from '../agent-base';
 import type {
   PipelineContext,
@@ -33,6 +32,7 @@ import {
   buildReviewerPrompt,
 } from '../prompts/reviewer-prompts';
 import { cleanAIJson, fixUnescapedQuotesStateMachine } from '../utils/json-cleaner';
+import { runText } from '@/lib/ai/runtime/text';
 
 // ============================================================================
 // Input / Output Types
@@ -50,7 +50,7 @@ export interface DesignReviewerInput {
 
 export class DesignReviewerAgent extends BaseAgent<DesignReviewerInput, ReviewerOutput> {
   readonly name = 'REVIEWER' as const;
-  readonly model: LanguageModel = google('gemini-2.5-flash-lite');
+  readonly model: LanguageModel | null = null;
   readonly description = 'Reviews iFlow design for quality, correctness, and production-readiness';
 
   protected async run(
@@ -65,13 +65,14 @@ export class DesignReviewerAgent extends BaseAgent<DesignReviewerInput, Reviewer
     // Step 2: Call AI for semantic review
     const userPrompt = buildReviewerPrompt(design, rationale, tenantCapabilities, context);
 
-    const { text, usage } = await generateText({
-      model: this.model,
+    const result = await runText({
       system: DESIGN_REVIEWER_SYSTEM_PROMPT,
       prompt: userPrompt,
-      maxOutputTokens: 6000,
+      maxTokens: 6000,
       temperature: 0.2, // Low temperature for consistent reviews
+      modelKind: 'orchestrator',
     });
+    const text = result.text;
 
     // Step 3: Parse the AI review response
     const aiReview = parseReviewResponse(text);
@@ -85,7 +86,7 @@ export class DesignReviewerAgent extends BaseAgent<DesignReviewerInput, Reviewer
     // Step 6: Apply auto-fixes to produce patched design
     const { patchedDesign, designDiff } = applyAutoFixes(design, aiReview);
 
-    const tokensUsed = usage?.totalTokens ?? 0;
+    const tokensUsed = result.usage.totalTokens ?? 0;
 
     return {
       output: {

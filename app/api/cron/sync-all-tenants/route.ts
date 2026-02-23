@@ -1,21 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { syncTenantInternal } from "@/app/actions/tenant";
 
 /**
- * Vercel Cron Job endpoint to sync all tenants
- * Runs every 5 minutes as configured in vercel.json
- * 
- * Security: Vercel automatically adds Authorization header with CRON_SECRET
+ * Cron Job endpoint to sync all tenants
+ * Runs periodically via node-cron scheduler or manual trigger
+ *
+ * Security: Protected by CRON_SECRET environment variable
  */
 export async function GET(request: NextRequest) {
     try {
-        // Verify this is a legitimate cron request from Vercel
+        // Verify this is a legitimate cron request
         const authHeader = request.headers.get("authorization");
 
-        // In production, Vercel adds: Authorization: Bearer <CRON_SECRET>
-        // In development, we skip this check
         if (process.env.NODE_ENV === "production") {
             if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
                 console.error("[Cron] Unauthorized request");
@@ -29,7 +26,9 @@ export async function GET(request: NextRequest) {
         console.log("[Cron] Starting sync for all tenants...");
 
         // Get all tenants
-        const tenants = await convex.query(api.tenants.listAll, { limit: 100 });
+        const tenants = await prisma.cpiTenant.findMany({
+            take: 100,
+        });
 
         if (!tenants || tenants.length === 0) {
             console.log("[Cron] No tenants found");
@@ -64,7 +63,7 @@ export async function GET(request: NextRequest) {
             try {
                 console.log(`[Cron] Syncing ${tenant.name}...`);
 
-                const result = await syncTenantInternal(tenant._id);
+                const result = await syncTenantInternal(tenant.id);
 
                 if (result.success && result.data) {
                     successCount++;

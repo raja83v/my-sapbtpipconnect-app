@@ -1,8 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { PendingInvitation } from "@/types/workspace";
@@ -15,7 +14,6 @@ import {
   type AcceptInvitationInput,
 } from "@/lib/validations/workspace";
 import { sendTenantInvitationEmail } from "./email";
-import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 /**
  * Check if user is tenant admin (OWNER or ADMIN)
@@ -24,9 +22,10 @@ async function checkTenantAdmin(
   userId: string,
   tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await convex.query(api.tenants.getMembership, {
-    tenantId: tenantId as any,
-    userId: userId as any,
+  const member = await prisma.tenantMember.findUnique({
+    where: {
+      userId_tenantId: { userId, tenantId },
+    },
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -62,29 +61,19 @@ export async function inviteMember(
       return { success: false, error: adminCheck.error };
     }
 
-    // Check subscription limit for team members
-    const limitCheck = await checkSubscriptionLimit("teamMembers");
-    if (!limitCheck.success) {
-      return { success: false, error: limitCheck.error };
-    }
-
-    if (!limitCheck.data?.allowed) {
-      const { current, max } = limitCheck.data || { current: 0, max: 0 };
-      return {
-        success: false,
-        error: `Team member limit reached (${current}/${max}). Please upgrade your plan to invite more team members.`,
-      };
-    }
-
     // Check if user is already a member
-    const existingUser = await convex.query(api.users.getByEmail, {
-      email: validatedData.email,
+    const existingUser = await prisma.user.findUnique({
+      where: { email: validatedData.email },
     });
 
     if (existingUser) {
-      const existingMember = await convex.query(api.tenants.getMembership, {
-        tenantId: tenantId as any,
-        userId: existingUser._id,
+      const existingMember = await prisma.tenantMember.findUnique({
+        where: {
+          userId_tenantId: {
+            userId: existingUser.id,
+            tenantId,
+          },
+        },
       });
 
       if (existingMember) {
@@ -96,13 +85,14 @@ export async function inviteMember(
     }
 
     // Check if there's already a pending invitation
-    const pendingInvitations = await convex.query(api.tenants.getPendingInvitations, {
-      tenantId: tenantId as any,
+    const existingInvitation = await prisma.tenantInvitation.findFirst({
+      where: {
+        tenantId,
+        email: { equals: validatedData.email, mode: "insensitive" },
+        acceptedAt: null,
+        expiresAt: { gt: new Date() },
+      },
     });
-
-    const existingInvitation = pendingInvitations.find(
-      (inv: any) => inv.email.toLowerCase() === validatedData.email.toLowerCase()
-    );
 
     if (existingInvitation) {
       return {
@@ -112,12 +102,12 @@ export async function inviteMember(
     }
 
     // Get tenant and inviter details
-    const tenant = await convex.query(api.tenants.getById, {
-      id: tenantId as any,
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: tenantId },
     });
 
-    const inviter = await convex.query(api.users.getById, {
-      id: currentUser.id as any,
+    const inviter = await prisma.user.findUnique({
+      where: { id: currentUser.id },
     });
 
     if (!tenant || !inviter) {
@@ -125,21 +115,15 @@ export async function inviteMember(
     }
 
     // Create invitation
-    const invitationId = await convex.mutation(api.tenantMutations.createInvitation, {
-      tenantId: tenantId as any,
-      email: validatedData.email,
-      role: validatedData.role,
-      invitedById: currentUser.id as any,
+    const invitation = await prisma.tenantInvitation.create({
+      data: {
+        tenantId,
+        email: validatedData.email,
+        role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
+        invitedById: currentUser.id,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      },
     });
-
-    // Get the created invitation
-    const invitation = await convex.query(api.tenants.getInvitationById, {
-      invitationId,
-    });
-
-    if (!invitation) {
-      return { success: false, error: "Failed to create invitation" };
-    }
 
     // Send invitation email
     const acceptUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invitation?token=${invitation.token}`;
@@ -157,16 +141,13 @@ export async function inviteMember(
     // Revalidate paths
     revalidatePath("/dashboard/settings");
 
-    // Increment team member usage after successful invitation
-    await incrementUsage("teamMembers");
-
     const pendingInvitation: PendingInvitation = {
-      id: invitation._id,
+      id: invitation.id,
       email: invitation.email,
       role: invitation.role as PendingInvitation["role"],
       token: invitation.token,
-      expiresAt: new Date(invitation.expiresAt),
-      createdAt: new Date(invitation._creationTime),
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
       invitedBy: {
         id: currentUser.id,
         name: inviter.name || null,
@@ -204,17 +185,25 @@ export async function getPendingInvitations(
     }
 
     // Get pending invitations
-    const invitations = await convex.query(api.tenants.getPendingInvitations, {
-      tenantId: tenantId as any,
+    const invitations = await prisma.tenantInvitation.findMany({
+      where: {
+        tenantId,
+        acceptedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      include: {
+        invitedBy: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
     });
 
-    const pendingInvitations: PendingInvitation[] = invitations.map((inv: any) => ({
+    const pendingInvitations: PendingInvitation[] = invitations.map((inv) => ({
       id: inv.id,
       email: inv.email,
       role: inv.role as PendingInvitation["role"],
       token: inv.token,
-      expiresAt: new Date(inv.expiresAt),
-      createdAt: new Date(inv.createdAt),
+      expiresAt: inv.expiresAt,
+      createdAt: inv.createdAt,
       invitedBy: inv.invitedBy,
     }));
 
@@ -245,8 +234,8 @@ export async function cancelInvitation(
     const validatedData = cancelInvitationSchema.parse(input);
 
     // Get invitation to check tenant
-    const invitation = await convex.query(api.tenants.getInvitationById, {
-      invitationId: validatedData.invitationId as any,
+    const invitation = await prisma.tenantInvitation.findUnique({
+      where: { id: validatedData.invitationId },
     });
 
     if (!invitation) {
@@ -263,8 +252,8 @@ export async function cancelInvitation(
     }
 
     // Delete invitation
-    await convex.mutation(api.tenantMutations.cancelInvitation, {
-      invitationId: validatedData.invitationId as any,
+    await prisma.tenantInvitation.delete({
+      where: { id: validatedData.invitationId },
     });
 
     // Revalidate paths
@@ -296,9 +285,9 @@ export async function acceptInvitation(
     // Validate input
     const validatedData = acceptInvitationSchema.parse(input);
 
-    // Find invitation
-    const invitation = await convex.query(api.tenants.getInvitationByToken, {
-      token: validatedData.token,
+    // Find invitation by token
+    const invitation = await prisma.tenantInvitation.findUnique({
+      where: { token: validatedData.token },
     });
 
     if (!invitation) {
@@ -306,7 +295,7 @@ export async function acceptInvitation(
     }
 
     // Check if expired
-    if (invitation.expiresAt < Date.now()) {
+    if (invitation.expiresAt < new Date()) {
       return { success: false, error: "This invitation has expired" };
     }
 
@@ -315,9 +304,9 @@ export async function acceptInvitation(
       return { success: false, error: "This invitation has already been accepted" };
     }
 
-    // Get current user
-    const user = await convex.query(api.users.getById, {
-      id: currentUser.id as any,
+    // Get current user details
+    const user = await prisma.user.findUnique({
+      where: { id: currentUser.id },
     });
 
     if (!user) {
@@ -333,9 +322,13 @@ export async function acceptInvitation(
     }
 
     // Check if already a member
-    const existingMember = await convex.query(api.tenants.getMembership, {
-      tenantId: invitation.tenantId,
-      userId: currentUser.id as any,
+    const existingMember = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: invitation.tenantId,
+        },
+      },
     });
 
     if (existingMember) {
@@ -345,16 +338,28 @@ export async function acceptInvitation(
       };
     }
 
-    // Accept invitation (creates member and marks invitation as accepted)
-    await convex.mutation(api.tenantMutations.acceptInvitation, {
-      invitationId: invitation._id,
-      userId: currentUser.id as any,
+    // Accept invitation and add member in a transaction
+    await prisma.$transaction(async (tx) => {
+      // Mark invitation as accepted
+      await tx.tenantInvitation.update({
+        where: { id: invitation.id },
+        data: { acceptedAt: new Date() },
+      });
+
+      // Add user as member
+      await tx.tenantMember.create({
+        data: {
+          userId: currentUser.id,
+          tenantId: invitation.tenantId,
+          role: invitation.role,
+        },
+      });
     });
 
     // Revalidate paths
     revalidatePath("/dashboard");
     revalidatePath("/dashboard/settings");
-    revalidatePath("/"); // Revalidate root to ensure proper auth state
+    revalidatePath("/");
 
     return {
       success: true,

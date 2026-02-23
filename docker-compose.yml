@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cpiconnect
+      POSTGRES_USER: cpiconnect
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cpiconnect_secret}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cpiconnect"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: postgresql://cpiconnect:${POSTGRES_PASSWORD:-cpiconnect_secret}@db:5432/cpiconnect
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY: ${JWT_EXPIRY:-30d}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      AI_PROVIDER: ${AI_PROVIDER:-google}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LLMLITE_BASE_URL: ${LLMLITE_BASE_URL:-}
+      LLMLITE_API_KEY: ${LLMLITE_API_KEY:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      CRON_SECRET: ${CRON_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

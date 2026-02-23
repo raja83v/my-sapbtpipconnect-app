@@ -4,11 +4,18 @@
       "Bash(npx tsc:*)",
       "Bash(node -e:*)",
       "Bash(node:*)",
-      "Bash(npx next build:*)"
+      "Bash(npx next build:*)",
+      "Bash(ls:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(pnpm install:*)",
+      "Bash(npx prisma generate:*)",
+      "Bash(pnpm remove:*)",
+      "Bash(wc:*)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "shadcn"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

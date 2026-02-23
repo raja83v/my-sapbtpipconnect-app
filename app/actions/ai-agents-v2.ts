@@ -1,16 +1,13 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { streamText } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runText } from "@/lib/ai/runtime/text";
 import * as prompts from "@/lib/ai/prompts";
 import { revalidatePath } from "next/cache";
 import type { AIAgentTypeV2 } from "@/lib/ai/agent-types-v2";
 import { createSAPCPIClient, type SAPCPICredentials } from "@/lib/sap-cpi/client";
-import { checkSubscriptionLimit, incrementUsage } from "./billing";
 
 /**
  * Diagnose an error with AI-powered analysis
@@ -32,27 +29,12 @@ export async function diagnoseError(params: {
         const { executionId, tenantId, iflowId } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
             return { success: false, error: "You don't have access to this tenant" };
-        }
-
-        // Check subscription limit for AI agent calls
-        const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
-        if (!limitCheck.success) {
-            return { success: false, error: limitCheck.error };
-        }
-
-        if (!limitCheck.data?.allowed) {
-            const { current, max } = limitCheck.data || { current: 0, max: 0 };
-            return {
-                success: false,
-                error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
-            };
         }
 
         // Build context for error diagnosis
@@ -80,8 +62,7 @@ Connection timeout: Database connection pool exhausted
 `;
 
         // Generate AI diagnosis
-        const result = await streamText({
-            model: aiModel,
+        const result = await runText({
             prompt: `${prompts.ERROR_DIAGNOSIS_SYSTEM_PROMPT}
 
 ${errorContext}
@@ -115,7 +96,7 @@ Provide a comprehensive diagnosis in the following JSON format:
             temperature: 0.3,
         });
 
-        const response = await result.text;
+        const response = result.text;
         const duration = Date.now() - startTime;
 
         // Parse the JSON response
@@ -202,10 +183,7 @@ const pool = new Pool({
         }
 
         // Track execution in database
-        // TODO: Create execution record in Convex
-
-        // Increment AI agent usage after successful execution
-        await incrementUsage("aiAgentCalls");
+        // TODO: Create execution record in database
 
         revalidatePath("/dashboard/ai-agents-v2");
 
@@ -243,9 +221,8 @@ export async function getFailedExecutions(params: {
         const { tenantId, limit = 100 } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -253,8 +230,8 @@ export async function getFailedExecutions(params: {
         }
 
         // Get all iFlows for this tenant
-        const iFlows = await convex.query(api.iflows.listByTenant, {
-            tenantId: tenantId as any,
+        const iFlows = await prisma.iFlow.findMany({
+            where: { tenantId },
         });
 
         if (iFlows.length === 0) {
@@ -263,16 +240,16 @@ export async function getFailedExecutions(params: {
 
         // Get failed executions for each iFlow
         const failedExecutionsPromises = iFlows.map(async (iflow) => {
-            const executions = await convex.query(api.iflows.getExecutions, {
-                iFlowId: iflow._id,
-                status: "FAILED",
-                limit: 20, // Get recent failures per iFlow
+            const executions = await prisma.iFlowExecution.findMany({
+                where: { iFlowId: iflow.id, status: "FAILED" },
+                orderBy: { startTime: "desc" },
+                take: 20,
             });
 
             return executions.map((exec: any) => ({
-                id: exec._id,
+                id: exec.id,
                 messageId: exec.messageId,
-                iflowId: iflow._id,
+                iflowId: iflow.id,
                 iflowName: iflow.name,
                 errorMessage: exec.errorMessage || "Unknown error",
                 errorCategory: exec.errorCategory || null,
@@ -425,27 +402,12 @@ export async function sendChatMessage(params: {
 
         if (tenantId) {
             // Validate tenant access
-            const membership = await convex.query(api.tenants.getMembership, {
-                tenantId: tenantId as any,
-                userId: currentUser.id as any,
+            const membership = await prisma.tenantMember.findUnique({
+                where: { userId_tenantId: { userId: currentUser.id, tenantId } },
             });
 
             if (!membership) {
                 return { success: false, error: "You don't have access to this tenant" };
-            }
-
-            // Check subscription limit for AI agent calls
-            const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
-            if (!limitCheck.success) {
-                return { success: false, error: limitCheck.error };
-            }
-
-            if (!limitCheck.data?.allowed) {
-                const { current, max } = limitCheck.data || { current: 0, max: 0 };
-                return {
-                    success: false,
-                    error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
-                };
             }
 
             contextInfo += `\n**Tenant Context:** User is working with tenant ${tenantId}`;
@@ -462,8 +424,7 @@ export async function sendChatMessage(params: {
             .join("\n");
 
         // Generate AI response
-        const result = await streamText({
-            model: aiModel,
+        const result = await runText({
             prompt: `${prompts.GENERAL_ASSISTANT_SYSTEM_PROMPT}
 
 ${contextInfo}
@@ -478,35 +439,34 @@ Provide a helpful, accurate, and concise response. If the question is about SAP 
             maxTokens: 2000,
         });
 
-        const response = await result.text;
+        const response = result.text;
         const duration = Date.now() - startTime;
         const messageId = `msg-${Date.now()}`;
 
         // Estimate token usage (rough approximation: 1 token ≈ 4 characters)
         const inputTokens = Math.ceil(message.length / 4);
         const outputTokens = Math.ceil(response.length / 4);
-        const tokensUsed = inputTokens + outputTokens;
+        const tokensUsed = result.usage.totalTokens || inputTokens + outputTokens;
 
         // Track execution in database
         try {
-            await convex.mutation(api.aiAgentMutations.trackExecution, {
-                userId: currentUser.id as any,
-                agentType: "GENERAL_ASSISTANT",
-                tenantId: tenantId || undefined,
-                iflowId: iflowId || undefined,
-                input: message,
-                output: response,
-                tokensUsed,
-                duration,
-                success: true,
+            await prisma.aIAgentExecution.create({
+                data: {
+                    userId: currentUser.id,
+                    agentType: "GENERAL_ASSISTANT",
+                    tenantId: tenantId || undefined,
+                    iflowId: iflowId || undefined,
+                    input: message,
+                    output: response,
+                    tokensUsed,
+                    duration,
+                    success: true,
+                },
             });
         } catch (trackError) {
             console.error("Failed to track execution:", trackError);
             // Don't fail the request if tracking fails
         }
-
-        // Increment AI agent usage after successful execution
-        await incrementUsage("aiAgentCalls");
 
         revalidatePath("/dashboard/ai-agents");
 
@@ -543,11 +503,11 @@ export async function getChatHistory(params: {
 
         const { tenantId, limit = 50 } = params;
 
-        // Get agent execution history using listByUser which is more flexible
-        const history = await convex.query(api.aiAgents.listByUser, {
-            userId: currentUser.id as any,
-            agentType: "GENERAL_ASSISTANT",
-            limit,
+        // Get agent execution history
+        const history = await prisma.aIAgentExecution.findMany({
+            where: { userId: currentUser.id, agentType: "GENERAL_ASSISTANT" },
+            orderBy: { createdAt: "desc" },
+            take: limit,
         });
 
         // Filter by tenantId if provided
@@ -558,16 +518,16 @@ export async function getChatHistory(params: {
         // Transform to chat message format
         const messages = filteredHistory.flatMap((exec: any) => [
             {
-                id: `${exec._id}-user`,
+                id: `${exec.id}-user`,
                 role: "user",
                 content: exec.input || exec.inputPrompt || "",
-                timestamp: exec._creationTime,
+                timestamp: exec.createdAt,
             },
             {
-                id: `${exec._id}-assistant`,
+                id: `${exec.id}-assistant`,
                 role: "assistant",
                 content: exec.output || exec.outputData || "",
-                timestamp: exec._creationTime + 1000, // Slightly after user message
+                timestamp: new Date(new Date(exec.createdAt).getTime() + 1000), // Slightly after user message
             },
         ]);
 
@@ -591,12 +551,14 @@ export async function clearChatHistory(params: {
             return { success: false, error: "Not authenticated" };
         }
 
-        // TODO: Implement actual deletion in Convex
+        // TODO: Implement actual deletion
         // For now, just return success
-        // await convex.mutation(api.aiAgents.clearHistory, {
-        //     userId: currentUser.id as any,
-        //     agentType: "GENERAL_ASSISTANT",
-        //     tenantId: params.tenantId as any || null,
+        // await prisma.aIAgentExecution.deleteMany({
+        //     where: {
+        //         userId: currentUser.id,
+        //         agentType: "GENERAL_ASSISTANT",
+        //         tenantId: params.tenantId || undefined,
+        //     },
         // });
 
         revalidatePath("/dashboard/ai-agents");
@@ -624,9 +586,8 @@ export async function getIFlowsForOptimizer(params: {
         const { tenantId } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -634,13 +595,13 @@ export async function getIFlowsForOptimizer(params: {
         }
 
         // Get all iFlows for this tenant
-        const iFlows = await convex.query(api.iflows.listByTenant, {
-            tenantId: tenantId as any,
+        const iFlows = await prisma.iFlow.findMany({
+            where: { tenantId },
         });
 
         // Transform to simple format
         const simplifiedIFlows = iFlows.map((iflow: any) => ({
-            id: iflow._id,
+            id: iflow.id,
             name: iflow.name,
             status: iflow.status,
         }));
@@ -672,32 +633,17 @@ export async function analyzeIFlowPerformance(params: {
         const { tenantId, iflowId, daysBack = 7 } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
             return { success: false, error: "You don't have access to this tenant" };
         }
 
-        // Check subscription limit for AI agent calls
-        const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
-        if (!limitCheck.success) {
-            return { success: false, error: limitCheck.error };
-        }
-
-        if (!limitCheck.data?.allowed) {
-            const { current, max } = limitCheck.data || { current: 0, max: 0 };
-            return {
-                success: false,
-                error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
-            };
-        }
-
         // Get tenant details for SAP CPI connection
-        const tenant = await convex.query(api.tenants.getById, {
-            id: tenantId as any,
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
         });
 
         if (!tenant) {
@@ -705,8 +651,8 @@ export async function analyzeIFlowPerformance(params: {
         }
 
         // Get iFlow details from database
-        const iflow = await convex.query(api.iflows.getById, {
-            id: iflowId as any,
+        const iflow = await prisma.iFlow.findUnique({
+            where: { id: iflowId },
         });
 
         if (!iflow) {
@@ -714,9 +660,10 @@ export async function analyzeIFlowPerformance(params: {
         }
 
         // Get execution statistics for the last 7 days
-        const executions = await convex.query(api.iflows.getExecutions, {
-            iFlowId: iflowId as any,
-            limit: 100,
+        const executions = await prisma.iFlowExecution.findMany({
+            where: { iFlowId: iflowId },
+            orderBy: { startTime: "desc" },
+            take: 100,
         });
 
         // Calculate performance metrics
@@ -1048,8 +995,7 @@ ${bpmn2ParseResult.errorHandlers.length > 0
         });
 
         // Generate AI-powered analysis
-        const result = await streamText({
-            model: aiModel,
+        const result = await runText({
             prompt: `${prompts.PERFORMANCE_OPTIMIZER_SYSTEM_PROMPT}
 
 ${performanceContext}
@@ -1097,7 +1043,7 @@ Focus on actionable, specific recommendations based on the metrics provided.`,
             temperature: 0.3,
         });
 
-        const aiResponse = await result.text;
+        const aiResponse = result.text;
         const duration = Date.now() - startTime;
 
         // Parse AI response
@@ -1117,27 +1063,26 @@ Focus on actionable, specific recommendations based on the metrics provided.`,
         // Estimate token usage
         const inputTokens = Math.ceil(performanceContext.length / 4);
         const outputTokens = Math.ceil(aiResponse.length / 4);
-        const tokensUsed = inputTokens + outputTokens;
+        const tokensUsed = result.usage.totalTokens || inputTokens + outputTokens;
 
         // Track execution in database
         try {
-            await convex.mutation(api.aiAgentMutations.trackExecution, {
-                userId: currentUser.id as any,
-                agentType: "PERFORMANCE_OPTIMIZER",
-                tenantId: tenantId as any,
-                iflowId: iflowId as any,
-                input: `Analyze performance for ${iflow.name}`,
-                output: JSON.stringify(analysis),
-                tokensUsed,
-                duration,
-                success: true,
+            await prisma.aIAgentExecution.create({
+                data: {
+                    userId: currentUser.id,
+                    agentType: "PERFORMANCE_OPTIMIZER",
+                    tenantId: tenantId || undefined,
+                    iflowId: iflowId || undefined,
+                    input: `Analyze performance for ${iflow.name}`,
+                    output: JSON.stringify(analysis),
+                    tokensUsed,
+                    duration,
+                    success: true,
+                },
             });
         } catch (trackError) {
             console.error("Failed to track execution:", trackError);
         }
-
-        // Increment AI agent usage after successful execution
-        await incrementUsage("aiAgentCalls");
 
         revalidatePath("/dashboard/ai-agents");
 

@@ -1,7 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
 import {
   createWorkspaceSchema,
   updateWorkspaceSchema,
@@ -12,7 +12,6 @@ import {
 } from "@/lib/validations/workspace";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types/actions";
-import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
@@ -48,69 +47,64 @@ export async function getWorkspaces(params?: {
   try {
     const page = params?.page ?? 1;
     const pageSize = params?.pageSize ?? 10;
-
-    // Get all tenants
-    let tenants = await convex.query(api.tenants.listAll, { limit: 1000 });
-
-    // Apply search filter
-    if (params?.search) {
-      const searchLower = params.search.toLowerCase();
-      tenants = tenants.filter(
-        (t) =>
-          t.name.toLowerCase().includes(searchLower) ||
-          t.slug.toLowerCase().includes(searchLower)
-      );
-    }
-
-    // Apply sorting
-    if (params?.sortBy) {
-      tenants.sort((a, b) => {
-        const aVal = a[params.sortBy as keyof typeof a];
-        const bVal = b[params.sortBy as keyof typeof b];
-        if (aVal === bVal) return 0;
-        if (aVal === null || aVal === undefined) return 1;
-        if (bVal === null || bVal === undefined) return -1;
-        const comparison = aVal < bVal ? -1 : 1;
-        return params.sortOrder === "desc" ? -comparison : comparison;
-      });
-    } else {
-      tenants.sort((a, b) => b._creationTime - a._creationTime);
-    }
-
-    const total = tenants.length;
-    const pageCount = Math.ceil(total / pageSize);
-
-    // Apply pagination
     const skip = (page - 1) * pageSize;
-    const paginatedTenants = tenants.slice(skip, skip + pageSize);
 
-    // Get member and invitation counts
-    const workspacesWithCounts = await Promise.all(
-      paginatedTenants.map(async (tenant) => {
-        const members = await convex.query(api.tenants.getMembers, { 
-          tenantId: tenant._id 
-        });
-        const invitations = await convex.query(api.tenants.getPendingInvitations, { 
-          tenantId: tenant._id 
-        });
-        return {
-          id: tenant._id,
-          name: tenant.name,
-          slug: tenant.slug,
-          image: null, // Tenants don't have images in this schema
-          createdAt: new Date(tenant._creationTime),
-          updatedAt: new Date(tenant._creationTime),
+    // Build where clause
+    const where: any = {};
+
+    if (params?.search) {
+      where.OR = [
+        { name: { contains: params.search, mode: "insensitive" } },
+        { slug: { contains: params.search, mode: "insensitive" } },
+      ];
+    }
+
+    // Build orderBy
+    const orderBy: any = {};
+    if (params?.sortBy) {
+      orderBy[params.sortBy] = params.sortOrder || "asc";
+    } else {
+      orderBy.createdAt = "desc";
+    }
+
+    const [tenants, total] = await Promise.all([
+      prisma.cpiTenant.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy,
+        include: {
           _count: {
-            members: members.length,
-            invitations: invitations.length,
+            select: {
+              members: true,
+              invitations: true,
+            },
           },
-        };
-      })
-    );
+        },
+      }),
+      prisma.cpiTenant.count({ where }),
+    ]);
+
+    const pageCount = Math.ceil(total / pageSize);
 
     return {
       success: true,
-      data: { workspaces: workspacesWithCounts, total, pageCount },
+      data: {
+        workspaces: tenants.map((tenant) => ({
+          id: tenant.id,
+          name: tenant.name,
+          slug: tenant.slug,
+          image: tenant.image || null,
+          createdAt: tenant.createdAt,
+          updatedAt: tenant.updatedAt,
+          _count: {
+            members: tenant._count.members,
+            invitations: tenant._count.invitations,
+          },
+        })),
+        total,
+        pageCount,
+      },
     };
   } catch (error) {
     console.error("Error fetching tenants:", error);
@@ -124,32 +118,51 @@ export async function getWorkspaceById(id: string): Promise<ActionResult<any>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const tenant = await convex.query(api.tenants.getWithMembers, { 
-      tenantId: id as Id<"cpiTenants">
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true,
+                image: true,
+                status: true,
+              },
+            },
+          },
+        },
+        _count: {
+          select: { invitations: true },
+        },
+      },
     });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
-    const invitations = await convex.query(api.tenants.getPendingInvitations, { 
-      tenantId: id as Id<"cpiTenants">
-    });
-
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
-        id: tenant._id,
+        id: tenant.id,
         name: tenant.name,
         slug: tenant.slug,
-        image: null,
-        createdAt: new Date(tenant._creationTime),
-        updatedAt: new Date(tenant._creationTime),
-        members: tenant.members,
+        image: tenant.image || null,
+        createdAt: tenant.createdAt,
+        updatedAt: tenant.updatedAt,
+        members: tenant.members.map((m) => ({
+          id: m.id,
+          role: m.role,
+          joinedAt: m.joinedAt,
+          user: m.user,
+        })),
         _count: {
-          invitations: invitations.length,
+          invitations: tenant._count.invitations,
         },
-      }
+      },
     };
   } catch (error) {
     console.error("Error fetching tenant:", error);
@@ -167,8 +180,8 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Acti
     const validatedData = createWorkspaceSchema.parse(input);
 
     // Check if tenant with slug already exists
-    const existingTenant = await convex.query(api.tenants.getBySlug, { 
-      slug: validatedData.slug 
+    const existingTenant = await prisma.cpiTenant.findUnique({
+      where: { slug: validatedData.slug },
     });
 
     if (existingTenant) {
@@ -182,32 +195,44 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Acti
       return { success: false, error: "User session not found" };
     }
 
-    // Create tenant with creator as owner
-    // Note: This requires tenant URL and auth type - for admin creation, use defaults
-    const tenantId = await convex.mutation(api.tenantMutations.create, {
-      name: validatedData.name,
-      slug: validatedData.slug,
-      tenantUrl: "https://placeholder.example.com", // Admin-created tenants need manual configuration
-      authType: "OAUTH",
-      ownerId: currentUser.id as Id<"users">,
-    });
+    // Create tenant with creator as owner in a transaction
+    const tenant = await prisma.$transaction(async (tx) => {
+      const newTenant = await tx.cpiTenant.create({
+        data: {
+          name: validatedData.name,
+          slug: validatedData.slug,
+          tenantUrl: "https://placeholder.example.com", // Admin-created tenants need manual configuration
+          authType: "OAUTH",
+          status: "ACTIVE",
+        },
+      });
 
-    const tenant = await convex.query(api.tenants.getById, { id: tenantId });
+      // Add current user as OWNER
+      await tx.tenantMember.create({
+        data: {
+          userId: currentUser.id,
+          tenantId: newTenant.id,
+          role: "OWNER",
+        },
+      });
+
+      return newTenant;
+    });
 
     revalidatePath("/admin/workspaces");
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
-        id: tenant?._id,
-        name: tenant?.name,
-        slug: tenant?.slug,
-        image: null,
-        createdAt: tenant ? new Date(tenant._creationTime) : new Date(),
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        image: tenant.image || null,
+        createdAt: tenant.createdAt,
         _count: {
           members: 1,
         },
-      }
+      },
     };
   } catch (error: any) {
     console.error("Error creating tenant:", error);
@@ -230,8 +255,8 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
     const validatedData = updateWorkspaceSchema.parse(input);
 
     // Check if tenant exists
-    const existingTenant = await convex.query(api.tenants.getById, { 
-      id: validatedData.id as Id<"cpiTenants">
+    const existingTenant = await prisma.cpiTenant.findUnique({
+      where: { id: validatedData.id },
     });
 
     if (!existingTenant) {
@@ -240,8 +265,8 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
 
     // If slug is being updated, check for conflicts
     if (validatedData.slug && validatedData.slug !== existingTenant.slug) {
-      const slugConflict = await convex.query(api.tenants.getBySlug, { 
-        slug: validatedData.slug 
+      const slugConflict = await prisma.cpiTenant.findUnique({
+        where: { slug: validatedData.slug },
       });
 
       if (slugConflict) {
@@ -250,35 +275,34 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
     }
 
     // Update tenant
-    await convex.mutation(api.tenantMutations.update, {
-      id: validatedData.id as Id<"cpiTenants">,
-      name: validatedData.name,
-      slug: validatedData.slug,
-    });
-
-    const members = await convex.query(api.tenants.getMembers, { 
-      tenantId: validatedData.id as Id<"cpiTenants">
-    });
-
-    const tenant = await convex.query(api.tenants.getById, { 
-      id: validatedData.id as Id<"cpiTenants">
+    const tenant = await prisma.cpiTenant.update({
+      where: { id: validatedData.id },
+      data: {
+        name: validatedData.name,
+        slug: validatedData.slug,
+      },
+      include: {
+        _count: {
+          select: { members: true },
+        },
+      },
     });
 
     revalidatePath("/admin/workspaces");
     revalidatePath(`/admin/workspaces/${validatedData.id}`);
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
-        id: tenant?._id,
-        name: tenant?.name,
-        slug: tenant?.slug,
-        image: null,
-        updatedAt: new Date(),
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        image: tenant.image || null,
+        updatedAt: tenant.updatedAt,
         _count: {
-          members: members.length,
+          members: tenant._count.members,
         },
-      }
+      },
     };
   } catch (error: any) {
     console.error("Error updating tenant:", error);
@@ -301,17 +325,17 @@ export async function deleteWorkspace(input: DeleteWorkspaceInput): Promise<Acti
     const validatedData = deleteWorkspaceSchema.parse(input);
 
     // Check if tenant exists
-    const existingTenant = await convex.query(api.tenants.getById, { 
-      id: validatedData.id as Id<"cpiTenants">
+    const existingTenant = await prisma.cpiTenant.findUnique({
+      where: { id: validatedData.id },
     });
 
     if (!existingTenant) {
       return { success: false, error: "Tenant not found" };
     }
 
-    // Delete tenant (this will cascade delete members, invitations, iflows, etc.)
-    await convex.mutation(api.tenantMutations.deleteTenant, { 
-      id: validatedData.id as Id<"cpiTenants">
+    // Delete tenant (cascade will handle members, invitations, iflows, etc.)
+    await prisma.cpiTenant.delete({
+      where: { id: validatedData.id },
     });
 
     revalidatePath("/admin/workspaces");

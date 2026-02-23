@@ -1,47 +1,28 @@
-import { auth, clerkClient } from "@clerk/nextjs/server";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+"use server";
+
+import { getCurrentUser as getAuthUser } from "@/lib/auth-helpers";
 import type { CurrentUser } from "@/types/user";
+import { prisma } from "@/lib/db";
 import { cache } from "react";
 
 export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
   try {
-    const { userId } = await auth();
+    const authUser = await getAuthUser();
 
-    if (!userId) {
+    if (!authUser) {
       return null;
     }
 
-    // Try to get user from Convex
-    let user = await convex.query(api.users.getByClerkId, { clerkId: userId });
-
-    // If user doesn't exist in our database, create them
-    // This handles cases where webhook failed or wasn't configured
-    if (!user) {
-      try {
-        const client = await clerkClient();
-        const clerkUser = await client.users.getUser(userId);
-
-        const convexUserId = await convex.mutation(api.userMutations.findOrCreateByClerkId, {
-          clerkId: userId,
-          email: clerkUser.emailAddresses[0].emailAddress,
-          name: `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim() || undefined,
-          emailVerified: clerkUser.emailAddresses[0].verification?.status === "verified",
-          image: clerkUser.imageUrl || undefined,
-        });
-
-        user = await convex.query(api.users.getById, { id: convexUserId });
-      } catch (createError) {
-        console.error("[getCurrentUser] Failed to create user:", createError);
-        return null;
-      }
-    }
+    // Fetch full user data from database
+    const user = await prisma.user.findUnique({
+      where: { id: authUser.id },
+    });
 
     if (!user) return null;
 
-    // Transform Convex user to CurrentUser type
+    // Transform to CurrentUser type
     return {
-      id: user._id,
+      id: user.id,
       email: user.email,
       name: user.name ?? null,
       image: user.image ?? null,
@@ -51,7 +32,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
       emailVerified: user.emailVerified,
       onboardingCompleted: user.onboardingCompleted,
       defaultTenantId: user.defaultTenantId ?? null,
-      createdAt: new Date(user._creationTime),
+      createdAt: user.createdAt,
     };
   } catch (error) {
     console.error("Error fetching current user:", error);

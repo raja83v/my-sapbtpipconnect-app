@@ -1,8 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
 
 /**
@@ -17,9 +16,13 @@ export async function markTenantConnected(tenantId: string): Promise<ActionResul
         }
 
         // Check if user has access to this tenant
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId: tenantId,
+                },
+            },
         });
 
         if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
@@ -27,10 +30,12 @@ export async function markTenantConnected(tenantId: string): Promise<ActionResul
         }
 
         // Mark tenant as connected
-        await convex.mutation(api.tenantMutations.update, {
-            id: tenantId as any,
-            isConnected: true,
-            connectionTestAt: Date.now(),
+        await prisma.cpiTenant.update({
+            where: { id: tenantId },
+            data: {
+                isConnected: true,
+                connectionTestAt: new Date(),
+            },
         });
 
         return { success: true };

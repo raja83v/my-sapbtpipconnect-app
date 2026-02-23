@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { completeOnboarding } from "@/app/actions/onboarding";
-import { createOnboardingCheckoutSession, ensureUserSubscription } from "@/app/actions/billing";
 import { toast } from "sonner";
 import {
   IconInnerShadowTop,
@@ -16,7 +15,6 @@ import {
   IconLock,
   IconKey,
   IconLoader2,
-  IconSparkles,
 } from "@tabler/icons-react";
 import Link from "next/link";
 import confetti from "canvas-confetti";
@@ -28,16 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PRICING_PLANS, formatPrice, type PlanType } from "@/lib/stripe-config";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 
 interface OnboardingFlowProps {
   userName: string | null;
@@ -61,16 +50,16 @@ const companySizes = [
   { value: "1000+", label: "1000+ employees" },
 ];
 
-type StepType = "profile" | "plan" | "tenant" | "complete";
+type StepType = "profile" | "tenant" | "complete";
 
 export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  
+
   // Determine initial step from URL
   const getInitialStep = (): StepType => {
     const step = searchParams.get("step");
-    if (step === "tenant" || step === "plan" || step === "complete") {
+    if (step === "tenant" || step === "complete") {
       return step as StepType;
     }
     return "profile";
@@ -81,11 +70,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
   const [organizationType, setOrganizationType] = useState("");
   const [companySize, setCompanySize] = useState("");
   const [companyName, setCompanyName] = useState("");
-  
-  // Selected Plan
-  const [selectedPlan, setSelectedPlan] = useState<PlanType>("FREE");
-  const [isPlanLoading, setIsPlanLoading] = useState(false);
-  
+
   // CPI Tenant Configuration
   const [tenantName, setTenantName] = useState("");
   const [tenantUrl, setTenantUrl] = useState("");
@@ -96,71 +81,18 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
   const [tokenUrl, setTokenUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  
+
   const [isLoading, setIsLoading] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState("");
-
-  // Handle URL params for subscription redirect
-  useEffect(() => {
-    const subscriptionStatus = searchParams.get("subscription");
-    if (subscriptionStatus === "success") {
-      toast.success("Subscription activated successfully!");
-      setCurrentStep("tenant");
-      // Clean up URL
-      router.replace("/onboarding?step=tenant");
-    } else if (subscriptionStatus === "canceled") {
-      toast.info("Subscription selection canceled");
-      setCurrentStep("plan");
-      router.replace("/onboarding?step=plan");
-    }
-  }, [searchParams, router]);
 
   const generateSlug = (name: string) => {
     return name.toLowerCase().replace(/[^a-z0-9]/g, "-");
   };
 
-  const handleProfileNext = async () => {
-    // Ensure user has a subscription record
-    await ensureUserSubscription();
-    setCurrentStep("plan");
-    router.replace("/onboarding?step=plan");
-  };
-
-  const handlePlanSelection = async () => {
-    if (selectedPlan === "FREE") {
-      // Continue with free plan
-      setCurrentStep("tenant");
-      router.replace("/onboarding?step=tenant");
-      return;
-    }
-
-    if (selectedPlan === "ENTERPRISE") {
-      // Redirect to contact sales
-      window.location.href = "mailto:sales@cpiconnect.io?subject=Enterprise Plan Inquiry";
-      return;
-    }
-
-    // Create checkout session for paid plans
-    const plan = PRICING_PLANS[selectedPlan];
-    if (!plan.priceId) {
-      toast.error("Plan not available");
-      return;
-    }
-
-    setIsPlanLoading(true);
-    try {
-      const result = await createOnboardingCheckoutSession(plan.priceId);
-      if (result.success && result.data?.url) {
-        window.location.href = result.data.url;
-      } else {
-        toast.error(result.error || "Failed to create checkout session");
-      }
-    } catch {
-      toast.error("Something went wrong");
-    } finally {
-      setIsPlanLoading(false);
-    }
+  const handleProfileNext = () => {
+    setCurrentStep("tenant");
+    router.replace("/onboarding?step=tenant");
   };
 
   const handleTenantCreation = async () => {
@@ -267,7 +199,6 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
   // Step indicator
   const steps = [
     { key: "profile", label: "Profile" },
-    { key: "plan", label: "Plan" },
     { key: "tenant", label: "Tenant" },
     { key: "complete", label: "Complete" },
   ];
@@ -300,7 +231,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
       {/* Right Side - Onboarding Content */}
       <div className="lg:p-8 overflow-y-auto max-h-screen">
         <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[550px] py-8">
-          
+
           {/* Step Indicator */}
           <div className="flex items-center justify-center gap-2 mb-4">
             {steps.map((step, index) => (
@@ -438,120 +369,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
             </>
           )}
 
-          {/* Step 2: Plan Selection */}
-          {currentStep === "plan" && (
-            <>
-              <div className="flex flex-col space-y-2 text-center">
-                <h1 className="text-2xl font-semibold tracking-tight">
-                  Choose your plan
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                  Select the plan that best fits your needs. You can upgrade anytime.
-                </p>
-              </div>
-
-              <div className="grid gap-4">
-                {(Object.entries(PRICING_PLANS) as [PlanType, (typeof PRICING_PLANS)[PlanType]][]).map(
-                  ([planKey, plan]) => {
-                    const isPro = planKey === "PROFESSIONAL";
-                    const isSelected = selectedPlan === planKey;
-
-                    return (
-                      <Card
-                        key={planKey}
-                        className={cn(
-                          "relative cursor-pointer transition-all hover:border-primary/50",
-                          isPro && "border-primary shadow-md",
-                          isSelected && "ring-2 ring-primary"
-                        )}
-                        onClick={() => setSelectedPlan(planKey)}
-                      >
-                        {isPro && (
-                          <div className="absolute -top-3 left-4 z-10">
-                            <Badge className="bg-primary">
-                              <IconSparkles className="mr-1 h-3 w-3" />
-                              Recommended
-                            </Badge>
-                          </div>
-                        )}
-                        <CardHeader className="pb-2">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <CardTitle className="text-lg">{plan.name}</CardTitle>
-                              <CardDescription>{plan.description}</CardDescription>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-2xl font-bold">
-                                {formatPrice(plan.price)}
-                              </div>
-                            </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="flex flex-wrap gap-2">
-                            {plan.features.slice(0, 4).map((feature) => (
-                              <Badge key={feature} variant="secondary" className="text-xs">
-                                {feature}
-                              </Badge>
-                            ))}
-                            {plan.features.length > 4 && (
-                              <Badge variant="outline" className="text-xs">
-                                +{plan.features.length - 4} more
-                              </Badge>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  }
-                )}
-
-                <div className="flex gap-3 pt-4">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setCurrentStep("profile");
-                      router.replace("/onboarding?step=profile");
-                    }}
-                    disabled={isPlanLoading}
-                    className="flex-1"
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    onClick={handlePlanSelection}
-                    disabled={isPlanLoading}
-                    className="flex-1"
-                  >
-                    {isPlanLoading ? (
-                      <>
-                        <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Processing…
-                      </>
-                    ) : selectedPlan === "FREE" ? (
-                      "Continue with Free"
-                    ) : selectedPlan === "ENTERPRISE" ? (
-                      "Contact Sales"
-                    ) : (
-                      "Continue to Payment"
-                    )}
-                  </Button>
-                </div>
-              </div>
-
-              <p className="px-8 text-center text-sm text-muted-foreground">
-                All paid plans include a 14-day free trial.{" "}
-                <a
-                  href="/pricing"
-                  className="underline underline-offset-4 hover:text-primary"
-                >
-                  Compare plans
-                </a>
-              </p>
-            </>
-          )}
-
-          {/* Step 3: CPI Tenant Configuration */}
+          {/* Step 2: CPI Tenant Configuration */}
           {currentStep === "tenant" && (
             <>
               <div className="flex flex-col space-y-2 text-center">
@@ -730,8 +548,8 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
                     <Button
                       variant="outline"
                       onClick={() => {
-                        setCurrentStep("plan");
-                        router.replace("/onboarding?step=plan");
+                        setCurrentStep("profile");
+                        router.replace("/onboarding?step=profile");
                       }}
                       disabled={isLoading}
                       className="flex-1"
@@ -771,7 +589,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
             </>
           )}
 
-          {/* Step 4: Success */}
+          {/* Step 3: Success */}
           {currentStep === "complete" && (
             <>
               <div className="flex flex-col space-y-2 text-center">

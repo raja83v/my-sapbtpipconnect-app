@@ -5,8 +5,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/ui/theme-provider";
 import { constructMetadata } from "@/lib/constructMetadata";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
-import { ClerkProvider } from "@clerk/nextjs";
-import { ConvexClientProvider } from "@/components/convex-provider";
+import { AuthProvider } from "@/components/auth/auth-provider";
 
 export const metadata = constructMetadata();
 
@@ -16,28 +15,26 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider telemetry={false}>
-      <ConvexClientProvider>
-        <html lang="en" suppressHydrationWarning={true}>
-          <body
-            className={`${GeistSans.variable} ${GeistMono.variable} antialiased font-sans`}
+    <html lang="en" suppressHydrationWarning={true}>
+      <body
+        className={`${GeistSans.variable} ${GeistMono.variable} antialiased font-sans`}
+      >
+        <AuthProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="light"
+            enableSystem
+            disableTransitionOnChange
           >
-            <ThemeProvider
-              attribute="class"
-              defaultTheme="light"
-              enableSystem
-              disableTransitionOnChange
-            >
-              <NuqsAdapter>
-                <div className="min-h-screen bg-background">
-                  <main>{children}</main>
-                </div>
-                <Toaster />
-              </NuqsAdapter>
-            </ThemeProvider>
-          </body>
-        </html>
-      </ConvexClientProvider>
-    </ClerkProvider>
+            <NuqsAdapter>
+              <div className="min-h-screen bg-background">
+                <main>{children}</main>
+              </div>
+              <Toaster />
+            </NuqsAdapter>
+          </ThemeProvider>
+        </AuthProvider>
+      </body>
+    </html>
   );
 }

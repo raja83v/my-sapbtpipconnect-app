@@ -1,12 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { checkSubscriptionLimit, incrementUsage } from "./billing";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { streamText } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runText } from "@/lib/ai/runtime/text";
 import * as prompts from "@/lib/ai/prompts";
 import { revalidatePath } from "next/cache";
 import type { AIAgentType } from "@/lib/ai/agent-types";
@@ -58,17 +55,20 @@ async function buildAgentContext(
 
   // Get tenant information if provided
   if (tenantId) {
-    const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
 
     if (tenant) {
       // Get iFlow stats
-      const iflowStats = await convex.query(api.iflows.getStatsByTenant, {
-        tenantId: tenantId as any
+      const iflowStats = { total: await prisma.iFlow.count({ where: { tenantId } }) };
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const executions = await prisma.iFlowExecution.findMany({
+        where: { iFlow: { tenantId }, startTime: { gte: thirtyDaysAgo } },
       });
-      const execStats = await convex.query(api.iflows.getExecutionStatsByTenant, {
-        tenantId: tenantId as any,
-        daysBack: 30,
-      });
+      const execStats = {
+        total: executions.length,
+        completed: executions.filter(e => e.status === "COMPLETED").length,
+        failed: executions.filter(e => e.status === "FAILED").length,
+      };
 
       contextParts.push(`**Tenant Context:**`);
       contextParts.push(`- Name: ${tenant.name}`);
@@ -90,15 +90,16 @@ async function buildAgentContext(
 
   // Get specific iFlow information if provided
   if (iflowId) {
-    // Use helper to handle both Convex ID and SAP CPI iFlow ID
+    // Use helper to handle both DB ID and SAP CPI iFlow ID
     const { getIFlowByAnyId } = await import("./iflows");
-    const iflow = await getIFlowByAnyId(iflowId, userId as any);
+    const iflow = await getIFlowByAnyId(iflowId, userId);
 
     if (iflow) {
-      const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
-      const executions = await convex.query(api.iflows.getExecutions, {
-        iFlowId: iflowId as any,
-        limit: 50,
+      const tenant = await prisma.cpiTenant.findUnique({ where: { id: iflow.tenantId } });
+      const executions = await prisma.iFlowExecution.findMany({
+        where: { iFlowId: iflow.id },
+        take: 50,
+        orderBy: { startTime: "desc" },
       });
 
       contextParts.push(`**iFlow Details:**`);
@@ -159,25 +160,10 @@ export async function executeAgent(
 
     const { agentType, prompt, tenantId, iflowId, context } = params;
 
-    // Check subscription limit for AI agent calls
-    const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
-    if (!limitCheck.success) {
-      return { success: false, error: limitCheck.error };
-    }
-
-    if (!limitCheck.data?.allowed) {
-      const { current, max } = limitCheck.data || { current: 0, max: 0 };
-      return {
-        success: false,
-        error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`,
-      };
-    }
-
     // Validate tenant access if tenantId is provided
     if (tenantId) {
-      const membership = await convex.query(api.tenants.getMembership, {
-        tenantId: tenantId as any,
-        userId: currentUser.id as any,
+      const membership = await prisma.tenantMember.findUnique({
+        where: { userId_tenantId: { userId: currentUser.id, tenantId } },
       });
 
       if (!membership) {
@@ -186,7 +172,7 @@ export async function executeAgent(
     }
 
     // Build context for the agent
-    const agentContext = await buildAgentContext(agentType, currentUser.id as any, tenantId, iflowId);
+    const agentContext = await buildAgentContext(agentType, currentUser.id, tenantId, iflowId);
 
     // Get system prompt
     const systemPrompt = getSystemPrompt(agentType);
@@ -200,43 +186,47 @@ User Request:
 ${prompt}`;
 
     // Create execution record
-    const executionId = await convex.mutation(api.aiAgentMutations.create, {
-      userId: currentUser.id as any,
-      agentType: agentType,
-      inputPrompt: prompt,
-      tenantId: tenantId as any,
-      iFlowId: iflowId as any,
-      status: "RUNNING",
+    const execution = await prisma.aIAgentExecution.create({
+      data: {
+        userId: currentUser.id,
+        agentType: agentType,
+        input: prompt,
+        tenantId: tenantId,
+        iFlowId: iflowId,
+        status: "RUNNING",
+      },
     });
+    const executionId = execution.id;
 
     try {
       // Generate response using AI
-      const result = await streamText({
-        model: aiModel,
+      const result = await runText({
         prompt: fullPrompt,
         temperature: 0.7,
         maxTokens: 4000,
       });
 
-      const response = await result.text;
+      const response = result.text;
       const duration = Date.now() - startTime;
 
       // Estimate tokens used (rough approximation: 1 token ≈ 4 characters)
-      const tokensUsed = Math.ceil((fullPrompt.length + response.length) / 4);
+      const tokensUsed =
+        result.usage.totalTokens ||
+        Math.ceil((fullPrompt.length + response.length) / 4);
 
       // Update execution record
-      await convex.mutation(api.aiAgentMutations.complete, {
-        executionId,
-        response,
-        tokensUsed,
-        duration,
+      await prisma.aIAgentExecution.update({
+        where: { id: executionId },
+        data: {
+          status: "COMPLETED",
+          output: response,
+          tokensUsed,
+          duration,
+          success: true,
+        },
       });
 
-      // Increment AI agent usage count after successful execution
-      await incrementUsage("aiAgentCalls");
-
       revalidatePath("/dashboard/ai-agents");
-      revalidatePath("/dashboard/settings/billing");
 
       return {
         success: true,
@@ -249,10 +239,13 @@ ${prompt}`;
       };
     } catch (aiError) {
       // Update execution record with error
-      await convex.mutation(api.aiAgentMutations.fail, {
-        executionId,
-        errorMessage: aiError instanceof Error ? aiError.message : "AI generation failed",
-        duration: Date.now() - startTime,
+      await prisma.aIAgentExecution.update({
+        where: { id: executionId },
+        data: {
+          status: "FAILED",
+          errorMessage: aiError instanceof Error ? aiError.message : "AI generation failed",
+          duration: Date.now() - startTime,
+        },
       });
 
       throw aiError;
@@ -280,10 +273,13 @@ export async function getAgentHistory(
       return { success: false, error: "Not authenticated" };
     }
 
-    const executions = await convex.query(api.aiAgents.listByUser, {
-      userId: currentUser.id as any,
-      agentType,
-      limit,
+    const executions = await prisma.aIAgentExecution.findMany({
+      where: {
+        userId: currentUser.id,
+        ...(agentType ? { agentType } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
     });
 
     return { success: true, data: executions };
@@ -311,13 +307,33 @@ export async function getAgentAnalytics(): Promise<
       return { success: false, error: "Not authenticated" };
     }
 
-    const stats = await convex.query(api.aiAgents.getStats, {
-      userId: currentUser.id as any,
+    const allExecutions = await prisma.aIAgentExecution.findMany({
+      where: { userId: currentUser.id },
+      orderBy: { createdAt: "desc" },
     });
+
+    const totalExecutions = allExecutions.length;
+    const totalTokens = allExecutions.reduce((sum, e) => sum + e.tokensUsed, 0);
+
+    const byAgentType: Record<string, { executions: number; tokens: number }> = {};
+    for (const exec of allExecutions) {
+      if (!byAgentType[exec.agentType]) {
+        byAgentType[exec.agentType] = { executions: 0, tokens: 0 };
+      }
+      byAgentType[exec.agentType].executions++;
+      byAgentType[exec.agentType].tokens += exec.tokensUsed;
+    }
+
+    const recentActivity = allExecutions.slice(0, 10);
 
     return {
       success: true,
-      data: stats,
+      data: {
+        totalExecutions,
+        totalTokens,
+        byAgentType,
+        recentActivity,
+      },
     };
   } catch (error) {
     console.error("Error fetching agent analytics:", error);
@@ -338,9 +354,11 @@ export async function getConversationById(
       return { success: false, error: "Not authenticated" };
     }
 
-    const execution = await convex.query(api.aiAgents.getById, {
-      executionId: executionId as any,
-      userId: currentUser.id as any,
+    const execution = await prisma.aIAgentExecution.findFirst({
+      where: {
+        id: executionId,
+        userId: currentUser.id,
+      },
     });
 
     if (!execution) {
@@ -350,8 +368,8 @@ export async function getConversationById(
     return {
       success: true,
       data: {
-        inputPrompt: execution.inputPrompt,
-        outputData: execution.outputData || "",
+        inputPrompt: execution.input || "",
+        outputData: execution.output || "",
       }
     };
   } catch (error) {

@@ -1,8 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { TenantMemberWithUser } from "@/types/workspace";
@@ -20,9 +19,10 @@ async function checkTenantAdmin(
   userId: string,
   tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await convex.query(api.tenants.getMembership, {
-    tenantId: tenantId as any,
-    userId: userId as any,
+  const member = await prisma.tenantMember.findUnique({
+    where: {
+      userId_tenantId: { userId, tenantId },
+    },
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -49,24 +49,40 @@ export async function getTenantMembers(
     }
 
     // Check if user is a member of the tenant
-    const isMember = await convex.query(api.tenants.checkMembership, {
-      tenantId: tenantId as any,
-      userId: currentUser.id as any,
+    const isMember = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!isMember) {
       return { success: false, error: "Access denied" };
     }
 
-    // Get all members
-    const members = await convex.query(api.tenants.getMembers, {
-      tenantId: tenantId as any,
+    // Get all members with user info
+    const members = await prisma.tenantMember.findMany({
+      where: { tenantId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: { joinedAt: "asc" },
     });
 
-    const membersWithUser: TenantMemberWithUser[] = members.map((member: any) => ({
-      id: member._id,
+    const membersWithUser: TenantMemberWithUser[] = members.map((member) => ({
+      id: member.id,
       role: member.role as TenantMemberWithUser["role"],
-      joinedAt: member.joinedAt ? new Date(member.joinedAt) : new Date(member._creationTime),
+      joinedAt: member.joinedAt,
       user: member.user,
     }));
 
@@ -98,8 +114,19 @@ export async function updateMemberRole(
     const validatedData = updateMemberRoleSchema.parse(input);
 
     // Get member info
-    const member = await convex.query(api.tenants.getMemberById, {
-      memberId: validatedData.memberId as any,
+    const member = await prisma.tenantMember.findUnique({
+      where: { id: validatedData.memberId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            status: true,
+          },
+        },
+      },
     });
 
     if (!member) {
@@ -123,26 +150,31 @@ export async function updateMemberRole(
       };
     }
 
-    // Update role using mutation
-    await convex.mutation(api.tenantMutations.updateMemberRole, {
-      memberId: validatedData.memberId as any,
-      role: validatedData.role,
-      currentUserId: currentUser.id as any,
-    });
-
-    // Get updated member
-    const updatedMember = await convex.query(api.tenants.getMemberById, {
-      memberId: validatedData.memberId as any,
+    // Update role
+    const updatedMember = await prisma.tenantMember.update({
+      where: { id: validatedData.memberId },
+      data: { role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            status: true,
+          },
+        },
+      },
     });
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
 
     const memberWithUser: TenantMemberWithUser = {
-      id: updatedMember!._id,
-      role: updatedMember!.role as TenantMemberWithUser["role"],
-      joinedAt: updatedMember!.joinedAt ? new Date(updatedMember!.joinedAt) : new Date(updatedMember!._creationTime),
-      user: updatedMember!.user,
+      id: updatedMember.id,
+      role: updatedMember.role as TenantMemberWithUser["role"],
+      joinedAt: updatedMember.joinedAt,
+      user: updatedMember.user,
     };
 
     return { success: true, data: memberWithUser };
@@ -173,8 +205,8 @@ export async function removeMember(
     const validatedData = removeMemberSchema.parse(input);
 
     // Get member info
-    const member = await convex.query(api.tenants.getMemberById, {
-      memberId: validatedData.memberId as any,
+    const member = await prisma.tenantMember.findUnique({
+      where: { id: validatedData.memberId },
     });
 
     if (!member) {
@@ -190,10 +222,9 @@ export async function removeMember(
       return { success: false, error: adminCheck.error };
     }
 
-    // Remove member using mutation
-    await convex.mutation(api.tenantMutations.removeMember, {
-      memberId: validatedData.memberId as any,
-      currentUserId: currentUser.id as any,
+    // Remove member
+    await prisma.tenantMember.delete({
+      where: { id: validatedData.memberId },
     });
 
     // Revalidate paths

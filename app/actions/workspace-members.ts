@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { WorkspaceMemberWithUser } from "@/types/workspace";
@@ -11,18 +11,18 @@ import {
   type UpdateMemberRoleInput,
   type RemoveMemberInput,
 } from "@/lib/validations/workspace";
-import type { Id } from "@/convex/_generated/dataModel";
 
 /**
  * Check if user is workspace admin (OWNER or ADMIN)
  */
 async function checkWorkspaceAdmin(
-  userId: Id<"users">,
-  tenantId: Id<"cpiTenants">
+  userId: string,
+  tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await convex.query(api.tenants.getMembership, {
-    userId,
-    tenantId,
+  const member = await prisma.tenantMember.findUnique({
+    where: {
+      userId_tenantId: { userId, tenantId },
+    },
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -48,27 +48,41 @@ export async function getWorkspaceMembers(
       return { success: false, error: "Unauthorized" };
     }
 
-    const tenantId = workspaceId as Id<"cpiTenants">;
-
     // Check if user is a member of the tenant
-    const isMember = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id,
-      tenantId,
+    const isMember = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: workspaceId,
+        },
+      },
     });
 
     if (!isMember) {
       return { success: false, error: "Access denied" };
     }
 
-    // Get all members
-    const members = await convex.query(api.tenants.getMembers, {
-      tenantId,
+    // Get all members with user info
+    const members = await prisma.tenantMember.findMany({
+      where: { tenantId: workspaceId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: { joinedAt: "asc" },
     });
 
-    const membersWithUser: WorkspaceMemberWithUser[] = members.map((member: any) => ({
+    const membersWithUser: WorkspaceMemberWithUser[] = members.map((member) => ({
       id: member.id,
       role: member.role as WorkspaceMemberWithUser["role"],
-      joinedAt: new Date(member.joinedAt),
+      joinedAt: member.joinedAt,
       user: member.user,
     }));
 
@@ -100,8 +114,19 @@ export async function updateMemberRole(
     const validatedData = updateMemberRoleSchema.parse(input);
 
     // Get member info
-    const member = await convex.query(api.tenants.getMemberById, {
-      memberId: validatedData.memberId as Id<"tenantMembers">,
+    const member = await prisma.tenantMember.findUnique({
+      where: { id: validatedData.memberId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            status: true,
+          },
+        },
+      },
     });
 
     if (!member) {
@@ -127,10 +152,12 @@ export async function updateMemberRole(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER" && validatedData.role !== "OWNER") {
-      const allMembers = await convex.query(api.tenants.getMembers, {
-        tenantId: member.tenantId,
+      const ownerCount = await prisma.tenantMember.count({
+        where: {
+          tenantId: member.tenantId,
+          role: "OWNER",
+        },
       });
-      const ownerCount = allMembers.filter((m: any) => m.role === "OWNER").length;
 
       if (ownerCount <= 1) {
         return {
@@ -141,19 +168,21 @@ export async function updateMemberRole(
     }
 
     // Update role
-    await convex.mutation(api.tenantMutations.updateMemberRole, {
-      memberId: validatedData.memberId as Id<"tenantMembers">,
-      role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
+    const updatedMember = await prisma.tenantMember.update({
+      where: { id: validatedData.memberId },
+      data: { role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            status: true,
+          },
+        },
+      },
     });
-
-    // Get updated member
-    const updatedMember = await convex.query(api.tenants.getMemberById, {
-      memberId: validatedData.memberId as Id<"tenantMembers">,
-    });
-
-    if (!updatedMember) {
-      return { success: false, error: "Failed to update member" };
-    }
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -161,7 +190,7 @@ export async function updateMemberRole(
     const memberWithUser: WorkspaceMemberWithUser = {
       id: updatedMember.id,
       role: updatedMember.role as WorkspaceMemberWithUser["role"],
-      joinedAt: new Date(updatedMember.joinedAt),
+      joinedAt: updatedMember.joinedAt,
       user: updatedMember.user,
     };
 
@@ -193,8 +222,8 @@ export async function removeMember(
     const validatedData = removeMemberSchema.parse(input);
 
     // Get member info
-    const member = await convex.query(api.tenants.getMemberById, {
-      memberId: validatedData.memberId as Id<"tenantMembers">,
+    const member = await prisma.tenantMember.findUnique({
+      where: { id: validatedData.memberId },
     });
 
     if (!member) {
@@ -220,10 +249,12 @@ export async function removeMember(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER") {
-      const allMembers = await convex.query(api.tenants.getMembers, {
-        tenantId: member.tenantId,
+      const ownerCount = await prisma.tenantMember.count({
+        where: {
+          tenantId: member.tenantId,
+          role: "OWNER",
+        },
       });
-      const ownerCount = allMembers.filter((m: any) => m.role === "OWNER").length;
 
       if (ownerCount <= 1) {
         return {
@@ -234,8 +265,8 @@ export async function removeMember(
     }
 
     // Remove member
-    await convex.mutation(api.tenantMutations.removeMember, {
-      memberId: validatedData.memberId as Id<"tenantMembers">,
+    await prisma.tenantMember.delete({
+      where: { id: validatedData.memberId },
     });
 
     // Revalidate paths

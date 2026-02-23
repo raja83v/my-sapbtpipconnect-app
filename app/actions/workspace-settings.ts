@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { WorkspaceWithRole } from "@/types/workspace";
@@ -25,8 +25,10 @@ export async function getCurrentWorkspace(): Promise<ActionResult<WorkspaceWithR
     }
 
     // Get user's first tenant membership
-    const member = await convex.query(api.tenants.getFirstMembershipForUser, {
-      userId: user.id,
+    const member = await prisma.tenantMember.findFirst({
+      where: { userId: user.id },
+      include: { tenant: true },
+      orderBy: { joinedAt: "asc" },
     });
 
     if (!member) {
@@ -34,13 +36,13 @@ export async function getCurrentWorkspace(): Promise<ActionResult<WorkspaceWithR
     }
 
     const workspaceWithRole: WorkspaceWithRole = {
-      id: member.tenant._id,
+      id: member.tenant.id,
       name: member.tenant.name,
-      slug: member.tenant.slug || member.tenant._id,
+      slug: member.tenant.slug || member.tenant.id,
       image: member.tenant.image || null,
       memberRole: member.role as WorkspaceWithRole["memberRole"],
-      createdAt: new Date(member.tenant.createdAt),
-      updatedAt: new Date(member.tenant.updatedAt),
+      createdAt: member.tenant.createdAt,
+      updatedAt: member.tenant.updatedAt,
     };
 
     return { success: true, data: workspaceWithRole };
@@ -69,9 +71,13 @@ export async function updateWorkspace(
     const validatedData = updateWorkspaceSchema.parse(input);
 
     // Check if user is OWNER or ADMIN of this tenant
-    const member = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id,
-      tenantId: validatedData.id as any,
+    const member = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: validatedData.id,
+        },
+      },
     });
 
     if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -83,11 +89,11 @@ export async function updateWorkspace(
 
     // Check if slug is already taken (if changing slug)
     if (validatedData.slug) {
-      const existingTenant = await convex.query(api.tenants.getBySlug, {
-        slug: validatedData.slug,
+      const existingTenant = await prisma.cpiTenant.findUnique({
+        where: { slug: validatedData.slug },
       });
 
-      if (existingTenant && existingTenant._id !== validatedData.id) {
+      if (existingTenant && existingTenant.id !== validatedData.id) {
         return {
           success: false,
           error: "This slug is already taken",
@@ -96,33 +102,26 @@ export async function updateWorkspace(
     }
 
     // Update tenant
-    await convex.mutation(api.tenantMutations.update, {
-      id: validatedData.id as any,
-      name: validatedData.name,
-      slug: validatedData.slug,
+    const updatedTenant = await prisma.cpiTenant.update({
+      where: { id: validatedData.id },
+      data: {
+        name: validatedData.name,
+        slug: validatedData.slug,
+      },
     });
-
-    // Get updated tenant
-    const updatedTenant = await convex.query(api.tenants.getById, {
-      id: validatedData.id as any,
-    });
-
-    if (!updatedTenant) {
-      return { success: false, error: "Tenant not found after update" };
-    }
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
     revalidatePath("/dashboard");
 
     const workspaceWithRole: WorkspaceWithRole = {
-      id: updatedTenant._id,
+      id: updatedTenant.id,
       name: updatedTenant.name,
-      slug: updatedTenant.slug || updatedTenant._id,
+      slug: updatedTenant.slug || updatedTenant.id,
       image: updatedTenant.image || null,
       memberRole: member.role as WorkspaceWithRole["memberRole"],
-      createdAt: new Date(updatedTenant.createdAt),
-      updatedAt: new Date(updatedTenant.updatedAt),
+      createdAt: updatedTenant.createdAt,
+      updatedAt: updatedTenant.updatedAt,
     };
 
     return { success: true, data: workspaceWithRole };
@@ -154,8 +153,8 @@ export async function createUserWorkspace(
     const validatedData = createWorkspaceSchema.parse(input);
 
     // Check if tenant with slug already exists
-    const existingTenant = await convex.query(api.tenants.getBySlug, {
-      slug: validatedData.slug,
+    const existingTenant = await prisma.cpiTenant.findUnique({
+      where: { slug: validatedData.slug },
     });
 
     if (existingTenant) {
@@ -165,36 +164,43 @@ export async function createUserWorkspace(
       };
     }
 
-    // Create tenant with user as owner
-    const tenantId = await convex.mutation(api.tenantMutations.create, {
-      name: validatedData.name,
-      url: `https://${validatedData.slug}.example.com`, // Placeholder URL
-      slug: validatedData.slug,
-      image: validatedData.image || undefined,
-      ownerId: currentUser.id,
-    });
+    // Create tenant with user as owner in a transaction
+    const tenant = await prisma.$transaction(async (tx) => {
+      const newTenant = await tx.cpiTenant.create({
+        data: {
+          name: validatedData.name,
+          tenantUrl: `https://${validatedData.slug}.example.com`, // Placeholder URL
+          slug: validatedData.slug,
+          image: validatedData.image || undefined,
+          authType: "OAUTH",
+          status: "ACTIVE",
+        },
+      });
 
-    // Get the created tenant
-    const tenant = await convex.query(api.tenants.getById, {
-      id: tenantId,
-    });
+      // Add current user as OWNER
+      await tx.tenantMember.create({
+        data: {
+          userId: currentUser.id,
+          tenantId: newTenant.id,
+          role: "OWNER",
+        },
+      });
 
-    if (!tenant) {
-      return { success: false, error: "Failed to create workspace" };
-    }
+      return newTenant;
+    });
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
     revalidatePath("/dashboard");
 
     const workspaceWithRole: WorkspaceWithRole = {
-      id: tenant._id,
+      id: tenant.id,
       name: tenant.name,
-      slug: tenant.slug || tenant._id,
+      slug: tenant.slug || tenant.id,
       image: tenant.image || null,
       memberRole: "OWNER",
-      createdAt: new Date(tenant.createdAt),
-      updatedAt: new Date(tenant.updatedAt),
+      createdAt: tenant.createdAt,
+      updatedAt: tenant.updatedAt,
     };
 
     return { success: true, data: workspaceWithRole };

@@ -1,28 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
 import { syncTenantInternal } from "@/app/actions/tenant";
 
 /**
  * Cron job endpoint to sync executions for all active tenants
- * 
+ *
  * This endpoint can be called by:
- * 1. Vercel Cron Jobs (recommended for production)
- * 2. External cron services (e.g., cron-job.org)
+ * 1. node-cron scheduler (recommended)
+ * 2. External cron services
  * 3. Manual trigger via API call
- * 
+ *
  * Security: Protected by CRON_SECRET environment variable
- * 
+ *
  * Recommended schedule: Every 15-30 minutes
- * Vercel cron config (add to vercel.json):
- * @example
- * ```json
- * {
- *   "crons": [{
- *     "path": "/api/cron/sync-executions",
- *     "schedule": "0/15 * * * *"
- *   }]
- * }
- * ```
  */
 
 // Configuration
@@ -36,24 +26,18 @@ const CONFIG = {
 };
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // 5 minutes max for Vercel
 
 export async function GET(request: NextRequest) {
   try {
     // Verify authorization
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
-    
-    // Allow access if:
-    // 1. CRON_SECRET is set and matches the authorization header
-    // 2. Request is from Vercel Cron (has special header)
-    // 3. In development mode without CRON_SECRET set
-    const isVercelCron = request.headers.get("x-vercel-cron") === "true";
-    const isAuthorized = cronSecret 
+
+    const isAuthorized = cronSecret
       ? authHeader === `Bearer ${cronSecret}`
       : process.env.NODE_ENV === "development";
-    
-    if (!isVercelCron && !isAuthorized) {
+
+    if (!isAuthorized) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
@@ -64,11 +48,22 @@ export async function GET(request: NextRequest) {
     console.log("[Cron] Starting execution sync job...");
 
     // Get active tenants that need syncing
-    const minSyncTime = Date.now() - CONFIG.minSyncIntervalMinutes * 60 * 1000;
-    
-    const tenantsToSync = await convex.query(api.tenants.getTenantsNeedingSync, {
-      minSyncTime,
-      limit: CONFIG.maxTenantsPerRun,
+    const minSyncTime = new Date(Date.now() - CONFIG.minSyncIntervalMinutes * 60 * 1000);
+
+    const tenantsToSync = await prisma.cpiTenant.findMany({
+      where: {
+        isConnected: true,
+        authType: "OAUTH",
+        clientId: { not: null },
+        clientSecret: { not: null },
+        authenticationUrl: { not: null },
+        OR: [
+          { lastSyncAt: null },
+          { lastSyncAt: { lt: minSyncTime } },
+        ],
+      },
+      take: CONFIG.maxTenantsPerRun,
+      orderBy: { lastSyncAt: "asc" },
     });
 
     console.log(`[Cron] Found ${tenantsToSync.length} tenants to sync`);
@@ -95,21 +90,21 @@ export async function GET(request: NextRequest) {
 
     for (const tenant of tenantsToSync) {
       const tenantStartTime = Date.now();
-      
+
       try {
-        console.log(`[Cron] Syncing tenant: ${tenant.name} (${tenant._id})`);
-        
+        console.log(`[Cron] Syncing tenant: ${tenant.name} (${tenant.id})`);
+
         // Use Promise.race for timeout
-        const syncPromise = syncTenantInternal(tenant._id);
+        const syncPromise = syncTenantInternal(tenant.id);
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error("Tenant sync timeout")), CONFIG.tenantTimeoutMs);
         });
-        
+
         const result = await Promise.race([syncPromise, timeoutPromise]);
-        
+
         if (result.success && result.data) {
           results.push({
-            tenantId: tenant._id,
+            tenantId: tenant.id,
             tenantName: tenant.name,
             success: true,
             iflows: result.data.iflows,
@@ -119,7 +114,7 @@ export async function GET(request: NextRequest) {
           console.log(`[Cron] ✓ Tenant ${tenant.name}: ${result.data.iflows} iFlows, ${result.data.executions} executions`);
         } else {
           results.push({
-            tenantId: tenant._id,
+            tenantId: tenant.id,
             tenantName: tenant.name,
             success: false,
             error: result.error || "Unknown error",
@@ -130,7 +125,7 @@ export async function GET(request: NextRequest) {
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
         results.push({
-          tenantId: tenant._id,
+          tenantId: tenant.id,
           tenantName: tenant.name,
           success: false,
           error: errorMessage,
@@ -163,9 +158,9 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("[Cron] Sync job failed:", error);
     return NextResponse.json(
-      { 
-        success: false, 
-        error: error instanceof Error ? error.message : "Cron job failed" 
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Cron job failed"
       },
       { status: 500 }
     );

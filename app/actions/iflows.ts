@@ -1,16 +1,14 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { streamText } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runText } from "@/lib/ai/runtime/text";
 import { ERROR_DIAGNOSIS_SYSTEM_PROMPT } from "@/lib/ai/prompts";
 import { revalidatePath } from "next/cache";
 import { getCachedToken, cacheToken } from "@/lib/token-cache";
 import { decrypt } from "@/lib/encryption";
-import { 
+import {
   createSAPCPIClient,
   type IFlowConfiguration,
   type IFlowResource,
@@ -18,49 +16,43 @@ import {
   type MappingConfig,
   type ScriptConfig,
 } from "@/lib/sap-cpi/client";
-import type { Id } from "@/convex/_generated/dataModel";
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
 /**
- * Helper function to get iFlow by either Convex ID or SAP CPI iFlow ID
+ * Helper function to get iFlow by either DB ID or SAP CPI iFlow ID
  * Handles both ID formats automatically
  */
-export async function getIFlowByAnyId(iflowId: string, userId: Id<"users">) {
+export async function getIFlowByAnyId(iflowId: string, userId: string) {
   const trimmedId = iflowId.trim();
 
-  // Determine if this is a Convex ID or SAP CPI iFlow ID
-  // Convex IDs have a specific format (alphanumeric, 15+ chars)
-  const looksLikeConvexId = /^[a-z0-9]{2,}[0-9a-z]{10,}$/i.test(trimmedId) && trimmedId.length > 15;
-
-  if (looksLikeConvexId) {
-    // Try to fetch by Convex ID
-    try {
-      return await convex.query(api.iflows.getById, { id: trimmedId as any });
-    } catch (error) {
-      console.error("Error fetching iFlow by Convex ID:", error);
-      return null;
-    }
-  } else {
-    // It's an SAP CPI iFlow ID - search across user's accessible tenants
-    const userTenants = await convex.query(api.tenants.listForUser, { userId });
-
-    // Search for iFlow with this SAP CPI ID across all accessible tenants
-    for (const tenant of userTenants) {
-      const foundIFlow = await convex.query(api.iflows.getByTenantAndIFlowId, {
-        tenantId: tenant._id,
-        iFlowId: trimmedId,
-      });
-
-      if (foundIFlow) {
-        return foundIFlow;
-      }
-    }
-
-    return null;
+  // First try to find by database ID
+  try {
+    const iflow = await prisma.iFlow.findUnique({ where: { id: trimmedId } });
+    if (iflow) return iflow;
+  } catch {
+    // Not a valid DB ID format, try by SAP CPI iFlow ID
   }
+
+  // Search by SAP CPI iFlow ID across user's accessible tenants
+  const memberships = await prisma.tenantMember.findMany({
+    where: { userId },
+    select: { tenantId: true },
+  });
+
+  for (const { tenantId } of memberships) {
+    const foundIFlow = await prisma.iFlow.findUnique({
+      where: { tenantId_iFlowId: { tenantId, iFlowId: trimmedId } },
+    });
+
+    if (foundIFlow) {
+      return foundIFlow;
+    }
+  }
+
+  return null;
 }
 
 // ============================================================================
@@ -91,19 +83,19 @@ export interface IFlowDetailData extends IFlowData {
   createdBy: string | null;
   modifiedBy: string | null;
   modifiedAt: Date | null;
-  
+
   // Runtime metadata
   deployedBy: string | null;
   deployedOn: Date | null;
   runtimeStatus: string | null;
   errorInformation: { type: string; message: string } | null;
-  
+
   // Configuration (from BPMN2 parsing)
   configuration: IFlowConfiguration | null;
-  
+
   // Link to SAP CPI
   sapCpiWebLink: string | null;
-  
+
   // Stats
   stats: IFlowStats | null;
 }
@@ -162,12 +154,13 @@ export async function getIFlows(
       showAllTenants = false,
     } = params;
 
-    // Get user's accessible tenants
-    const userTenants = await convex.query(api.tenants.listForUser, { 
-      userId: currentUser.id as any 
+    // Get user's accessible tenant IDs
+    const memberships = await prisma.tenantMember.findMany({
+      where: { userId: currentUser.id },
+      select: { tenantId: true },
     });
 
-    const accessibleTenantIds = userTenants.map((t: any) => t._id);
+    const accessibleTenantIds = memberships.map(m => m.tenantId);
 
     if (accessibleTenantIds.length === 0) {
       return {
@@ -183,24 +176,22 @@ export async function getIFlows(
     }
 
     // Determine which tenant(s) to fetch iFlows for
-    // Priority: explicit tenantId > user's defaultTenantId > all accessible tenants
     let targetTenantIds: string[];
-    
-    // Convert accessible tenant IDs to strings for comparison
-    const accessibleTenantIdStrings = accessibleTenantIds.map((id: any) => String(id));
-    
+
     if (tenantId) {
       // Explicit tenant ID provided
       targetTenantIds = [tenantId];
     } else if (!showAllTenants) {
       // Use user's default tenant if available, otherwise use first accessible tenant
-      const user = await convex.query(api.users.getById, { id: currentUser.id as any });
-      const defaultTenantId = user?.defaultTenantId ? String(user.defaultTenantId) : null;
-      
-      if (defaultTenantId && accessibleTenantIdStrings.includes(defaultTenantId)) {
+      const user = await prisma.user.findUnique({
+        where: { id: currentUser.id },
+        select: { defaultTenantId: true },
+      });
+      const defaultTenantId = user?.defaultTenantId;
+
+      if (defaultTenantId && accessibleTenantIds.includes(defaultTenantId)) {
         targetTenantIds = [defaultTenantId];
       } else if (accessibleTenantIds.length > 0) {
-        // Fallback to first accessible tenant
         targetTenantIds = [accessibleTenantIds[0]];
       } else {
         targetTenantIds = [];
@@ -210,53 +201,52 @@ export async function getIFlows(
       targetTenantIds = accessibleTenantIds;
     }
 
-    // Get all iFlows for target tenants
-    const allIflows: any[] = [];
-    
-    for (const tid of targetTenantIds) {
-      const tenantIflows = await convex.query(api.iflows.listByTenant, { 
-        tenantId: tid as any,
-        status: status as any,
-        limit: 1000,
-      });
-      
-      // Get tenant name
-      const tenant = await convex.query(api.tenants.getById, { id: tid as any });
-      
-      for (const iflow of tenantIflows) {
-        // Apply search filter
-        if (search) {
-          const searchLower = search.toLowerCase();
-          if (
-            !iflow.name.toLowerCase().includes(searchLower) &&
-            !iflow.iFlowId.toLowerCase().includes(searchLower) &&
-            !(iflow.packageName?.toLowerCase().includes(searchLower))
-          ) {
-            continue;
-          }
-        }
-        allIflows.push({ ...iflow, tenantName: tenant?.name || "Unknown" });
-      }
+    // Build Prisma where clause
+    const where: any = {
+      tenantId: { in: targetTenantIds },
+    };
+
+    if (status) {
+      where.status = status;
     }
 
-    // Sort and paginate
-    const total = allIflows.length;
-    const startIndex = (page - 1) * pageSize;
-    const paginatedIflows = allIflows.slice(startIndex, startIndex + pageSize);
+    if (search) {
+      where.AND = [
+        {
+          OR: [
+            { name: { contains: search, mode: "insensitive" } },
+            { iFlowId: { contains: search, mode: "insensitive" } },
+            { packageName: { contains: search, mode: "insensitive" } },
+          ],
+        },
+      ];
+    }
 
-    const iflowsData: IFlowData[] = paginatedIflows.map((iflow: any) => ({
-      id: iflow._id,
+    // Count + fetch with pagination
+    const [total, iflows] = await Promise.all([
+      prisma.iFlow.count({ where }),
+      prisma.iFlow.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { tenant: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    const iflowsData: IFlowData[] = iflows.map((iflow) => ({
+      id: iflow.id,
       iFlowId: iflow.iFlowId,
       name: iflow.name,
       packageName: iflow.packageName ?? null,
       version: iflow.version ?? null,
       status: iflow.status,
-      lastDeployedAt: iflow.lastDeployedAt ? new Date(iflow.lastDeployedAt) : null,
-      lastExecutedAt: iflow.lastExecutedAt ? new Date(iflow.lastExecutedAt) : null,
+      lastDeployedAt: iflow.lastDeployedAt,
+      lastExecutedAt: iflow.lastExecutedAt,
       tenantId: iflow.tenantId,
-      tenantName: iflow.tenantName,
-      createdAt: new Date(iflow._creationTime),
-      updatedAt: new Date(iflow._creationTime),
+      tenantName: iflow.tenant.name,
+      createdAt: iflow.createdAt,
+      updatedAt: iflow.updatedAt,
     }));
 
     return {
@@ -289,13 +279,14 @@ export async function getUserTenantsForFilter(): Promise<
       return { success: false, error: "Not authenticated" };
     }
 
-    const userTenants = await convex.query(api.tenants.listForUser, { 
-      userId: currentUser.id as any 
+    const memberships = await prisma.tenantMember.findMany({
+      where: { userId: currentUser.id },
+      include: { tenant: { select: { id: true, name: true } } },
     });
 
-    const tenants = userTenants.map((item: any) => ({
-      id: item._id,
-      name: item.name,
+    const tenants = memberships.map((m) => ({
+      id: m.tenant.id,
+      name: m.tenant.name,
     }));
 
     return { success: true, data: tenants };
@@ -307,7 +298,7 @@ export async function getUserTenantsForFilter(): Promise<
 
 /**
  * Get detailed iFlow information by ID
- * Returns basic data from Convex - use getIFlowFullDetails for SAP CPI data
+ * Returns basic data from database - use getIFlowFullDetails for SAP CPI data
  */
 export async function getIFlowDetails(iflowId: string): Promise<ActionResult<IFlowData>> {
   try {
@@ -317,19 +308,25 @@ export async function getIFlowDetails(iflowId: string): Promise<ActionResult<IFl
       return { success: false, error: "Not authenticated" };
     }
 
-    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: iflow.tenantId },
+    });
 
     // Check if user has access to this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: iflow.tenantId,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: iflow.tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -337,18 +334,18 @@ export async function getIFlowDetails(iflowId: string): Promise<ActionResult<IFl
     }
 
     const iflowData: IFlowData = {
-      id: iflow._id,
+      id: iflow.id,
       iFlowId: iflow.iFlowId,
       name: iflow.name,
       packageName: iflow.packageName ?? null,
       version: iflow.version ?? null,
       status: iflow.status,
-      lastDeployedAt: iflow.lastDeployedAt ? new Date(iflow.lastDeployedAt) : null,
-      lastExecutedAt: iflow.lastExecutedAt ? new Date(iflow.lastExecutedAt) : null,
+      lastDeployedAt: iflow.lastDeployedAt,
+      lastExecutedAt: iflow.lastExecutedAt,
       tenantId: iflow.tenantId,
       tenantName: tenant?.name || "Unknown",
-      createdAt: new Date(iflow._creationTime),
-      updatedAt: new Date(iflow._creationTime),
+      createdAt: iflow.createdAt,
+      updatedAt: iflow.updatedAt,
     };
 
     return { success: true, data: iflowData };
@@ -406,24 +403,30 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
       return { success: false, error: "Not authenticated" };
     }
 
-    // Get iFlow by either Convex ID or SAP CPI iFlow ID
-    const iflow = await getIFlowByAnyId(trimmedId, currentUser.id as any);
+    // Get iFlow by either DB ID or SAP CPI iFlow ID
+    const iflow = await getIFlowByAnyId(trimmedId, currentUser.id);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: iflow.tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
     // Check if user has access to this tenant
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: iflow.tenantId,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: iflow.tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -440,7 +443,7 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
     if (tenant.authType === "OAUTH" && tenant.authenticationUrl && tenant.clientId && tenant.clientSecret) {
       try {
         // Get or refresh token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
 
         if (!accessToken) {
           const decryptedClientSecret = await decrypt(tenant.clientSecret);
@@ -449,7 +452,7 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
             tenant.clientId,
             decryptedClientSecret
           );
-          cacheToken(tenant._id, accessToken);
+          cacheToken(tenant.id, accessToken);
         }
 
         // Create SAP CPI client
@@ -487,42 +490,39 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
         }
 
         // Build SAP CPI Web UI link
-        // Format: https://<tenant>.integrationsuite.cfapps.<region>.hana.ondemand.com/shell/design/contentpackage/<packageId>/integrationflows/<iFlowId>
         if (iflow.packageName) {
-          const tenantUrlParts = tenant.tenantUrl.replace('https://', '').split('.');
-          if (tenantUrlParts.length > 0) {
-            sapCpiWebLink = `${tenant.tenantUrl}/shell/design/contentpackage/${iflow.packageName}/integrationflows/${iflow.iFlowId}`;
-          }
+          sapCpiWebLink = `${tenant.tenantUrl}/shell/design/contentpackage/${iflow.packageName}/integrationflows/${iflow.iFlowId}`;
         }
 
       } catch (err) {
-        // Silently handle SAP CPI API errors - the page will still show Convex data
+        // Silently handle SAP CPI API errors - the page will still show DB data
       }
     }
 
-    // Fetch execution stats from Convex
+    // Fetch execution stats from database
     let stats: IFlowStats | null = null;
     try {
-      const executions = await convex.query(api.iflows.getExecutions, {
-        iFlowId: iflowId as any,
-        limit: 1000,
+      const executions = await prisma.iFlowExecution.findMany({
+        where: { iFlowId: iflow.id },
+        orderBy: { startTime: "desc" },
+        take: 1000,
       });
 
       if (executions && executions.length > 0) {
-        const completed = executions.filter((e: any) => e.status === "COMPLETED").length;
-        const failed = executions.filter((e: any) => e.status === "FAILED").length;
+        const completed = executions.filter((e) => e.status === "COMPLETED").length;
+        const failed = executions.filter((e) => e.status === "FAILED").length;
         const total = executions.length;
         const durations = executions
-          .filter((e: any) => e.duration != null)
-          .map((e: any) => e.duration as number);
-        const avgDuration = durations.length > 0 
-          ? durations.reduce((a, b) => a + b, 0) / durations.length 
+          .filter((e) => e.duration != null)
+          .map((e) => e.duration as number);
+        const avgDuration = durations.length > 0
+          ? durations.reduce((a, b) => a + b, 0) / durations.length
           : 0;
 
         // Group by day for chart
         const byDay = new Map<string, { completed: number; failed: number }>();
         for (const exec of executions) {
-          const date = new Date(exec.startTime).toISOString().split('T')[0];
+          const date = exec.startTime.toISOString().split('T')[0];
           const current = byDay.get(date) || { completed: 0, failed: 0 };
           if (exec.status === "COMPLETED") current.completed++;
           if (exec.status === "FAILED") current.failed++;
@@ -559,18 +559,18 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
 
     const iflowDetailData: IFlowDetailData = {
       // Base data
-      id: iflow._id,
+      id: iflow.id,
       iFlowId: iflow.iFlowId,
       name: iflow.name,
       packageName: iflow.packageName ?? null,
       version: iflow.version ?? null,
       status: iflow.status,
-      lastDeployedAt: iflow.lastDeployedAt ? new Date(iflow.lastDeployedAt) : null,
-      lastExecutedAt: iflow.lastExecutedAt ? new Date(iflow.lastExecutedAt) : null,
+      lastDeployedAt: iflow.lastDeployedAt,
+      lastExecutedAt: iflow.lastExecutedAt,
       tenantId: iflow.tenantId,
       tenantName: tenant.name,
-      createdAt: new Date(iflow._creationTime),
-      updatedAt: new Date(iflow._creationTime),
+      createdAt: iflow.createdAt,
+      updatedAt: iflow.updatedAt,
 
       // Design-time metadata
       description: designTimeData?.Description || null,
@@ -620,19 +620,25 @@ export async function getIFlowResourceContent(
       return { success: false, error: "Not authenticated" };
     }
 
-    const iflow = await getIFlowByAnyId(iflowId.trim(), currentUser.id as any);
+    const iflow = await getIFlowByAnyId(iflowId.trim(), currentUser.id);
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
     }
 
-    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: iflow.tenantId },
+    });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: iflow.tenantId,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: iflow.tenantId,
+        },
+      },
     });
     if (!membership) {
       return { success: false, error: "You don't have access to this iFlow" };
@@ -642,7 +648,7 @@ export async function getIFlowResourceContent(
       return { success: false, error: "SAP CPI credentials not configured for this tenant" };
     }
 
-    let accessToken = getCachedToken(tenant._id);
+    let accessToken = getCachedToken(tenant.id);
     if (!accessToken) {
       const decryptedClientSecret = await decrypt(tenant.clientSecret);
       accessToken = await getSAPToken(
@@ -650,7 +656,7 @@ export async function getIFlowResourceContent(
         tenant.clientId,
         decryptedClientSecret
       );
-      cacheToken(tenant._id, accessToken);
+      cacheToken(tenant.id, accessToken);
     }
 
     const client = createSAPCPIClient({
@@ -667,7 +673,35 @@ export async function getIFlowResourceContent(
     const AdmZip = (await import("adm-zip")).default;
     const zipBuffer = await client.downloadIFlowPackage(iflow.iFlowId);
     const zip = new AdmZip(zipBuffer);
-    const entry = zip.getEntry(resourcePath);
+    let entry = zip.getEntry(resourcePath);
+
+    // Fallbacks for path normalization mismatches (slashes/prefixes)
+    if (!entry) {
+      const normalizedPath = resourcePath.replace(/\\/g, "/").replace(/^\/+/, "");
+      entry = zip.getEntry(normalizedPath);
+      if (!entry) {
+        // Try with/without src/main/resources/ prefix
+        const altPath = normalizedPath.startsWith("src/main/resources/")
+          ? normalizedPath.replace("src/main/resources/", "")
+          : `src/main/resources/${normalizedPath}`;
+        entry = zip.getEntry(altPath);
+      }
+      if (!entry) {
+        // Last resort: search by filename match across all ZIP entries
+        const targetFileName = resourcePath.split("/").pop()?.toLowerCase();
+        if (targetFileName) {
+          for (const zipEntry of zip.getEntries()) {
+            if (!zipEntry.isDirectory) {
+              const entryFileName = zipEntry.entryName.split("/").pop()?.toLowerCase();
+              if (entryFileName === targetFileName) {
+                entry = zipEntry;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
 
     if (!entry) {
       return { success: false, error: `Resource not found in package: ${resourcePath}` };
@@ -756,23 +790,29 @@ export async function getMessageLogs(
     const { iflowId, page = 1, pageSize = 20, status } = params;
 
     // Get iFlow with tenant details
-    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: iflow.tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
     // Check access
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: iflow.tenantId,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: iflow.tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -785,20 +825,19 @@ export async function getMessageLogs(
     }
 
     // Try to get cached token first
-    let accessToken = getCachedToken(tenant._id);
-    
+    let accessToken = getCachedToken(tenant.id);
+
     if (!accessToken) {
       // Token not cached or expired, fetch new one
-      const { decrypt } = await import("@/lib/encryption");
-      const decryptedClientSecret = decrypt(tenant.clientSecret);
+      const decryptedClientSecret = await decrypt(tenant.clientSecret);
       accessToken = await getSAPToken(
         tenant.authenticationUrl,
         tenant.clientId,
         decryptedClientSecret
       );
-      
+
       // Cache the token for future requests
-      cacheToken(tenant._id, accessToken);
+      cacheToken(tenant.id, accessToken);
     }
 
     // Build filter query
@@ -812,7 +851,7 @@ export async function getMessageLogs(
 
     // Fetch message logs from SAP CPI
     const logsUrl = `${tenant.tenantUrl}/api/v1/MessageProcessingLogs?$format=json&$orderby=LogEnd desc&$filter=${encodeURIComponent(filterQuery)}&$top=${pageSize}&$skip=${skip}`;
-    
+
     const logsResponse = await fetch(logsUrl, {
       method: "GET",
       headers: {
@@ -832,7 +871,7 @@ export async function getMessageLogs(
     // Use inline count from response or estimate total
     const inlineCount = logsData.d?.__count;
     let total = inlineCount || results.length;
-    
+
     if (!inlineCount && results.length === pageSize) {
       total = (page * pageSize) + 1;
     }
@@ -849,8 +888,8 @@ export async function getMessageLogs(
       integrationFlowName: log.IntegrationFlowName || iflow.name,
       customStatus: log.CustomStatus || null,
       logLevel: log.LogLevel || null,
-      errorMessage: log.Status?.toUpperCase() === "FAILED" 
-        ? "Error occurred - click 'Explain Error with AI' for details" 
+      errorMessage: log.Status?.toUpperCase() === "FAILED"
+        ? "Error occurred - click 'Explain Error with AI' for details"
         : null,
       errorCategory: null,
       interfaceType: log.IntegrationArtifact?.Type || null,
@@ -870,9 +909,9 @@ export async function getMessageLogs(
     };
   } catch (error) {
     console.error("Error fetching message logs:", error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : "Failed to fetch message logs" 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch message logs"
     };
   }
 }
@@ -892,23 +931,29 @@ export async function toggleIFlowDeployment(
     }
 
     // Get iFlow with tenant details
-    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: iflow.tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
     // Check access (only ADMIN and OWNER can deploy/undeploy)
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: iflow.tenantId,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: iflow.tenantId,
+        },
+      },
     });
 
     if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
@@ -920,8 +965,7 @@ export async function toggleIFlowDeployment(
       return { success: false, error: "OAuth credentials not configured" };
     }
 
-    const { decrypt } = await import("@/lib/encryption");
-    const decryptedClientSecret = decrypt(tenant.clientSecret);
+    const decryptedClientSecret = await decrypt(tenant.clientSecret);
     const accessToken = await getSAPToken(
       tenant.authenticationUrl,
       tenant.clientId,
@@ -945,24 +989,26 @@ export async function toggleIFlowDeployment(
 
     // Update status in database
     const newStatus = action === "deploy" ? "STARTING" : "STOPPING";
-    await convex.mutation(api.iflowMutations.update, {
-      id: iflowId as any,
-      status: newStatus as any,
-      ...(action === "deploy" && { lastDeployedAt: Date.now() }),
+    await prisma.iFlow.update({
+      where: { id: iflow.id },
+      data: {
+        status: newStatus as any,
+        ...(action === "deploy" && { lastDeployedAt: new Date() }),
+      },
     });
 
     revalidatePath(`/dashboard/iflows/${iflowId}`);
     revalidatePath("/dashboard/iflows");
 
-    return { 
-      success: true, 
-      data: { status: newStatus } 
+    return {
+      success: true,
+      data: { status: newStatus }
     };
   } catch (error) {
     console.error(`Error ${action}ing iFlow:`, error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : `Failed to ${action} iFlow` 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : `Failed to ${action} iFlow`
     };
   }
 }
@@ -983,23 +1029,29 @@ export async function diagnoseExecutionError(
     }
 
     // Get iFlow and tenant info
-    const iflow = await getIFlowByAnyId(iflowId, currentUser.id as any);
+    const iflow = await getIFlowByAnyId(iflowId, currentUser.id);
 
     if (!iflow) {
       return { success: false, error: "iFlow not found" };
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: iflow.tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: iflow.tenantId },
+    });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
     // Check tenant access
-    const membership = await convex.query(api.tenants.getMembership, {
-      userId: currentUser.id as any,
-      tenantId: iflow.tenantId,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId: iflow.tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -1007,9 +1059,8 @@ export async function diagnoseExecutionError(
     }
 
     // First try to get execution from database
-    const execution = await convex.query(api.iflows.getExecutionByMessageId, { 
-      messageId,
-      iFlowId: iflowId as any,
+    const execution = await prisma.iFlowExecution.findUnique({
+      where: { messageId },
     });
 
     let executionData: any;
@@ -1018,8 +1069,8 @@ export async function diagnoseExecutionError(
       executionData = {
         messageId: execution.messageId,
         status: execution.status,
-        startTime: execution.startTime ? new Date(execution.startTime) : null,
-        endTime: execution.endTime ? new Date(execution.endTime) : null,
+        startTime: execution.startTime,
+        endTime: execution.endTime,
         duration: execution.duration,
         errorMessage: execution.errorMessage,
         errorCategory: execution.errorCategory,
@@ -1037,8 +1088,7 @@ export async function diagnoseExecutionError(
           return { success: false, error: "OAuth credentials not configured" };
         }
 
-        const { decrypt } = await import("@/lib/encryption");
-        const decryptedClientSecret = decrypt(tenant.clientSecret);
+        const decryptedClientSecret = await decrypt(tenant.clientSecret);
         const accessToken = await getSAPToken(
           tenant.authenticationUrl,
           tenant.clientId,
@@ -1164,8 +1214,7 @@ Analyze this error and provide a comprehensive diagnosis with root cause, detail
 
     // Generate diagnosis using AI
     try {
-      const result = await streamText({
-        model: aiModel,
+      const result = await runText({
         prompt: `${ERROR_DIAGNOSIS_SYSTEM_PROMPT}
 
 ---
@@ -1174,7 +1223,7 @@ ${context}`,
         temperature: 0.7,
       });
 
-      const diagnosis = await result.text;
+      const diagnosis = result.text;
 
       if (!diagnosis || diagnosis.trim().length === 0) {
         console.error("AI returned empty response");
@@ -1190,11 +1239,11 @@ ${context}`,
       };
     } catch (aiError) {
       console.error("AI Generation Error:", aiError);
-      
-      const errorMessage = aiError instanceof Error 
-        ? aiError.message 
+
+      const errorMessage = aiError instanceof Error
+        ? aiError.message
         : "Failed to generate diagnosis";
-      
+
       return {
         success: false,
         error: `AI Error: ${errorMessage}. Please check your API key and try again.`,

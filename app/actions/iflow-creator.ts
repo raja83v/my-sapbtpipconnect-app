@@ -1,13 +1,11 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
 import { SAPCPIClient } from "@/lib/sap-cpi/client";
 import { decrypt } from "@/lib/encryption";
-import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { runText } from "@/lib/ai/runtime/text";
 import { IFlowDescription, IFlowDesign } from "@/components/ai/v2/specialized/iflow-creator/types";
 import { createIFlowDesignPrompt, IFLOW_CREATOR_SYSTEM_PROMPT } from "@/lib/ai/prompts-iflow-creator";
 
@@ -35,16 +33,15 @@ export async function getIntegrationPackages(tenantId: string): Promise<ActionRe
         }
 
         // Get tenant details
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check if user has access to this tenant
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -121,16 +118,15 @@ export async function getPackageIFlows(tenantId: string, packageId: string): Pro
         }
 
         // Get tenant details
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check if user has access to this tenant
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -205,25 +201,25 @@ export async function generateIFlowDesign(
         }
 
         // Check if AI is configured
-        const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-        if (!apiKey) {
+        if (!process.env.LLMLITE_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
             return { success: false, error: "AI service not configured" };
         }
 
         // Create prompt
         const userPrompt = createIFlowDesignPrompt(description);
 
-        console.log("🤖 Generating iFlow design with AI (Gemini Flash 2.0)...");
+        console.log("🤖 Generating iFlow design with AI runtime...");
         console.log("Description length:", description.description.length);
 
-        // Call Gemini API using Vercel AI SDK
-        const { text } = await generateText({
-            model: google("gemini-2.5-flash-lite"),
+        // Call AI runtime (LLMLite/OpenAI primary with Google fallback)
+        const result = await runText({
             system: IFLOW_CREATOR_SYSTEM_PROMPT,
             prompt: userPrompt,
             maxTokens: 8000,
             temperature: 0.7,
+            modelKind: "orchestrator",
         });
+        const text = result.text;
 
         // Log the raw AI response
         console.log("=".repeat(80));

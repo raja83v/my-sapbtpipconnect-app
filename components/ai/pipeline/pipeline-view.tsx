@@ -8,9 +8,6 @@
  * This is the main entry point component for the pipeline UI.
  */
 
-import { useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, RotateCcw } from "lucide-react";
@@ -19,7 +16,7 @@ import { PipelineProgressTracker } from "./pipeline-progress-tracker";
 import { PipelineApprovalDashboard } from "./pipeline-approval-dashboard";
 import { retryIFlowPipeline } from "@/app/actions/iflow-orchestrator";
 import type { PipelinePhase } from "@/lib/ai/orchestrator/pipeline-state";
-import { useState, useTransition } from "react";
+import { useState, useEffect, useTransition } from "react";
 
 interface PipelineViewProps {
   pipelineId: string;
@@ -32,9 +29,33 @@ export function PipelineView({
   onComplete,
   onCancel,
 }: PipelineViewProps) {
-  const pipeline = useQuery((api as any).iflowPipeline.getById, {
-    pipelineId: pipelineId as any,
-  });
+  const [pipeline, setPipeline] = useState<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchPipeline() {
+      try {
+        const response = await fetch(`/api/pipelines/${pipelineId}`);
+        if (response.ok && !cancelled) {
+          const data = await response.json();
+          setPipeline(data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch pipeline:", error);
+      }
+    }
+
+    fetchPipeline();
+
+    // Poll every 3 seconds while pipeline is active
+    const interval = setInterval(fetchPipeline, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pipelineId]);
 
   const [isRetrying, startRetry] = useTransition();
 

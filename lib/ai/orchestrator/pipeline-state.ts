@@ -2,7 +2,7 @@
  * Pipeline State Types & Interfaces
  * 
  * Defines the complete state model for the iFlow Creator multi-agent orchestration pipeline.
- * State is persisted in Convex for real-time UI reactivity.
+ * State is persisted in PostgreSQL via Prisma for UI updates (via polling).
  */
 
 import type {

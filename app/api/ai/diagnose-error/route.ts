@@ -1,12 +1,9 @@
-import { streamText, type StreamTextResult } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runStreamText } from "@/lib/ai/runtime/stream";
 import { getCurrentUser } from "@/app/actions/user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/encryption";
 import { getCachedToken, cacheToken } from "@/lib/token-cache";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
-import { checkSubscriptionLimit, incrementUsage } from "@/app/actions/billing";
 
 /**
  * Get OAuth token from SAP CPI
@@ -75,7 +72,9 @@ export async function POST(request: Request) {
         }
 
         // Get tenant
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
 
         if (!tenant) {
             return new Response(JSON.stringify({ error: "Tenant not found" }), {
@@ -85,9 +84,13 @@ export async function POST(request: Request) {
         }
 
         // Check access
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: currentUser.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: currentUser.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {
@@ -97,34 +100,16 @@ export async function POST(request: Request) {
             });
         }
 
-        // Check subscription limit for AI agent calls
-        const limitCheck = await checkSubscriptionLimit("aiAgentCalls");
-        if (!limitCheck.success) {
-            return new Response(JSON.stringify({ error: limitCheck.error }), {
-                status: 500,
-                headers: { "Content-Type": "application/json" },
-            });
-        }
-
-        if (!limitCheck.data?.allowed) {
-            const { current, max } = limitCheck.data || { current: 0, max: 0 };
-            return new Response(
-                JSON.stringify({
-                    error: `Monthly AI agent call limit reached (${current}/${max}). Please upgrade your plan to continue using AI agents.`
-                }),
-                {
-                    status: 403,
-                    headers: { "Content-Type": "application/json" },
-                }
-            );
-        }
-
-        // Try to find the iFlow in Convex by artifact ID (optional)
+        // Try to find the iFlow in database by artifact ID (optional)
         let iflow = null;
         if (iFlowArtifactId) {
-            iflow = await convex.query(api.iflows.getByTenantAndIFlowId, {
-                tenantId: tenantId as any,
-                iFlowId: iFlowArtifactId,
+            iflow = await prisma.iFlow.findUnique({
+                where: {
+                    tenantId_iFlowId: {
+                        tenantId,
+                        iFlowId: iFlowArtifactId,
+                    },
+                },
             });
         }
 
@@ -139,14 +124,14 @@ export async function POST(request: Request) {
         const decryptedClientSecret = await decrypt(tenant.clientSecret);
 
         // Get or refresh token
-        let accessToken = getCachedToken(tenant._id);
+        let accessToken = getCachedToken(tenant.id);
         if (!accessToken) {
             accessToken = await getSAPToken(
                 tenant.authenticationUrl,
                 tenant.clientId,
                 decryptedClientSecret
             );
-            cacheToken(tenant._id, accessToken);
+            cacheToken(tenant.id, accessToken);
         }
 
         // Fetch error details from SAP CPI
@@ -212,7 +197,7 @@ export async function POST(request: Request) {
 3. Suggested solutions or next steps
 
 Integration Flow: ${iFlowName}
-${iflow?.description ? `Description: ${iflow.description}` : ""}
+${(iflow as { description?: string } | null)?.description ? `Description: ${(iflow as { description?: string }).description}` : ""}
 
 Error Details:
 ${errorDetails}
@@ -221,21 +206,16 @@ ${runStepsContext}
 Provide a clear, actionable response formatted in markdown.`;
 
         // Generate diagnosis using AI SDK with streaming
-        const result = streamText({
-            model: aiModel,
+        const result = await runStreamText({
             prompt,
             temperature: 0.3,
             maxTokens: 1024,
         });
 
-        // Increment AI agent usage after successful execution
-        await incrementUsage("aiAgentCalls");
-
         // Create a readable stream for the response
         const stream = new ReadableStream({
             async start(controller) {
-                const textStream = result.textStream;
-                for await (const chunk of textStream) {
+                for await (const chunk of result.textStream) {
                     // Format as SSE data for useCompletion
                     controller.enqueue(new TextEncoder().encode(chunk));
                 }

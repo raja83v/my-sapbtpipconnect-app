@@ -1,12 +1,7 @@
-import { google } from '@ai-sdk/google';
-
 /**
- * AI model configuration for CPI Connect
- * Uses Google Gemini Flash for fast, efficient reasoning tasks like error diagnosis
+ * Legacy compatibility exports.
+ *
+ * New callsites should use `lib/ai/runtime/*` directly.
  */
-export const aiModel = google('gemini-2.5-flash');
-
-/**
- * Lightweight model for faster, simpler tasks
- */
-export const aiModelFast = google('gemini-2.5-flash-lite');
+export const aiModel = "default";
+export const aiModelFast = "fast";

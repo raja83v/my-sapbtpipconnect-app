@@ -1,7 +1,8 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   createUserSchema,
   updateUserSchema,
@@ -12,7 +13,6 @@ import {
 } from "@/lib/validations/user";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/types/actions";
-import { Id } from "@/convex/_generated/dataModel";
 
 // Helper to check if user is admin
 async function checkAdmin(): Promise<ActionResult<boolean>> {
@@ -23,11 +23,7 @@ async function checkAdmin(): Promise<ActionResult<boolean>> {
       return { success: false, error: "Unauthorized - Not authenticated" };
     }
 
-    const user = await convex.query(api.users.getById, { 
-      id: currentUser.id as Id<"users">
-    });
-
-    if (user?.role !== "admin") {
+    if (currentUser.role !== "admin") {
       return { success: false, error: "Unauthorized - Admin access required" };
     }
 
@@ -54,61 +50,56 @@ export async function getUsers(params?: {
   try {
     const page = params?.page ?? 1;
     const pageSize = params?.pageSize ?? 10;
+    const skip = (page - 1) * pageSize;
 
-    // Get all users and filter in memory (Convex doesn't have complex querying like Prisma)
-    let users = await convex.query(api.users.listAll, { limit: 1000 });
+    // Build where clause
+    const where: any = {};
 
-    // Apply search filter
     if (params?.search) {
-      const searchLower = params.search.toLowerCase();
-      users = users.filter(
-        (u) =>
-          u.email.toLowerCase().includes(searchLower) ||
-          u.name?.toLowerCase().includes(searchLower)
-      );
+      where.OR = [
+        { email: { contains: params.search, mode: "insensitive" } },
+        { name: { contains: params.search, mode: "insensitive" } },
+      ];
     }
 
-    // Apply role filter
     if (params?.role) {
-      users = users.filter((u) => u.role === params.role);
+      where.role = params.role;
     }
 
-    // Apply status filter
     if (params?.status) {
-      users = users.filter((u) => u.status === params.status);
+      where.status = params.status;
     }
 
-    // Apply sorting
+    // Build orderBy
+    const orderBy: any = {};
     if (params?.sortBy) {
-      users.sort((a, b) => {
-        const aVal = a[params.sortBy as keyof typeof a];
-        const bVal = b[params.sortBy as keyof typeof b];
-        if (aVal === bVal) return 0;
-        if (aVal === null || aVal === undefined) return 1;
-        if (bVal === null || bVal === undefined) return -1;
-        const comparison = aVal < bVal ? -1 : 1;
-        return params.sortOrder === "desc" ? -comparison : comparison;
-      });
+      orderBy[params.sortBy] = params.sortOrder || "asc";
     } else {
-      // Default sort by creation time desc
-      users.sort((a, b) => b._creationTime - a._creationTime);
+      orderBy.createdAt = "desc";
     }
 
-    const total = users.length;
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy,
+        include: {
+          _count: {
+            select: { tenants: true },
+          },
+        },
+      }),
+      prisma.user.count({ where }),
+    ]);
+
     const pageCount = Math.ceil(total / pageSize);
 
-    // Apply pagination
-    const skip = (page - 1) * pageSize;
-    const paginatedUsers = users.slice(skip, skip + pageSize);
-
-    // Get tenant membership count for each user
-    const usersWithCounts = await Promise.all(
-      paginatedUsers.map(async (user) => {
-        const memberships = await convex.query(api.tenants.listForUser, { 
-          userId: user._id 
-        });
-        return {
-          id: user._id,
+    return {
+      success: true,
+      data: {
+        users: users.map((user) => ({
+          id: user.id,
           email: user.email,
           name: user.name,
           image: user.image,
@@ -116,19 +107,16 @@ export async function getUsers(params?: {
           status: user.status,
           phone: user.phone,
           emailVerified: user.emailVerified,
-          lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt) : null,
-          createdAt: new Date(user._creationTime),
-          updatedAt: user.updatedAt ? new Date(user.updatedAt) : new Date(user._creationTime),
+          lastLoginAt: user.lastLoginAt,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
           _count: {
-            tenants: memberships.length,
+            tenants: user._count.tenants,
           },
-        };
-      })
-    );
-
-    return {
-      success: true,
-      data: { users: usersWithCounts, total, pageCount },
+        })),
+        total,
+        pageCount,
+      },
     };
   } catch (error) {
     console.error("Error fetching users:", error);
@@ -142,23 +130,27 @@ export async function getUserById(id: string): Promise<ActionResult<any>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const user = await convex.query(api.users.getById, { 
-      id: id as Id<"users">
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        tenants: {
+          include: {
+            tenant: {
+              select: { id: true, name: true, slug: true },
+            },
+          },
+        },
+      },
     });
 
     if (!user) {
       return { success: false, error: "User not found" };
     }
 
-    // Get tenant memberships
-    const memberships = await convex.query(api.tenants.listForUser, { 
-      userId: user._id 
-    });
-
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
-        id: user._id,
+        id: user.id,
         email: user.email,
         name: user.name,
         image: user.image,
@@ -166,19 +158,15 @@ export async function getUserById(id: string): Promise<ActionResult<any>> {
         status: user.status,
         phone: user.phone,
         emailVerified: user.emailVerified,
-        lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt) : null,
-        createdAt: new Date(user._creationTime),
-        updatedAt: user.updatedAt ? new Date(user.updatedAt) : new Date(user._creationTime),
-        tenants: memberships.map((m) => ({
-          id: m._id,
-          role: m.memberRole,
-          tenant: {
-            id: m._id,
-            name: m.name,
-            slug: m.slug,
-          },
+        lastLoginAt: user.lastLoginAt,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+        tenants: user.tenants.map((m) => ({
+          id: m.id,
+          role: m.role,
+          tenant: m.tenant,
         })),
-      }
+      },
     };
   } catch (error) {
     console.error("Error fetching user:", error);
@@ -196,40 +184,53 @@ export async function createUser(input: CreateUserInput): Promise<ActionResult<a
     const validatedData = createUserSchema.parse(input);
 
     // Check if user with email already exists
-    const existingUser = await convex.query(api.users.getByEmail, { 
-      email: validatedData.email 
+    const existingUser = await prisma.user.findUnique({
+      where: { email: validatedData.email },
     });
 
     if (existingUser) {
       return { success: false, error: "User with this email already exists" };
     }
 
-    // Create user
-    const userId = await convex.mutation(api.userMutations.create, {
-      email: validatedData.email,
-      name: validatedData.name || undefined,
-      role: (validatedData.role?.toLowerCase() ?? "user") as "user" | "admin",
-      status: (validatedData.status ?? "ACTIVE") as "ACTIVE" | "SUSPENDED" | "DELETED",
-      phone: validatedData.phone || undefined,
-      image: validatedData.image || undefined,
-    });
+    // Create user in Supabase first
+    const supabaseAdmin = createAdminClient();
+    const { data: supabaseUser, error: supabaseError } =
+      await supabaseAdmin.auth.admin.createUser({
+        email: validatedData.email,
+        password: "changeme123!",
+        email_confirm: true,
+      });
 
-    const user = await convex.query(api.users.getById, { id: userId });
+    if (supabaseError) {
+      return { success: false, error: supabaseError.message };
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        email: validatedData.email,
+        name: validatedData.name || undefined,
+        supabaseId: supabaseUser.user.id,
+        role: (validatedData.role?.toLowerCase() ?? "user") as "user" | "admin",
+        status: (validatedData.status ?? "ACTIVE") as "ACTIVE" | "SUSPENDED" | "DELETED",
+        phone: validatedData.phone || undefined,
+        image: validatedData.image || undefined,
+      },
+    });
 
     revalidatePath("/admin/users");
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
-        id: user?._id,
-        email: user?.email,
-        name: user?.name,
-        image: user?.image,
-        role: user?.role,
-        status: user?.status,
-        phone: user?.phone,
-        createdAt: user ? new Date(user._creationTime) : new Date(),
-      }
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        image: user.image,
+        role: user.role,
+        status: user.status,
+        phone: user.phone,
+        createdAt: user.createdAt,
+      },
     };
   } catch (error: any) {
     console.error("Error creating user:", error);
@@ -252,8 +253,8 @@ export async function updateUser(input: UpdateUserInput): Promise<ActionResult<a
     const validatedData = updateUserSchema.parse(input);
 
     // Check if user exists
-    const existingUser = await convex.query(api.users.getById, { 
-      id: validatedData.id as Id<"users">
+    const existingUser = await prisma.user.findUnique({
+      where: { id: validatedData.id },
     });
 
     if (!existingUser) {
@@ -262,8 +263,8 @@ export async function updateUser(input: UpdateUserInput): Promise<ActionResult<a
 
     // If email is being updated, check for conflicts
     if (validatedData.email && validatedData.email !== existingUser.email) {
-      const emailConflict = await convex.query(api.users.getByEmail, { 
-        email: validatedData.email 
+      const emailConflict = await prisma.user.findUnique({
+        where: { email: validatedData.email },
       });
 
       if (emailConflict) {
@@ -271,36 +272,35 @@ export async function updateUser(input: UpdateUserInput): Promise<ActionResult<a
       }
     }
 
-    // Update user
-    await convex.mutation(api.userMutations.update, {
-      id: validatedData.id as Id<"users">,
-      email: validatedData.email,
-      name: validatedData.name,
-      role: validatedData.role?.toLowerCase() as "user" | "admin" | undefined,
-      status: validatedData.status as "ACTIVE" | "SUSPENDED" | "DELETED" | undefined,
-      phone: validatedData.phone || undefined,
-      image: validatedData.image || undefined,
-    });
+    // Build update data
+    const updateData: any = {};
+    if (validatedData.email) updateData.email = validatedData.email;
+    if (validatedData.name !== undefined) updateData.name = validatedData.name;
+    if (validatedData.role) updateData.role = validatedData.role.toLowerCase();
+    if (validatedData.status) updateData.status = validatedData.status;
+    if (validatedData.phone !== undefined) updateData.phone = validatedData.phone || null;
+    if (validatedData.image !== undefined) updateData.image = validatedData.image || null;
 
-    const user = await convex.query(api.users.getById, { 
-      id: validatedData.id as Id<"users">
+    const user = await prisma.user.update({
+      where: { id: validatedData.id },
+      data: updateData,
     });
 
     revalidatePath("/admin/users");
     revalidatePath(`/admin/users/${validatedData.id}`);
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: {
-        id: user?._id,
-        email: user?.email,
-        name: user?.name,
-        image: user?.image,
-        role: user?.role,
-        status: user?.status,
-        phone: user?.phone,
-        updatedAt: user?.updatedAt ? new Date(user.updatedAt) : new Date(),
-      }
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        image: user.image,
+        role: user.role,
+        status: user.status,
+        phone: user.phone,
+        updatedAt: user.updatedAt,
+      },
     };
   } catch (error: any) {
     console.error("Error updating user:", error);
@@ -323,8 +323,8 @@ export async function deleteUser(input: DeleteUserInput): Promise<ActionResult> 
     const validatedData = deleteUserSchema.parse(input);
 
     // Check if user exists
-    const existingUser = await convex.query(api.users.getById, { 
-      id: validatedData.id as Id<"users">
+    const existingUser = await prisma.user.findUnique({
+      where: { id: validatedData.id },
     });
 
     if (!existingUser) {
@@ -338,9 +338,9 @@ export async function deleteUser(input: DeleteUserInput): Promise<ActionResult> 
       return { success: false, error: "Cannot delete your own account" };
     }
 
-    // Delete user
-    await convex.mutation(api.userMutations.deleteUser, { 
-      id: validatedData.id as Id<"users">
+    // Delete user (cascade will handle related records)
+    await prisma.user.delete({
+      where: { id: validatedData.id },
     });
 
     revalidatePath("/admin/users");

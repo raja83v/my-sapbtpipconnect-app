@@ -1,11 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import type { ActionResult } from "@/types/actions";
-import { streamText } from "ai";
-import { aiModel } from "@/lib/ai/client";
+import { runText } from "@/lib/ai/runtime/text";
 import { createSAPCPIClient, type SAPCPICredentials } from "@/lib/sap-cpi/client";
 import type { BPMN2ParseResult } from "@/lib/sap-cpi/bpmn2-parser";
 import type {
@@ -48,9 +46,8 @@ export async function getIFlowsForDocGenerator(params: {
         const { tenantId } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -58,8 +55,8 @@ export async function getIFlowsForDocGenerator(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await convex.query(api.tenants.getById, {
-            id: tenantId as any,
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
         });
 
         if (!tenant) {
@@ -139,9 +136,8 @@ export async function getIFlowDocMetadata(params: {
         const { tenantId, iflowId } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -149,8 +145,8 @@ export async function getIFlowDocMetadata(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await convex.query(api.tenants.getById, {
-            id: tenantId as any,
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
         });
 
         if (!tenant) {
@@ -281,9 +277,8 @@ export async function generateDocumentation(params: {
         const { tenantId, iflowId, metadata, documentationType, sections } = params;
 
         // Validate tenant access
-        const membership = await convex.query(api.tenants.getMembership, {
-            tenantId: tenantId as any,
-            userId: currentUser.id as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
         });
 
         if (!membership) {
@@ -294,37 +289,30 @@ export async function generateDocumentation(params: {
         const contextPrompt = buildDocumentationPrompt(metadata, documentationType, sections);
 
         // Generate documentation using AI
-        const result = await streamText({
-            model: aiModel,
+        const result = await runText({
             prompt: contextPrompt,
             temperature: 0.3,
         });
-
-        // Collect the response
-        let fullText = "";
-        for await (const chunk of result.textStream) {
-            fullText += chunk;
-        }
-
-        // Get token usage
-        const usage = await result.usage;
-        const totalTokens = usage?.totalTokens || 0;
+        const fullText = result.text;
+        const totalTokens = result.usage.totalTokens || 0;
 
         // Parse the AI response
         const document = parseDocumentationResponse(fullText, metadata, documentationType);
 
         // Track execution in database
         const durationMs = Date.now() - startTime;
-        await convex.mutation(api.aiAgentMutations.trackExecution, {
-            agentType: "DOCUMENTATION_GENERATOR",
-            tenantId: tenantId,
-            iflowId: iflowId,
-            userId: currentUser.id as any,
-            tokensUsed: totalTokens,
-            duration: durationMs,
-            success: true,
-            input: JSON.stringify({ documentationType, sections, iflowName: metadata.name }),
-            output: JSON.stringify({ sectionsGenerated: document.sections.length }),
+        await prisma.aIAgentExecution.create({
+            data: {
+                agentType: "DOCUMENTATION_GENERATOR",
+                tenantId: tenantId,
+                iflowId: iflowId,
+                userId: currentUser.id,
+                tokensUsed: totalTokens,
+                duration: durationMs,
+                success: true,
+                input: JSON.stringify({ documentationType, sections, iflowName: metadata.name }),
+                output: JSON.stringify({ sectionsGenerated: document.sections.length }),
+            },
         });
 
         return { success: true, data: { ...document, tokensUsed: totalTokens } };
@@ -335,16 +323,18 @@ export async function generateDocumentation(params: {
         try {
             const currentUser = await getCurrentUser();
             if (currentUser) {
-                await convex.mutation(api.aiAgentMutations.trackExecution, {
-                    agentType: "DOCUMENTATION_GENERATOR",
-                    tenantId: params.tenantId,
-                    iflowId: params.iflowId,
-                    userId: currentUser.id as any,
-                    tokensUsed: 0,
-                    duration: Date.now() - startTime,
-                    success: false,
-                    input: JSON.stringify({ documentationType: params.documentationType, sections: params.sections }),
-                    output: JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+                await prisma.aIAgentExecution.create({
+                    data: {
+                        agentType: "DOCUMENTATION_GENERATOR",
+                        tenantId: params.tenantId,
+                        iflowId: params.iflowId,
+                        userId: currentUser.id,
+                        tokensUsed: 0,
+                        duration: Date.now() - startTime,
+                        success: false,
+                        input: JSON.stringify({ documentationType: params.documentationType, sections: params.sections }),
+                        output: JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+                    },
                 });
             }
         } catch (trackError) {

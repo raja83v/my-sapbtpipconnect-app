@@ -1,7 +1,6 @@
 import { Suspense } from "react";
 import { getCurrentUser } from "@/app/actions/user";
 import { getDashboardData } from "@/app/actions/dashboard";
-import { getUserSubscription } from "@/app/actions/billing";
 import { StatsCards } from "@/components/dashboard/stats-cards";
 import { RecentExecutions } from "@/components/dashboard/recent-executions";
 import { TenantOverview } from "@/components/dashboard/tenant-overview";
@@ -9,9 +8,8 @@ import { IFlowStatusList } from "@/components/dashboard/iflow-status-list";
 import { AIAgentUsageCard } from "@/components/dashboard/ai-agent-usage";
 import { ExecutionTrendChart } from "@/components/dashboard/execution-trend-chart";
 import { QuickActions } from "@/components/dashboard/quick-actions";
-import { SubscriptionUsageSummary } from "@/components/billing";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
@@ -21,7 +19,6 @@ import {
   Zap,
   Clock
 } from "lucide-react";
-import type { PlanType } from "@/lib/stripe-config";
 
 function StatsCardsSkeleton() {
   return (
@@ -38,10 +35,9 @@ function CardSkeleton() {
 }
 
 async function DashboardContent() {
-  const [user, dashboardResult, subscriptionResult] = await Promise.all([
+  const [user, dashboardResult] = await Promise.all([
     getCurrentUser(),
     getDashboardData(),
-    getUserSubscription(),
   ]);
 
   if (!dashboardResult.success || !dashboardResult.data) {
@@ -61,28 +57,6 @@ async function DashboardContent() {
     aiAgentUsage,
     executionTrend
   } = dashboardResult.data;
-
-  // Get subscription data
-  const subscription = subscriptionResult.success ? subscriptionResult.data?.subscription : null;
-  const plan = (subscription?.plan || "FREE") as PlanType;
-  const usageData = {
-    tenants: {
-      current: subscription?.currentTenantCount || 0,
-      max: subscription?.maxTenants || 1
-    },
-    iFlows: {
-      current: subscription?.currentIFlowCount || 0,
-      max: subscription?.maxIFlows || 10
-    },
-    teamMembers: {
-      current: subscription?.currentTeamMemberCount || 0,
-      max: subscription?.maxTeamMembers || 3
-    },
-    aiAgentCalls: {
-      current: subscription?.currentAIAgentCalls || 0,
-      max: subscription?.maxAIAgentCalls || 100
-    },
-  };
 
   const greeting = getGreeting();
   const firstName = user?.name?.split(" ")[0] || "there";
@@ -138,11 +112,6 @@ async function DashboardContent() {
         {/* Right Column - Stacked Cards */}
         <div className="space-y-6">
           <QuickActions tenantIds={selectedTenantId ? [selectedTenantId] : []} />
-          <SubscriptionUsageSummary
-            plan={plan}
-            usage={usageData}
-            showUpgradeButton={true}
-          />
           <AIAgentUsageCard
             usage={aiAgentUsage}
             totalTokens={stats.totalTokensUsed}

@@ -1,8 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/encryption";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
 import { BPMN2Generator } from "@/lib/sap-cpi/bpmn2-generator";
@@ -34,7 +33,9 @@ export async function createIFlowInSAPCPI(
         }
 
         // 2. Get tenant credentials
-        const tenant = await convex.query(api.tenants.getById, { id: tenantId as any });
+        const tenant = await prisma.cpiTenant.findUnique({
+            where: { id: tenantId },
+        });
         if (!tenant) {
             return {
                 success: false,
@@ -45,9 +46,13 @@ export async function createIFlowInSAPCPI(
         }
 
         // 3. Verify user has access to this tenant
-        const membership = await convex.query(api.tenants.getMembership, {
-            userId: user.id as any,
-            tenantId: tenantId as any,
+        const membership = await prisma.tenantMember.findUnique({
+            where: {
+                userId_tenantId: {
+                    userId: user.id,
+                    tenantId,
+                },
+            },
         });
 
         if (!membership) {

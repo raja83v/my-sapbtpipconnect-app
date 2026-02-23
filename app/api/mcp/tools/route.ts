@@ -6,9 +6,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
-import { convex } from "@/lib/convex";
-import { api } from "@/convex/_generated/api";
+import { getCurrentUser } from "@/lib/auth-helpers";
+import { prisma } from "@/lib/db";
 import { createSAPCPIClient, type SAPCPIClient } from "@/lib/sap-cpi/client";
 import { decrypt } from "@/lib/encryption";
 import {
@@ -18,7 +17,6 @@ import {
 } from "@/mcp-server/src";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // 60 seconds for long-running operations
 
 /**
  * GET /api/mcp/tools
@@ -26,8 +24,8 @@ export const maxDuration = 60; // 60 seconds for long-running operations
  */
 export async function GET(request: NextRequest) {
   try {
-    const { userId } = await auth();
-    if (!userId) {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -59,8 +57,8 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const { userId } = await auth();
-    if (!userId) {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -91,14 +89,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user has access to the tenant
-    const user = await convex.query(api.users.getByClerkId, { clerkId: userId });
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    const membership = await convex.query(api.tenants.getMembership, {
-      tenantId: tenantId as any,
-      userId: user._id,
+    const membership = await prisma.tenantMember.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: currentUser.id,
+          tenantId,
+        },
+      },
     });
 
     if (!membership) {
@@ -109,8 +106,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, {
-      id: tenantId as any
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: tenantId },
     });
     if (!tenant) {
       return NextResponse.json(
@@ -290,15 +287,11 @@ async function createSAPClientForTenant(tenant: any) {
 
     if (tenant.authType === "OAUTH") {
       credentials.clientId = tenant.clientId;
-      credentials.clientSecret = tenant.encryptedClientSecret
-        ? decrypt(tenant.encryptedClientSecret)
-        : tenant.clientSecret;
-      credentials.tokenUrl = tenant.tokenUrl;
+      credentials.clientSecret = tenant.clientSecret; // Client will decrypt
+      credentials.tokenUrl = tenant.authenticationUrl;
     } else if (tenant.authType === "BASIC_AUTH") {
       credentials.username = tenant.username;
-      credentials.password = tenant.encryptedPassword
-        ? decrypt(tenant.encryptedPassword)
-        : tenant.password;
+      credentials.password = tenant.password; // Client will decrypt
     }
 
     return createSAPCPIClient(credentials);

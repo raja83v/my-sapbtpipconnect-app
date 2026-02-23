@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { convex, api } from "@/lib/convex";
+import { prisma } from "@/lib/db";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { PendingInvitation } from "@/types/workspace";
@@ -14,18 +14,18 @@ import {
   type AcceptInvitationInput,
 } from "@/lib/validations/workspace";
 import { sendWorkspaceInvitationEmail } from "./email";
-import type { Id } from "@/convex/_generated/dataModel";
 
 /**
  * Check if user is workspace admin (OWNER or ADMIN)
  */
 async function checkWorkspaceAdmin(
-  userId: Id<"users">,
-  tenantId: Id<"cpiTenants">
+  userId: string,
+  tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await convex.query(api.tenants.getMembership, {
-    userId,
-    tenantId,
+  const member = await prisma.tenantMember.findUnique({
+    where: {
+      userId_tenantId: { userId, tenantId },
+    },
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -53,7 +53,7 @@ export async function inviteMember(
 
     // Validate input
     const validatedData = inviteMemberSchema.parse(input);
-    const tenantId = validatedData.workspaceId as Id<"cpiTenants">;
+    const tenantId = validatedData.workspaceId;
 
     // Check workspace admin permission
     const adminCheck = await checkWorkspaceAdmin(currentUser.id, tenantId);
@@ -62,14 +62,18 @@ export async function inviteMember(
     }
 
     // Check if user is already a member
-    const existingUser = await convex.query(api.users.getByEmail, {
-      email: validatedData.email,
+    const existingUser = await prisma.user.findUnique({
+      where: { email: validatedData.email },
     });
 
     if (existingUser) {
-      const existingMember = await convex.query(api.tenants.getMembership, {
-        userId: existingUser._id,
-        tenantId,
+      const existingMember = await prisma.tenantMember.findUnique({
+        where: {
+          userId_tenantId: {
+            userId: existingUser.id,
+            tenantId,
+          },
+        },
       });
 
       if (existingMember) {
@@ -81,27 +85,34 @@ export async function inviteMember(
     }
 
     // Get tenant details
-    const tenant = await convex.query(api.tenants.getById, { id: tenantId });
+    const tenant = await prisma.cpiTenant.findUnique({
+      where: { id: tenantId },
+    });
     if (!tenant) {
       return { success: false, error: "Workspace not found" };
     }
 
     // Get inviter details
-    const inviter = await convex.query(api.users.getById, { id: currentUser.id });
+    const inviter = await prisma.user.findUnique({
+      where: { id: currentUser.id },
+    });
     if (!inviter) {
       return { success: false, error: "Inviter not found" };
     }
 
     // Create invitation
-    const result = await convex.mutation(api.tenantMutations.createInvitation, {
-      tenantId,
-      email: validatedData.email,
-      role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
-      invitedById: currentUser.id,
+    const invitation = await prisma.tenantInvitation.create({
+      data: {
+        tenantId,
+        email: validatedData.email,
+        role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
+        invitedById: currentUser.id,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      },
     });
 
     // Send invitation email
-    const acceptUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invitation?token=${result.token}`;
+    const acceptUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invitation?token=${invitation.token}`;
 
     await sendWorkspaceInvitationEmail(
       {
@@ -117,14 +128,14 @@ export async function inviteMember(
     revalidatePath("/dashboard/settings");
 
     const pendingInvitation: PendingInvitation = {
-      id: result.id,
+      id: invitation.id,
       email: validatedData.email,
       role: validatedData.role as PendingInvitation["role"],
-      token: result.token,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      createdAt: new Date(),
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
       invitedBy: {
-        id: inviter._id,
+        id: inviter.id,
         name: inviter.name || null,
         email: inviter.email,
       },
@@ -153,26 +164,32 @@ export async function getPendingInvitations(
       return { success: false, error: "Unauthorized" };
     }
 
-    const tenantId = workspaceId as Id<"cpiTenants">;
-
     // Check workspace admin permission
-    const adminCheck = await checkWorkspaceAdmin(currentUser.id, tenantId);
+    const adminCheck = await checkWorkspaceAdmin(currentUser.id, workspaceId);
     if (!adminCheck.success) {
       return { success: false, error: adminCheck.error };
     }
 
     // Get pending invitations
-    const invitations = await convex.query(api.tenants.getPendingInvitations, {
-      tenantId,
+    const invitations = await prisma.tenantInvitation.findMany({
+      where: {
+        tenantId: workspaceId,
+        acceptedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      include: {
+        invitedBy: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
     });
 
-    const pendingInvitations: PendingInvitation[] = invitations.map((inv: any) => ({
+    const pendingInvitations: PendingInvitation[] = invitations.map((inv) => ({
       id: inv.id,
       email: inv.email,
       role: inv.role as PendingInvitation["role"],
       token: inv.token,
-      expiresAt: new Date(inv.expiresAt),
-      createdAt: new Date(inv.createdAt),
+      expiresAt: inv.expiresAt,
+      createdAt: inv.createdAt,
       invitedBy: inv.invitedBy,
     }));
 
@@ -203,8 +220,8 @@ export async function cancelInvitation(
     const validatedData = cancelInvitationSchema.parse(input);
 
     // Get invitation to check tenant
-    const invitation = await convex.query(api.tenants.getInvitationById, {
-      invitationId: validatedData.invitationId as Id<"tenantInvitations">,
+    const invitation = await prisma.tenantInvitation.findUnique({
+      where: { id: validatedData.invitationId },
     });
 
     if (!invitation) {
@@ -221,8 +238,8 @@ export async function cancelInvitation(
     }
 
     // Delete invitation
-    await convex.mutation(api.tenantMutations.cancelInvitation, {
-      invitationId: validatedData.invitationId as Id<"tenantInvitations">,
+    await prisma.tenantInvitation.delete({
+      where: { id: validatedData.invitationId },
     });
 
     // Revalidate paths
@@ -254,10 +271,39 @@ export async function acceptInvitation(
     // Validate input
     const validatedData = acceptInvitationSchema.parse(input);
 
-    // Accept invitation via Convex mutation
-    const tenantId = await convex.mutation(api.tenantMutations.acceptInvitation, {
-      token: validatedData.token,
-      userId: currentUser.id,
+    // Get invitation
+    const invitation = await prisma.tenantInvitation.findUnique({
+      where: { token: validatedData.token },
+    });
+
+    if (!invitation) {
+      return { success: false, error: "Invitation not found" };
+    }
+
+    if (invitation.acceptedAt) {
+      return { success: false, error: "Invitation already accepted" };
+    }
+
+    if (invitation.expiresAt < new Date()) {
+      return { success: false, error: "Invitation has expired" };
+    }
+
+    // Accept invitation and add member in a transaction
+    await prisma.$transaction(async (tx) => {
+      // Mark invitation as accepted
+      await tx.tenantInvitation.update({
+        where: { token: validatedData.token },
+        data: { acceptedAt: new Date() },
+      });
+
+      // Add user as member
+      await tx.tenantMember.create({
+        data: {
+          userId: currentUser.id,
+          tenantId: invitation.tenantId,
+          role: invitation.role,
+        },
+      });
     });
 
     // Revalidate paths
@@ -267,7 +313,7 @@ export async function acceptInvitation(
 
     return {
       success: true,
-      data: { workspaceId: tenantId },
+      data: { workspaceId: invitation.tenantId },
     };
   } catch (error: any) {
     console.error("Error accepting invitation:", error);
