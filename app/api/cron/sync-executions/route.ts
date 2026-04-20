@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants } from "@/lib/db/schema";
+import { eq, and, or, isNull, lt, isNotNull, asc } from "drizzle-orm";
 import { syncTenantInternal } from "@/app/actions/tenant";
 
 /**
@@ -45,28 +47,24 @@ export async function GET(request: NextRequest) {
     }
 
     const startTime = Date.now();
-    console.log("[Cron] Starting execution sync job...");
 
     // Get active tenants that need syncing
     const minSyncTime = new Date(Date.now() - CONFIG.minSyncIntervalMinutes * 60 * 1000);
 
-    const tenantsToSync = await prisma.cpiTenant.findMany({
-      where: {
-        isConnected: true,
-        authType: "OAUTH",
-        clientId: { not: null },
-        clientSecret: { not: null },
-        authenticationUrl: { not: null },
-        OR: [
-          { lastSyncAt: null },
-          { lastSyncAt: { lt: minSyncTime } },
-        ],
-      },
-      take: CONFIG.maxTenantsPerRun,
-      orderBy: { lastSyncAt: "asc" },
-    });
+    const tenantsToSync = await db.select().from(cpiTenants).where(
+      and(
+        eq(cpiTenants.isConnected, true),
+        eq(cpiTenants.authType, "OAUTH"),
+        isNotNull(cpiTenants.clientId),
+        isNotNull(cpiTenants.clientSecret),
+        isNotNull(cpiTenants.authenticationUrl),
+        or(
+          isNull(cpiTenants.lastSyncAt),
+          lt(cpiTenants.lastSyncAt, minSyncTime)
+        )
+      )
+    ).limit(CONFIG.maxTenantsPerRun).orderBy(asc(cpiTenants.lastSyncAt));
 
-    console.log(`[Cron] Found ${tenantsToSync.length} tenants to sync`);
 
     if (tenantsToSync.length === 0) {
       return NextResponse.json({
@@ -92,7 +90,6 @@ export async function GET(request: NextRequest) {
       const tenantStartTime = Date.now();
 
       try {
-        console.log(`[Cron] Syncing tenant: ${tenant.name} (${tenant.id})`);
 
         // Use Promise.race for timeout
         const syncPromise = syncTenantInternal(tenant.id);
@@ -111,7 +108,6 @@ export async function GET(request: NextRequest) {
             executions: result.data.executions,
             duration: Date.now() - tenantStartTime,
           });
-          console.log(`[Cron] ✓ Tenant ${tenant.name}: ${result.data.iflows} iFlows, ${result.data.executions} executions`);
         } else {
           results.push({
             tenantId: tenant.id,
@@ -120,7 +116,6 @@ export async function GET(request: NextRequest) {
             error: result.error || "Unknown error",
             duration: Date.now() - tenantStartTime,
           });
-          console.log(`[Cron] ✗ Tenant ${tenant.name}: ${result.error}`);
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -140,7 +135,6 @@ export async function GET(request: NextRequest) {
     const totalExecutions = results.reduce((sum, r) => sum + (r.executions || 0), 0);
     const totalIFlows = results.reduce((sum, r) => sum + (r.iflows || 0), 0);
 
-    console.log(`[Cron] Job completed: ${successCount}/${results.length} tenants synced, ${totalExecutions} executions, ${totalDuration}ms`);
 
     return NextResponse.json({
       success: true,

@@ -61,8 +61,6 @@ export class ArchitectAgent extends BaseAgent<ArchitectInput, ArchitectOutput> {
     const text = result.text;
 
     // Log raw response stats for debugging
-    console.log(`[ArchitectAgent] Raw response: ${text.length} chars, has markdown: ${text.includes('\`\`\`')}, has newlines: ${text.includes('\\n')}`);
-    console.log(`[ArchitectAgent] First 500 chars: ${text.substring(0, 500)}`);
 
     // Parse the AI response
     const design = parseDesignResponse(text);
@@ -128,7 +126,6 @@ function parseDesignResponse(text: string): IFlowDesign {
   // Step 1: Clean & extract JSON from the raw AI text
   let json = cleanAIJson(text);
 
-  console.log(`[ArchitectAgent] Cleaned JSON length: ${json.length}`);
 
   // Step 2: Try direct parse
   try {
@@ -151,7 +148,6 @@ function parseDesignResponse(text: string): IFlowDesign {
     try {
       const smFixed = fixUnescapedQuotesStateMachine(json);
       const parsed = JSON.parse(smFixed);
-      console.log('[ArchitectAgent] ✅ Parsed after state-machine quote repair');
       return parsed;
     } catch {
       // continue
@@ -273,7 +269,6 @@ function parseDesignResponse(text: string): IFlowDesign {
       repaired = repair.fn(repaired);
       try {
         const parsed = JSON.parse(repaired);
-        console.log(`[ArchitectAgent] ✅ Parsed after repair: ${repair.name}`);
         return parsed;
       } catch {
         // Continue to next repair
@@ -284,7 +279,6 @@ function parseDesignResponse(text: string): IFlowDesign {
     try {
       const smFixed = fixUnescapedQuotesStateMachine(repaired);
       const parsed = JSON.parse(smFixed);
-      console.log('[ArchitectAgent] ✅ Parsed after cumulative repairs + state-machine');
       return parsed;
     } catch {
       // continue
@@ -315,7 +309,6 @@ function parseDesignResponse(text: string): IFlowDesign {
       let nuclear = repaired.replace(/"([^"]{200,})"/g, '"[content simplified]"');
       nuclear = nuclear.replace(/,(\s*[}\]])/g, '$1');
       const parsed = JSON.parse(nuclear);
-      console.log('[ArchitectAgent] ✅ Parsed after nuclear string truncation');
       return parsed;
     } catch {
       // continue

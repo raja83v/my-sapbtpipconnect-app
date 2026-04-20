@@ -18,6 +18,7 @@ import {
   GetIFlowPerformanceInputSchema,
   DownloadIFlowInputSchema,
   AnalyzeIFlowInputSchema,
+  SearchSAPCatalogInputSchema,
   IFlowSummary,
   IFlowConfig,
   PerformanceMetrics,
@@ -522,4 +523,117 @@ function analyzeErrorPatterns(logs: any[]): any[] {
   }
 
   return issues;
+}
+
+/**
+ * Handle search_sap_catalog tool
+ *
+ * Queries the catalog.svc OData endpoint for SAP-provided standard
+ * integration content packages matching the given keywords.
+ */
+export async function handleSearchSAPCatalog(
+  client: SAPCPIClientInterface & { tenantUrl?: string; getAuthHeader?: () => Promise<string> },
+  args: z.infer<typeof SearchSAPCatalogInputSchema>,
+  context: TenantContext
+): Promise<ToolExecutionResult> {
+  try {
+    const tenantUrl = client.tenantUrl ?? context.tenantId;
+    const authHeader = client.getAuthHeader
+      ? await client.getAuthHeader()
+      : undefined;
+
+    if (!tenantUrl || !authHeader) {
+      return {
+        success: false,
+        error: "Catalog search requires tenant URL and authentication. Ensure the CPI client exposes tenantUrl and getAuthHeader.",
+      };
+    }
+
+    // Build $filter
+    const filterParts: string[] = [];
+
+    if (args.supportedPlatform) {
+      filterParts.push(`SupportedPlatforms eq '${args.supportedPlatform}'`);
+    } else {
+      filterParts.push(
+        "(SupportedPlatforms eq 'SAP HANA Cloud Integration' or SupportedPlatforms eq 'SAP Process Orchestration')"
+      );
+    }
+
+    // Split query into keywords and search Name/Description/Keywords
+    const keywords = args.query
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .slice(0, 5); // limit to 5 keywords
+
+    if (keywords.length > 0) {
+      const kwFilter = keywords
+        .map((kw) => {
+          const safe = kw.replace(/'/g, "''");
+          return [
+            `substringof('${safe}', Name)`,
+            `substringof('${safe}', Description)`,
+            `substringof('${safe}', Keywords)`,
+          ].join(" or ");
+        })
+        .map((group) => `(${group})`)
+        .join(" or ");
+
+      filterParts.push(`(${kwFilter})`);
+    }
+
+    const filterStr = filterParts.join(" and ");
+
+    const params = new URLSearchParams({
+      $filter: filterStr,
+      $orderby: "ModifiedAt desc",
+      $top: String(args.top),
+      $format: "json",
+    });
+
+    const url = `${tenantUrl}/odata/1.0/catalog.svc/ContentEntities.ContentPackages?${params}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: authHeader,
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        success: false,
+        error: `Catalog search failed (${response.status}): ${errorText}`,
+      };
+    }
+
+    const data = await response.json();
+    const packages = (data.d?.results ?? []).map((pkg: any) => ({
+      id: pkg.Id,
+      name: pkg.Name,
+      description: pkg.Description || pkg.ShortText || "",
+      version: pkg.Version,
+      vendor: pkg.Vendor,
+      supportedPlatforms: pkg.SupportedPlatforms,
+      products: pkg.Products,
+      keywords: pkg.Keywords,
+    }));
+
+    return {
+      success: true,
+      data: {
+        packages,
+        totalCount: packages.length,
+        query: args.query,
+        filter: filterStr,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to search SAP catalog: ${error instanceof Error ? error.message : "Unknown error"}`,
+    };
+  }
 }

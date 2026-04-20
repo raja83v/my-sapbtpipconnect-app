@@ -1,16 +1,24 @@
-import { prisma } from "@/lib/db";
-import type { Prisma, Role, TenantStatus } from "@prisma/client";
+import { db } from "@/lib/db";
+import { eq, and, count, isNull, gt, lt, or, sql, asc, desc } from "drizzle-orm";
+import {
+  cpiTenants,
+  tenantMembers,
+  tenantInvitations,
+  users,
+  type Role,
+  type TenantStatus,
+} from "@/lib/db/schema";
 
 // ============================================================================
 // Tenant CRUD
 // ============================================================================
 
 export async function getTenantById(id: string) {
-  return prisma.cpiTenant.findUnique({ where: { id } });
+  return db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, id) }) ?? null;
 }
 
 export async function getTenantBySlug(slug: string) {
-  return prisma.cpiTenant.findUnique({ where: { slug } });
+  return db.query.cpiTenants.findFirst({ where: eq(cpiTenants.slug, slug) }) ?? null;
 }
 
 export async function createTenant(data: {
@@ -25,24 +33,36 @@ export async function createTenant(data: {
   username?: string;
   password?: string;
 }) {
-  return prisma.cpiTenant.create({
-    data: {
+  const [tenant] = await db
+    .insert(cpiTenants)
+    .values({
       ...data,
       status: "ACTIVE",
       isConnected: false,
-    },
-  });
+      updatedAt: new Date(),
+    })
+    .returning();
+  return tenant;
 }
 
 export async function updateTenant(
   id: string,
-  data: Prisma.CpiTenantUpdateInput
+  data: Partial<typeof cpiTenants.$inferInsert>
 ) {
-  return prisma.cpiTenant.update({ where: { id }, data });
+  const [tenant] = await db
+    .update(cpiTenants)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(cpiTenants.id, id))
+    .returning();
+  return tenant;
 }
 
 export async function deleteTenant(id: string) {
-  return prisma.cpiTenant.delete({ where: { id } });
+  const [tenant] = await db
+    .delete(cpiTenants)
+    .where(eq(cpiTenants.id, id))
+    .returning();
+  return tenant;
 }
 
 export async function listAllTenants(options?: {
@@ -52,19 +72,19 @@ export async function listAllTenants(options?: {
 }) {
   const page = options?.page ?? 1;
   const pageSize = options?.pageSize ?? 50;
-  const skip = (page - 1) * pageSize;
+  const offset = (page - 1) * pageSize;
 
-  const where: Prisma.CpiTenantWhereInput = {};
-  if (options?.status) where.status = options.status;
+  const where = options?.status ? eq(cpiTenants.status, options.status) : undefined;
 
-  const [tenants, total] = await Promise.all([
-    prisma.cpiTenant.findMany({
-      where,
-      skip,
-      take: pageSize,
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.cpiTenant.count({ where }),
+  const [tenants, [{ total }]] = await Promise.all([
+    db
+      .select()
+      .from(cpiTenants)
+      .where(where)
+      .orderBy(desc(cpiTenants.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ total: count() }).from(cpiTenants).where(where),
   ]);
 
   return { tenants, total };
@@ -75,12 +95,10 @@ export async function listAllTenants(options?: {
 // ============================================================================
 
 export async function listTenantsForUser(userId: string) {
-  const memberships = await prisma.tenantMember.findMany({
-    where: { userId },
-    include: {
-      tenant: true,
-    },
-    orderBy: { joinedAt: "desc" },
+  const memberships = await db.query.tenantMembers.findMany({
+    where: eq(tenantMembers.userId, userId),
+    with: { tenant: true },
+    orderBy: desc(tenantMembers.joinedAt),
   });
 
   return memberships.map((m) => ({
@@ -91,17 +109,20 @@ export async function listTenantsForUser(userId: string) {
 }
 
 export async function getMembership(userId: string, tenantId: string) {
-  return prisma.tenantMember.findUnique({
-    where: { userId_tenantId: { userId, tenantId } },
-  });
+  return db.query.tenantMembers.findFirst({
+    where: and(
+      eq(tenantMembers.userId, userId),
+      eq(tenantMembers.tenantId, tenantId)
+    ),
+  }) ?? null;
 }
 
 export async function getMembers(tenantId: string) {
-  return prisma.tenantMember.findMany({
-    where: { tenantId },
-    include: {
+  return db.query.tenantMembers.findMany({
+    where: eq(tenantMembers.tenantId, tenantId),
+    with: {
       user: {
-        select: {
+        columns: {
           id: true,
           email: true,
           name: true,
@@ -110,7 +131,7 @@ export async function getMembers(tenantId: string) {
         },
       },
     },
-    orderBy: { joinedAt: "asc" },
+    orderBy: asc(tenantMembers.joinedAt),
   });
 }
 
@@ -119,22 +140,36 @@ export async function addMember(data: {
   tenantId: string;
   role: Role;
 }) {
-  return prisma.tenantMember.create({ data });
+  const [member] = await db
+    .insert(tenantMembers)
+    .values(data)
+    .returning();
+  return member;
 }
 
 export async function updateMember(id: string, data: { role: Role }) {
-  return prisma.tenantMember.update({
-    where: { id },
-    data: { role: data.role },
-  });
+  const [member] = await db
+    .update(tenantMembers)
+    .set({ role: data.role })
+    .where(eq(tenantMembers.id, id))
+    .returning();
+  return member;
 }
 
 export async function removeMember(id: string) {
-  return prisma.tenantMember.delete({ where: { id } });
+  const [member] = await db
+    .delete(tenantMembers)
+    .where(eq(tenantMembers.id, id))
+    .returning();
+  return member;
 }
 
 export async function getMemberCount(tenantId: string) {
-  return prisma.tenantMember.count({ where: { tenantId } });
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(tenantMembers)
+    .where(eq(tenantMembers.tenantId, tenantId));
+  return total;
 }
 
 // ============================================================================
@@ -148,65 +183,71 @@ export async function createInvitation(data: {
   invitedById: string;
   expiresAt: Date;
 }) {
-  return prisma.tenantInvitation.create({ data });
+  const [invitation] = await db
+    .insert(tenantInvitations)
+    .values(data)
+    .returning();
+  return invitation;
 }
 
 export async function getInvitationByToken(token: string) {
-  return prisma.tenantInvitation.findUnique({
-    where: { token },
-    include: {
-      tenant: { select: { id: true, name: true, slug: true } },
-      invitedBy: { select: { id: true, name: true, email: true } },
+  return db.query.tenantInvitations.findFirst({
+    where: eq(tenantInvitations.token, token),
+    with: {
+      tenant: { columns: { id: true, name: true, slug: true } },
+      invitedBy: { columns: { id: true, name: true, email: true } },
     },
-  });
+  }) ?? null;
 }
 
 export async function getPendingInvitations(tenantId: string) {
-  return prisma.tenantInvitation.findMany({
-    where: {
-      tenantId,
-      acceptedAt: null,
-      expiresAt: { gt: new Date() },
+  return db.query.tenantInvitations.findMany({
+    where: and(
+      eq(tenantInvitations.tenantId, tenantId),
+      isNull(tenantInvitations.acceptedAt),
+      gt(tenantInvitations.expiresAt, new Date())
+    ),
+    with: {
+      invitedBy: { columns: { id: true, name: true, email: true } },
     },
-    include: {
-      invitedBy: { select: { id: true, name: true, email: true } },
-    },
-    orderBy: { createdAt: "desc" },
+    orderBy: desc(tenantInvitations.createdAt),
   });
 }
 
 export async function acceptInvitation(token: string, userId: string) {
-  const invitation = await prisma.tenantInvitation.findUnique({
-    where: { token },
+  const invitation = await db.query.tenantInvitations.findFirst({
+    where: eq(tenantInvitations.token, token),
   });
 
   if (!invitation) throw new Error("Invitation not found");
   if (invitation.acceptedAt) throw new Error("Invitation already accepted");
   if (invitation.expiresAt < new Date()) throw new Error("Invitation expired");
 
-  // Use a transaction to accept invitation and add member
-  return prisma.$transaction(async (tx) => {
-    // Mark invitation as accepted
-    await tx.tenantInvitation.update({
-      where: { token },
-      data: { acceptedAt: new Date() },
-    });
+  return db.transaction(async (tx) => {
+    await tx
+      .update(tenantInvitations)
+      .set({ acceptedAt: new Date() })
+      .where(eq(tenantInvitations.token, token));
 
-    // Add user as member
-    const member = await tx.tenantMember.create({
-      data: {
+    const [member] = await tx
+      .insert(tenantMembers)
+      .values({
         userId,
         tenantId: invitation.tenantId,
         role: invitation.role,
-      },
-    });
+      })
+      .returning();
 
     return member;
   });
 }
 
 export async function deleteInvitation(id: string) {
-  return prisma.tenantInvitation.delete({ where: { id } });
+  const [invitation] = await db
+    .delete(tenantInvitations)
+    .where(eq(tenantInvitations.id, id))
+    .returning();
+  return invitation;
 }
 
 // ============================================================================
@@ -214,22 +255,25 @@ export async function deleteInvitation(id: string) {
 // ============================================================================
 
 export async function getTenantsNeedingSync(options?: {
-  minTimeSinceSync?: number; // ms
+  minTimeSinceSync?: number;
   limit?: number;
 }) {
-  const minTime = options?.minTimeSinceSync ?? 5 * 60 * 1000; // 5 minutes default
+  const minTime = options?.minTimeSinceSync ?? 5 * 60 * 1000;
   const cutoff = new Date(Date.now() - minTime);
 
-  return prisma.cpiTenant.findMany({
-    where: {
-      status: "ACTIVE",
-      isConnected: true,
-      OR: [
-        { lastSyncAt: null },
-        { lastSyncAt: { lt: cutoff } },
-      ],
-    },
-    take: options?.limit ?? 10,
-    orderBy: { lastSyncAt: "asc" },
-  });
+  return db
+    .select()
+    .from(cpiTenants)
+    .where(
+      and(
+        eq(cpiTenants.status, "ACTIVE"),
+        eq(cpiTenants.isConnected, true),
+        or(
+          isNull(cpiTenants.lastSyncAt),
+          lt(cpiTenants.lastSyncAt, cutoff)
+        )
+      )
+    )
+    .orderBy(asc(cpiTenants.lastSyncAt))
+    .limit(options?.limit ?? 10);
 }

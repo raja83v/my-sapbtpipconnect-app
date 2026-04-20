@@ -1,9 +1,11 @@
-import { prisma } from "@/lib/db";
-import type {
-  Prisma,
-  PipelinePhase,
-  PipelineAgentLogStatus,
-} from "@prisma/client";
+import { db } from "@/lib/db";
+import { eq, and, count, desc, asc } from "drizzle-orm";
+import {
+  iFlowPipelines,
+  iFlowPipelineAgentLogs,
+  type PipelinePhase,
+  type PipelineAgentLogStatus,
+} from "@/lib/db/schema";
 
 // ============================================================================
 // Pipeline CRUD
@@ -16,8 +18,9 @@ export async function createPipeline(data: {
   description: string;
   tenantCapabilities?: string;
 }) {
-  return prisma.iFlowPipeline.create({
-    data: {
+  const [pipeline] = await db
+    .insert(iFlowPipelines)
+    .values({
       userId: data.userId,
       tenantId: data.tenantId,
       phase: "INIT",
@@ -25,26 +28,32 @@ export async function createPipeline(data: {
       description: data.description,
       tenantCapabilities: data.tenantCapabilities,
       totalTokensUsed: 0,
-    },
-  });
+    })
+    .returning();
+  return pipeline;
 }
 
 export async function updatePipeline(
   id: string,
-  data: Prisma.IFlowPipelineUpdateInput
+  data: Partial<typeof iFlowPipelines.$inferInsert>
 ) {
-  return prisma.iFlowPipeline.update({ where: { id }, data });
+  const [pipeline] = await db
+    .update(iFlowPipelines)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(iFlowPipelines.id, id))
+    .returning();
+  return pipeline;
 }
 
 export async function getPipelineById(id: string) {
-  return prisma.iFlowPipeline.findUnique({
-    where: { id },
-    include: {
+  return db.query.iFlowPipelines.findFirst({
+    where: eq(iFlowPipelines.id, id),
+    with: {
       agentLogs: {
-        orderBy: { startedAt: "asc" },
+        orderBy: asc(iFlowPipelineAgentLogs.startedAt),
       },
     },
-  });
+  }) ?? null;
 }
 
 export async function listPipelinesForUser(
@@ -58,23 +67,24 @@ export async function listPipelinesForUser(
 ) {
   const page = options?.page ?? 1;
   const pageSize = options?.pageSize ?? 20;
-  const skip = (page - 1) * pageSize;
+  const offset = (page - 1) * pageSize;
 
-  const where: Prisma.IFlowPipelineWhereInput = { userId };
-  if (options?.phase) where.phase = options.phase;
-  if (options?.tenantId) where.tenantId = options.tenantId;
+  const conditions = [eq(iFlowPipelines.userId, userId)];
+  if (options?.phase) conditions.push(eq(iFlowPipelines.phase, options.phase));
+  if (options?.tenantId) conditions.push(eq(iFlowPipelines.tenantId, options.tenantId));
+  const where = and(...conditions);
 
-  const [pipelines, total] = await Promise.all([
-    prisma.iFlowPipeline.findMany({
+  const [pipelines, [{ total }]] = await Promise.all([
+    db.query.iFlowPipelines.findMany({
       where,
-      skip,
-      take: pageSize,
-      orderBy: { startedAt: "desc" },
-      include: {
-        tenant: { select: { id: true, name: true, slug: true } },
+      with: {
+        tenant: { columns: { id: true, name: true, slug: true } },
       },
+      orderBy: desc(iFlowPipelines.startedAt),
+      limit: pageSize,
+      offset,
     }),
-    prisma.iFlowPipeline.count({ where }),
+    db.select({ total: count() }).from(iFlowPipelines).where(where),
   ]);
 
   return { pipelines, total, page, pageSize };
@@ -91,16 +101,18 @@ export async function createAgentLog(data: {
   tokensUsed?: number;
   duration?: number;
 }) {
-  return prisma.iFlowPipelineAgentLog.create({
-    data: {
+  const [log] = await db
+    .insert(iFlowPipelineAgentLogs)
+    .values({
       pipelineId: data.pipelineId,
       agentName: data.agentName,
       status: "RUNNING",
       tokensUsed: data.tokensUsed ?? 0,
       duration: data.duration ?? 0,
       input: data.input,
-    },
-  });
+    })
+    .returning();
+  return log;
 }
 
 export async function updateAgentLog(
@@ -115,12 +127,18 @@ export async function updateAgentLog(
     attemptNumber?: number;
   }
 ) {
-  return prisma.iFlowPipelineAgentLog.update({ where: { id }, data });
+  const [log] = await db
+    .update(iFlowPipelineAgentLogs)
+    .set(data)
+    .where(eq(iFlowPipelineAgentLogs.id, id))
+    .returning();
+  return log;
 }
 
 export async function getAgentLogs(pipelineId: string) {
-  return prisma.iFlowPipelineAgentLog.findMany({
-    where: { pipelineId },
-    orderBy: { startedAt: "asc" },
-  });
+  return db
+    .select()
+    .from(iFlowPipelineAgentLogs)
+    .where(eq(iFlowPipelineAgentLogs.pipelineId, pipelineId))
+    .orderBy(asc(iFlowPipelineAgentLogs.startedAt));
 }

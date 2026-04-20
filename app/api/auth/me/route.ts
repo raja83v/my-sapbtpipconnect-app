@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET() {
@@ -13,9 +15,9 @@ export async function GET() {
       return NextResponse.json({ user: null }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: supabaseUser.email },
-      select: {
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, supabaseUser.email),
+      columns: {
         id: true,
         email: true,
         name: true,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,10 +37,13 @@ import {
     Wrench,
     Server,
     Rocket,
+    FileOutput,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
     getIFlowsForDocGenerator,
     getIFlowDocMetadata,
@@ -49,11 +52,13 @@ import {
 import {
     AVAILABLE_SECTIONS,
     generateMarkdownExportSync,
+    getDocumentTypeTitle,
     type IFlowForDocGenerator,
     type IFlowDocMetadata,
     type DocumentationType,
     type GeneratedDocument,
 } from "@/types/documentation-generator";
+import { generateDocx } from "@/lib/docx-export";
 
 interface DocumentationGeneratorProps {
     tenantId: string;
@@ -269,6 +274,29 @@ export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGener
         const markdown = generateMarkdownExportSync(document);
         navigator.clipboard.writeText(markdown);
         toast.success("Documentation copied to clipboard");
+    };
+
+    const [isExportingDocx, setIsExportingDocx] = useState(false);
+
+    const handleExportDocx = async () => {
+        if (!document) return;
+
+        setIsExportingDocx(true);
+        try {
+            const blob = await generateDocx(document);
+            const url = URL.createObjectURL(blob);
+            const a = window.document.createElement("a");
+            a.href = url;
+            a.download = `${document.iflowName} - ${getDocumentTypeTitle(document.type)}.docx`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast.success("Documentation exported as DOCX");
+        } catch (error) {
+            console.error("Error exporting DOCX:", error);
+            toast.error("Failed to export as DOCX");
+        } finally {
+            setIsExportingDocx(false);
+        }
     };
 
     const toggleSection = (sectionId: string) => {
@@ -743,9 +771,9 @@ export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGener
                                                             </Button>
                                                         </div>
                                                         <div className="prose prose-sm dark:prose-invert max-w-none">
-                                                            <pre className="whitespace-pre-wrap text-sm bg-muted/50 p-4 rounded-lg overflow-auto">
+                                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                                 {section.content}
-                                                            </pre>
+                                                            </ReactMarkdown>
                                                         </div>
                                                         <Separator />
                                                     </div>
@@ -758,7 +786,12 @@ export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGener
                                                         {document.diagrams.map((diagram) => (
                                                             <div key={diagram.id} className="space-y-2">
                                                                 <div className="flex items-center justify-between">
-                                                                    <p className="font-medium">{diagram.title}</p>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <p className="font-medium">{diagram.title}</p>
+                                                                        <Badge variant="outline" className="text-xs">
+                                                                            {diagram.type}
+                                                                        </Badge>
+                                                                    </div>
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
@@ -771,9 +804,7 @@ export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGener
                                                                         )}
                                                                     </Button>
                                                                 </div>
-                                                                <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto">
-                                                                    <code>{diagram.mermaidCode}</code>
-                                                                </pre>
+                                                                <MermaidPreview code={diagram.mermaidCode} />
                                                             </div>
                                                         ))}
                                                     </div>
@@ -797,7 +828,20 @@ export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGener
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-4">
-                                    <div className="grid gap-4 md:grid-cols-3">
+                                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                                        <Button
+                                            variant="outline"
+                                            className="h-24 flex-col gap-2 border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-950"
+                                            onClick={handleExportDocx}
+                                            disabled={isExportingDocx}
+                                        >
+                                            {isExportingDocx ? (
+                                                <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
+                                            ) : (
+                                                <FileOutput className="h-8 w-8 text-blue-600" />
+                                            )}
+                                            <span>{isExportingDocx ? "Generating…" : "Export as DOCX"}</span>
+                                        </Button>
                                         <Button
                                             variant="outline"
                                             className="h-24 flex-col gap-2"
@@ -856,6 +900,92 @@ export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGener
                         </p>
                     </CardContent>
                 </Card>
+            )}
+        </div>
+    );
+}
+
+// ============================================================================
+// Mermaid Diagram Preview Component
+// ============================================================================
+
+function MermaidPreview({ code }: { code: string }) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+
+    useEffect(() => {
+        let cancelled = false;
+        const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`;
+
+        async function render() {
+            try {
+                const mermaid = (await import("mermaid")).default;
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: "default",
+                    securityLevel: "loose",
+                    flowchart: { useMaxWidth: true, htmlLabels: true },
+                    sequence: { useMaxWidth: true },
+                });
+
+                // Validate the syntax first using mermaid.parse
+                const valid = await mermaid.parse(code, { suppressErrors: true });
+                if (!valid) {
+                    if (!cancelled) setStatus("error");
+                    return;
+                }
+
+                const { svg: rendered } = await mermaid.render(id, code);
+                if (!cancelled && containerRef.current) {
+                    containerRef.current.innerHTML = rendered;
+                    setStatus("success");
+                }
+            } catch {
+                if (!cancelled) setStatus("error");
+            } finally {
+                // Clean up any orphaned Mermaid error elements injected into document.body
+                const orphan = document.getElementById(id);
+                if (orphan && !containerRef.current?.contains(orphan)) {
+                    orphan.remove();
+                }
+                // Also remove the detached d3 container Mermaid v11 creates
+                const detached = document.querySelector(`#d${id}`);
+                detached?.remove();
+            }
+        }
+
+        setStatus("loading");
+        if (containerRef.current) containerRef.current.innerHTML = "";
+        render();
+
+        return () => {
+            cancelled = true;
+            // Clean up DOM on unmount
+            const orphan = document.getElementById(id);
+            orphan?.remove();
+            const detached = document.querySelector(`#d${id}`);
+            detached?.remove();
+        };
+    }, [code]);
+
+    if (status === "error") {
+        return (
+            <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-80">
+                <code>{code}</code>
+            </pre>
+        );
+    }
+
+    return (
+        <div
+            ref={containerRef}
+            className={cn(
+                "bg-white dark:bg-muted rounded-lg p-4 overflow-auto border",
+                status === "loading" && "min-h-[120px] flex items-center justify-center"
+            )}
+        >
+            {status === "loading" && (
+                <p className="text-muted-foreground text-sm">Rendering diagram…</p>
             )}
         </div>
     );

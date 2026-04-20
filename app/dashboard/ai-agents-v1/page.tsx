@@ -7,7 +7,9 @@ import { agentConfigs, agentCategories, type AIAgentType } from "@/lib/ai/agent-
 import { getAgentBySlugV2 } from "@/lib/ai/agent-types-v2";
 import { ArrowRight, Sparkles, TrendingUp, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { aiAgentExecutions } from "@/lib/db/schema";
+import { eq, count, sum } from "drizzle-orm";
 
 export default async function AIAgentsPage() {
   // getCurrentUser is cached via React's cache(), so this is efficient
@@ -19,17 +21,19 @@ export default async function AIAgentsPage() {
     return null;
   }
 
-  // Get usage statistics for the user from Prisma
-  const agentStatsRaw = await prisma.aIAgentExecution.groupBy({
-    by: ['agentType'],
-    where: { userId: user.id },
-    _count: { id: true },
-    _sum: { tokensUsed: true },
-  });
+  // Get usage statistics for the user from Drizzle
+  const agentStatsRaw = await db.select({
+    agentType: aiAgentExecutions.agentType,
+    countId: count(),
+    sumTokensUsed: sum(aiAgentExecutions.tokensUsed),
+  }).from(aiAgentExecutions)
+    .where(eq(aiAgentExecutions.userId, user.id))
+    .groupBy(aiAgentExecutions.agentType);
+
   const agentStats = agentStatsRaw.map(stat => ({
     agentType: stat.agentType,
-    executions: stat._count.id,
-    tokens: stat._sum.tokensUsed || 0,
+    executions: stat.countId,
+    tokens: Number(stat.sumTokensUsed) || 0,
   }));
 
   const statsMap = new Map(
@@ -108,8 +112,8 @@ export default async function AIAgentsPage() {
                   const hasSpecializedUI = agentV2 && agentV2.uiType !== "chat";
 
                   // Get icon component dynamically
-                  const iconName = typeof agent.icon === 'object' && 'name' in agent.icon
-                    ? agent.icon.name
+                  const iconName = typeof agent.icon === 'object' && agent.icon !== null && 'name' in agent.icon
+                    ? (agent.icon as { name: string }).name
                     : 'Sparkles';
 
                   // Import icon dynamically
@@ -133,7 +137,7 @@ export default async function AIAgentsPage() {
                           </div>
                           <div className="flex flex-col gap-1 items-end">
                             {hasSpecializedUI && (
-                              <Badge variant="outline" className="text-xs bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border-indigo-500/20">
+                              <Badge variant="outline" className="text-xs bg-linear-to-r from-indigo-500/10 to-purple-500/10 border-indigo-500/20">
                                 <Zap className="mr-1 h-3 w-3" />
                                 Enhanced UI
                               </Badge>

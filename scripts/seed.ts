@@ -1,7 +1,11 @@
-import { PrismaClient } from "@prisma/client";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import { users } from "@/lib/db/schema";
+import { count, eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 
-const prisma = new PrismaClient();
+const client = postgres(process.env.DATABASE_URL!);
+const db = drizzle(client);
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,7 +16,7 @@ async function main() {
   console.log("Seeding database...");
 
   // Check if any users exist
-  const userCount = await prisma.user.count();
+  const [{ c: userCount }] = await db.select({ c: count() }).from(users);
 
   if (userCount > 0) {
     console.log("Database already has users. Skipping seed.");
@@ -36,17 +40,16 @@ async function main() {
     throw new Error(`Failed to create Supabase user: ${error.message}`);
   }
 
-  const admin = await prisma.user.create({
-    data: {
-      email: adminEmail,
-      name: adminName,
-      supabaseId: supabaseUser.user.id,
-      role: "admin",
-      status: "ACTIVE",
-      emailVerified: true,
-      onboardingCompleted: false,
-    },
-  });
+  const [admin] = await db.insert(users).values({
+    email: adminEmail,
+    name: adminName,
+    supabaseId: supabaseUser.user.id,
+    role: "admin",
+    status: "ACTIVE",
+    emailVerified: true,
+    onboardingCompleted: false,
+    updatedAt: new Date(),
+  }).returning();
 
   console.log(`Admin user created: ${admin.email} (id: ${admin.id})`);
   console.log("Default password: admin123 (change this immediately!)");
@@ -60,5 +63,5 @@ main()
     process.exit(1);
   })
   .finally(async () => {
-    await prisma.$disconnect();
+    await client.end();
   });

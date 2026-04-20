@@ -2,10 +2,12 @@ import type { AIStreamRequest, AIStreamResponse } from "./types";
 import {
   createLLMLiteClient,
   getOpenAIModelForKind,
-  resolveProvider,
+  ensureConfig,
+  resolveProviderAsync,
   toAIError,
 } from "./provider";
 import { runText } from "./text";
+import { getModelForKind } from "./models";
 
 function chunkText(text: string, size = 64): string[] {
   const chunks: string[] = [];
@@ -18,11 +20,13 @@ function chunkText(text: string, size = 64): string[] {
 export async function runStreamText(
   request: AIStreamRequest
 ): Promise<AIStreamResponse> {
-  const provider = resolveProvider(request.providerOverride);
+  await ensureConfig();
+  const provider = await resolveProviderAsync(request.providerOverride);
   const modelKind = request.modelKind || "default";
 
-  if (provider === "google") {
-    const fallback = await runText({ ...request, providerOverride: "google" });
+  // Google / Gemini / Claude — fall back to chunked non-stream
+  if (provider === "google" || provider === "gemini" || provider === "claude") {
+    const fallback = await runText({ ...request, providerOverride: provider });
     const chunks = chunkText(fallback.text, request.chunkSize || 64);
     return {
       textStream: (async function* () {
@@ -30,11 +34,12 @@ export async function runStreamText(
           yield chunk;
         }
       })(),
-      provider: "google",
+      provider,
       model: fallback.model,
     };
   }
 
+  // OpenAI / LiteLLM — true streaming
   try {
     const client = createLLMLiteClient();
     const model = getOpenAIModelForKind(modelKind);
@@ -56,11 +61,11 @@ export async function runStreamText(
           if (delta) yield delta;
         }
       })(),
-      provider: "llmlite",
+      provider,
       model,
     };
   } catch (error) {
-    const aiError = toAIError("llmlite", error);
+    const aiError = toAIError(provider, error);
     if (aiError.retryable && process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
       const fallback = await runText({ ...request, providerOverride: "google" });
       const chunks = chunkText(fallback.text, request.chunkSize || 64);

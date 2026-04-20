@@ -7,7 +7,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth-helpers";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, cpiTenants } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { createSAPCPIClient, type SAPCPIClient } from "@/lib/sap-cpi/client";
 import { decrypt } from "@/lib/encryption";
 import {
@@ -89,13 +91,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user has access to the tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
     });
 
     if (!membership) {
@@ -106,8 +103,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, tenantId),
     });
     if (!tenant) {
       return NextResponse.json(
@@ -132,7 +129,6 @@ export async function POST(request: NextRequest) {
       }
 
       // For now, accept any confirmation token (in production, validate properly)
-      console.log("Confirmation token received:", confirmationToken);
     }
 
     // Create SAP CPI client

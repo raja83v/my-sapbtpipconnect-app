@@ -55,7 +55,7 @@ async function DashboardContent() {
     recentExecutions,
     iFlowStatuses,
     aiAgentUsage,
-    executionTrend
+    executionTrend,
   } = dashboardResult.data;
 
   const greeting = getGreeting();

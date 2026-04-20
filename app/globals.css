@@ -121,12 +121,29 @@
   }
 }
 
+/*
+  Radix UI ScrollArea Fix:
+  Radix UI's ScrollArea internally wraps children in a div with
+  `display: table; min-width: 100%`. CSS table layout computes its width
+  from the max-content-width of children (i.e. unbroken text lines), which
+  can far exceed the viewport. The viewport has overflow-x: hidden, so the
+  right portion of every text line gets clipped — appearing truncated.
+  Setting width: 100% on that inner div caps the table at the viewport width
+  so text wraps within the visible area instead of overflowing.
+*/
+[data-radix-scroll-area-viewport] > div {
+  width: 100%;
+}
+
 /* AI Agent Chat Overflow Fixes */
 @layer components {
   /* Ensure prose content respects container width */
   .prose {
     overflow-wrap: break-word;
     word-wrap: break-word;
+    /* word-break: break-word reduces min-content-size for block/table layout,
+       preventing containers from growing wider than their parent */
+    word-break: break-word;
   }
   
   .prose pre {
@@ -137,16 +154,19 @@
   .prose code {
     overflow-wrap: break-word;
     word-wrap: break-word;
+    word-break: break-word;
   }
   
   .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
     overflow-wrap: break-word;
     word-wrap: break-word;
+    word-break: break-word;
   }
   
   .prose p {
     overflow-wrap: break-word;
     word-wrap: break-word;
+    word-break: break-word;
   }
   
   /* Ensure mermaid diagrams scale properly */

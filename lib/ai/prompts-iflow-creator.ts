@@ -4,8 +4,13 @@
  */
 
 import { IFlowDescription } from "@/components/ai/v2/specialized/iflow-creator/types";
+import type { CatalogPatternReference } from "@/types/catalog";
+import { buildCatalogReferencePrompt } from "./prompts-catalog-reference";
 
-export function createIFlowDesignPrompt(description: IFlowDescription): string {
+export function createIFlowDesignPrompt(
+  description: IFlowDescription,
+  catalogPatterns?: CatalogPatternReference[]
+): string {
   const triggerSection = description.triggerType === 'timer' && description.schedulingConfig
     ? `**Trigger Type:** Scheduled/Timer-based
 **Schedule:** ${description.schedulingConfig.type === 'cron'
@@ -684,6 +689,8 @@ CRITICAL: Your response must be valid, parseable JSON:
 - Ensure all brackets and braces are properly closed
 - Keep scripts simple - complex transformations should describe the logic, not implement complex regex
 
+${catalogPatterns && catalogPatterns.length > 0 ? buildCatalogReferencePrompt(catalogPatterns) : ''}
+
 Now, design the integration flow based on the requirements above. Respond ONLY with the raw JSON object, no markdown formatting, no additional text.`;
 }
 
@@ -746,5 +753,11 @@ CRITICAL JSON FORMATTING RULES:
 - Do NOT wrap JSON in markdown code blocks
 - Do NOT include any text before or after the JSON
 - Ensure all brackets and braces are properly matched and closed
+
+When SAP catalog reference patterns are provided in the prompt, you MUST:
+- Analyze the reference patterns and adopt similar adapter configurations, flow topology, and error handling strategies
+- Note which SAP standard catalog package(s) influenced your design in the performanceNotes array (e.g., "Design inspired by SAP standard package: <PackageName>")
+- Deviate from reference patterns only when the user's specific requirements demand a different approach, and explain the deviation in performanceNotes
+- Prefer the same adapter types (e.g., if the reference uses SOAP, prefer SOAP unless the user explicitly asks for REST)
 
 You respond with raw, valid JSON that can be directly parsed and used to generate BPMN2 XML for SAP CPI deployment.`;

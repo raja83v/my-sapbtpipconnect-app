@@ -1,4 +1,6 @@
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { sessions, tenantInvitations } from "@/lib/db/schema";
+import { lt, and, isNull } from "drizzle-orm";
 
 /**
  * Run periodic cleanup tasks:
@@ -9,26 +11,20 @@ export async function runCleanup() {
   const now = new Date();
 
   // Clean expired sessions
-  const deletedSessions = await prisma.session.deleteMany({
-    where: { expiresAt: { lt: now } },
-  });
+  const deletedSessions = await db.delete(sessions).where(lt(sessions.expiresAt, now)).returning();
 
-  if (deletedSessions.count > 0) {
-    console.log(`[Cleanup] Removed ${deletedSessions.count} expired session(s)`);
+  if (deletedSessions.length > 0) {
   }
 
   // Clean expired invitations older than 7 days
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const deletedInvitations = await prisma.tenantInvitation.deleteMany({
-    where: {
-      expiresAt: { lt: sevenDaysAgo },
-      acceptedAt: null,
-    },
-  });
+  const deletedInvitations = await db.delete(tenantInvitations).where(
+    and(
+      lt(tenantInvitations.expiresAt, sevenDaysAgo),
+      isNull(tenantInvitations.acceptedAt),
+    )
+  ).returning();
 
-  if (deletedInvitations.count > 0) {
-    console.log(
-      `[Cleanup] Removed ${deletedInvitations.count} expired invitation(s)`
-    );
+  if (deletedInvitations.length > 0) {
   }
 }

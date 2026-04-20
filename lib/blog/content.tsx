@@ -49,7 +49,7 @@ export const BLOG_CATEGORIES = [
 ];
 
 export const POPULAR_ARTICLES = [
-  "what-is-hagenkit",
+  "what-is-cpi-connect",
   "organize-with-labels",
   "azure-saml-sso",
 ];
@@ -67,45 +67,45 @@ export const HELP_CATEGORIES: {
   icon: React.ReactNode;
 }[] = [
   {
-    title: "HagenKit Overview",
+    title: "CPI Connect Overview",
     slug: "overview",
     description:
-      "Understand the HagenKit platform, core capabilities, and the problems it solves for modern teams.",
+      "Understand the CPI Connect platform, core capabilities, and the problems it solves for modern teams.",
     icon: <IconBuildingSkyscraper className="h-6 w-6 text-gray-500" />,
   },
   {
     title: "Getting Started",
     slug: "getting-started",
     description:
-      "Launch quickly with setup checklists, workspace walkthroughs, and best practices for connecting your first HagenKit projects and inviting collaborators.",
+      "Launch quickly with setup checklists, workspace walkthroughs, and best practices for connecting your first CPI Connect projects and inviting collaborators.",
     icon: <IconChartBar className="h-6 w-6 text-gray-500" />,
   },
   {
     title: "Key Concepts",
     slug: "terms",
     description:
-      "Build fluency with HagenKit terminology, core objects, and workspace roles so every teammate knows how launches, automations, and permissions connect.",
+      "Build fluency with CPI Connect terminology, core objects, and workspace roles so every teammate knows how launches, automations, and permissions connect.",
     icon: <IconBook2 className="h-6 w-6 text-gray-500" />,
   },
   {
     title: "Agency Playbooks",
     slug: "for-investors",
     description:
-      "Detailed playbooks for agencies orchestrating multiple HagenKit clients, with templates, automation tips, and workflow handoffs that scale.",
+      "Detailed playbooks for agencies orchestrating multiple CPI Connect clients, with templates, automation tips, and workflow handoffs that scale.",
     icon: <IconFileAnalytics className="h-6 w-6 text-gray-500" />,
   },
   {
     title: "AI Insights",
     slug: "analysis",
     description:
-      "Dive into HagenKit AI workflows, enrichment techniques, and automation explainers to understand how data powers each step of your launch process.",
+      "Dive into CPI Connect AI workflows, enrichment techniques, and automation explainers to understand how data powers each step of your launch process.",
     icon: <IconChartPie className="h-6 w-6 text-gray-500" />,
   },
   {
     title: "Optimization Guides",
     slug: "valuation",
     description:
-      "Optimize live HagenKit sites with guidance on performance tuning, design refinements, copy testing, and analytics workflows that keep launches improving.",
+      "Optimize live CPI Connect sites with guidance on performance tuning, design refinements, copy testing, and analytics workflows that keep launches improving.",
     icon: <IconScale className="h-6 w-6 text-gray-500" />,
   },
 ];

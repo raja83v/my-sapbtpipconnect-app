@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, cpiTenants, aiAgentExecutions } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { runText } from "@/lib/ai/runtime/text";
 import { createSAPCPIClient, type SAPCPICredentials } from "@/lib/sap-cpi/client";
@@ -123,8 +125,8 @@ export async function getIFlowsForTestGenerator(params: {
         const { tenantId } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -132,8 +134,8 @@ export async function getIFlowsForTestGenerator(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -169,11 +171,11 @@ export async function getIFlowsForTestGenerator(params: {
         const cpiCredentials: SAPCPICredentials = {
             tenantUrl: tenant.tenantUrl,
             authType: tenant.authType as any,
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret,
-            username: tenant.username,
-            password: tenant.password,
-            tokenUrl: effectiveTokenUrl,
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+            tokenUrl: effectiveTokenUrl || undefined,
         };
 
         const cpiClient = createSAPCPIClient(cpiCredentials);
@@ -214,8 +216,8 @@ export async function getIFlowMetadata(params: {
         const { tenantId, iflowId } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -223,8 +225,8 @@ export async function getIFlowMetadata(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -260,11 +262,11 @@ export async function getIFlowMetadata(params: {
         const cpiCredentials: SAPCPICredentials = {
             tenantUrl: tenant.tenantUrl,
             authType: tenant.authType as any,
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret,
-            username: tenant.username,
-            password: tenant.password,
-            tokenUrl: effectiveTokenUrl,
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+            tokenUrl: effectiveTokenUrl || undefined,
         };
 
         const cpiClient = createSAPCPIClient(cpiCredentials);
@@ -272,7 +274,6 @@ export async function getIFlowMetadata(params: {
         // Download and parse BPMN2 XML using the SAP CPI artifact ID directly
         let bpmn2ParseResult: BPMN2ParseResult | null = null;
         try {
-            console.log("Downloading and parsing BPMN2 for iFlow:", iflowId);
             bpmn2ParseResult = await cpiClient.downloadAndParseIFlow(iflowId);
         } catch (error) {
             console.error("Error downloading/parsing BPMN2:", error);
@@ -354,8 +355,8 @@ export async function generateTestCases(params: {
         const { tenantId, iflowId, metadata, categories } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -378,18 +379,16 @@ export async function generateTestCases(params: {
 
         // Track execution in database
         const durationMs = Date.now() - startTime;
-        await prisma.aIAgentExecution.create({
-            data: {
-                agentType: "TEST_CASE_GENERATOR",
-                tenantId: tenantId,
-                iflowId: iflowId,
-                userId: currentUser.id,
-                tokensUsed: totalTokens,
-                duration: durationMs,
-                success: true,
-                input: JSON.stringify({ categories, iflowId, iflowName: metadata.name }),
-                output: JSON.stringify({ testCasesGenerated: testCases.length }),
-            },
+        await db.insert(aiAgentExecutions).values({
+            agentType: "TEST_CASE_GENERATOR",
+            tenantId: tenantId,
+            iFlowId: iflowId,
+            userId: currentUser.id,
+            tokensUsed: totalTokens,
+            duration: durationMs,
+            success: true,
+            input: JSON.stringify({ categories, iflowId, iflowName: metadata.name }),
+            output: JSON.stringify({ testCasesGenerated: testCases.length }),
         });
 
         // Calculate coverage
@@ -418,18 +417,16 @@ export async function generateTestCases(params: {
         try {
             const currentUser = await getCurrentUser();
             if (currentUser) {
-                await prisma.aIAgentExecution.create({
-                    data: {
-                        agentType: "TEST_CASE_GENERATOR",
-                        tenantId: params.tenantId,
-                        iflowId: params.iflowId,
-                        userId: currentUser.id,
-                        tokensUsed: 0,
-                        duration: Date.now() - startTime,
-                        success: false,
-                        input: JSON.stringify({ categories: params.categories, iflowId: params.iflowId }),
-                        output: error instanceof Error ? error.message : "Unknown error",
-                    },
+                await db.insert(aiAgentExecutions).values({
+                    agentType: "TEST_CASE_GENERATOR",
+                    tenantId: params.tenantId,
+                    iFlowId: params.iflowId,
+                    userId: currentUser.id,
+                    tokensUsed: 0,
+                    duration: Date.now() - startTime,
+                    success: false,
+                    input: JSON.stringify({ categories: params.categories, iflowId: params.iflowId }),
+                    output: error instanceof Error ? error.message : "Unknown error",
                 });
             }
         } catch (trackError) {

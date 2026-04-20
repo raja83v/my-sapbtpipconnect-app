@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, iFlows, iFlowExecutions, tenantMembers, aiAgentExecutions } from "@/lib/db/schema";
+import { eq, and, desc } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { runText } from "@/lib/ai/runtime/text";
 import * as prompts from "@/lib/ai/prompts";
@@ -29,8 +31,11 @@ export async function diagnoseError(params: {
         const { executionId, tenantId, iflowId } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId)
+            ),
         });
 
         if (!membership) {
@@ -221,8 +226,11 @@ export async function getFailedExecutions(params: {
         const { tenantId, limit = 100 } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId)
+            ),
         });
 
         if (!membership) {
@@ -230,20 +238,23 @@ export async function getFailedExecutions(params: {
         }
 
         // Get all iFlows for this tenant
-        const iFlows = await prisma.iFlow.findMany({
-            where: { tenantId },
+        const iFlowsList = await db.query.iFlows.findMany({
+            where: eq(iFlows.tenantId, tenantId),
         });
 
-        if (iFlows.length === 0) {
+        if (iFlowsList.length === 0) {
             return { success: true, data: [] };
         }
 
         // Get failed executions for each iFlow
-        const failedExecutionsPromises = iFlows.map(async (iflow) => {
-            const executions = await prisma.iFlowExecution.findMany({
-                where: { iFlowId: iflow.id, status: "FAILED" },
-                orderBy: { startTime: "desc" },
-                take: 20,
+        const failedExecutionsPromises = iFlowsList.map(async (iflow) => {
+            const executions = await db.query.iFlowExecutions.findMany({
+                where: and(
+                    eq(iFlowExecutions.iFlowId, iflow.id),
+                    eq(iFlowExecutions.status, "FAILED")
+                ),
+                orderBy: desc(iFlowExecutions.startTime),
+                limit: 20,
             });
 
             return executions.map((exec: any) => ({
@@ -402,8 +413,11 @@ export async function sendChatMessage(params: {
 
         if (tenantId) {
             // Validate tenant access
-            const membership = await prisma.tenantMember.findUnique({
-                where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+            const membership = await db.query.tenantMembers.findFirst({
+                where: and(
+                    eq(tenantMembers.userId, currentUser.id),
+                    eq(tenantMembers.tenantId, tenantId)
+                ),
             });
 
             if (!membership) {
@@ -450,18 +464,16 @@ Provide a helpful, accurate, and concise response. If the question is about SAP 
 
         // Track execution in database
         try {
-            await prisma.aIAgentExecution.create({
-                data: {
-                    userId: currentUser.id,
-                    agentType: "GENERAL_ASSISTANT",
-                    tenantId: tenantId || undefined,
-                    iflowId: iflowId || undefined,
-                    input: message,
-                    output: response,
-                    tokensUsed,
-                    duration,
-                    success: true,
-                },
+            await db.insert(aiAgentExecutions).values({
+                userId: currentUser.id,
+                agentType: "GENERAL_ASSISTANT",
+                tenantId: tenantId || undefined,
+                iFlowId: iflowId || undefined,
+                input: message,
+                output: response,
+                tokensUsed,
+                duration,
+                success: true,
             });
         } catch (trackError) {
             console.error("Failed to track execution:", trackError);
@@ -504,10 +516,13 @@ export async function getChatHistory(params: {
         const { tenantId, limit = 50 } = params;
 
         // Get agent execution history
-        const history = await prisma.aIAgentExecution.findMany({
-            where: { userId: currentUser.id, agentType: "GENERAL_ASSISTANT" },
-            orderBy: { createdAt: "desc" },
-            take: limit,
+        const history = await db.query.aiAgentExecutions.findMany({
+            where: and(
+                eq(aiAgentExecutions.userId, currentUser.id),
+                eq(aiAgentExecutions.agentType, "GENERAL_ASSISTANT")
+            ),
+            orderBy: desc(aiAgentExecutions.createdAt),
+            limit,
         });
 
         // Filter by tenantId if provided
@@ -553,13 +568,13 @@ export async function clearChatHistory(params: {
 
         // TODO: Implement actual deletion
         // For now, just return success
-        // await prisma.aIAgentExecution.deleteMany({
-        //     where: {
-        //         userId: currentUser.id,
-        //         agentType: "GENERAL_ASSISTANT",
-        //         tenantId: params.tenantId || undefined,
-        //     },
-        // });
+        // await db.delete(aiAgentExecutions).where(
+        //     and(
+        //         eq(aiAgentExecutions.userId, currentUser.id),
+        //         eq(aiAgentExecutions.agentType, "GENERAL_ASSISTANT"),
+        //         params.tenantId ? eq(aiAgentExecutions.tenantId, params.tenantId) : undefined,
+        //     )
+        // );
 
         revalidatePath("/dashboard/ai-agents");
 
@@ -586,8 +601,11 @@ export async function getIFlowsForOptimizer(params: {
         const { tenantId } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId)
+            ),
         });
 
         if (!membership) {
@@ -595,12 +613,12 @@ export async function getIFlowsForOptimizer(params: {
         }
 
         // Get all iFlows for this tenant
-        const iFlows = await prisma.iFlow.findMany({
-            where: { tenantId },
+        const iFlowsData = await db.query.iFlows.findMany({
+            where: eq(iFlows.tenantId, tenantId),
         });
 
         // Transform to simple format
-        const simplifiedIFlows = iFlows.map((iflow: any) => ({
+        const simplifiedIFlows = iFlowsData.map((iflow: any) => ({
             id: iflow.id,
             name: iflow.name,
             status: iflow.status,
@@ -633,8 +651,11 @@ export async function analyzeIFlowPerformance(params: {
         const { tenantId, iflowId, daysBack = 7 } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId)
+            ),
         });
 
         if (!membership) {
@@ -642,8 +663,8 @@ export async function analyzeIFlowPerformance(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -651,8 +672,8 @@ export async function analyzeIFlowPerformance(params: {
         }
 
         // Get iFlow details from database
-        const iflow = await prisma.iFlow.findUnique({
-            where: { id: iflowId },
+        const iflow = await db.query.iFlows.findFirst({
+            where: eq(iFlows.id, iflowId),
         });
 
         if (!iflow) {
@@ -660,10 +681,10 @@ export async function analyzeIFlowPerformance(params: {
         }
 
         // Get execution statistics for the last 7 days
-        const executions = await prisma.iFlowExecution.findMany({
-            where: { iFlowId: iflowId },
-            orderBy: { startTime: "desc" },
-            take: 100,
+        const executions = await db.query.iFlowExecutions.findMany({
+            where: eq(iFlowExecutions.iFlowId, iflowId),
+            orderBy: desc(iFlowExecutions.startTime),
+            limit: 100,
         });
 
         // Calculate performance metrics
@@ -737,26 +758,14 @@ export async function analyzeIFlowPerformance(params: {
             if (tenant.authenticationUrl) {
                 // Use authenticationUrl as base for OAuth token endpoint
                 effectiveTokenUrl = `${tenant.authenticationUrl}/oauth/token`;
-                console.log("Using authenticationUrl for OAuth token:", effectiveTokenUrl);
             } else if (tenant.tenantUrl) {
                 // Fallback: derive from tenantUrl
                 const url = new URL(tenant.tenantUrl);
                 effectiveTokenUrl = `${url.protocol}//${url.host}/oauth/token`;
-                console.log("Derived OAuth token URL from tenantUrl:", effectiveTokenUrl);
             }
         }
 
         // Check if SAP CPI credentials are configured
-        console.log("Tenant credentials check:", {
-            authType: tenant.authType,
-            hasClientId: !!tenant.clientId,
-            hasClientSecret: !!tenant.clientSecret,
-            hasTokenUrl: !!tenant.tokenUrl,
-            effectiveTokenUrl: effectiveTokenUrl,
-            hasUsername: !!tenant.username,
-            hasPassword: !!tenant.password,
-            tenantUrl: tenant.tenantUrl,
-        });
 
         const hasOAuthCredentials = tenant.authType === "OAUTH" &&
             tenant.clientId &&
@@ -767,11 +776,6 @@ export async function analyzeIFlowPerformance(params: {
             tenant.username &&
             tenant.password;
 
-        console.log("Credential validation:", {
-            hasOAuthCredentials,
-            hasBasicAuthCredentials,
-            willConnectToSAPCPI: hasOAuthCredentials || hasBasicAuthCredentials,
-        });
 
         if (hasOAuthCredentials || hasBasicAuthCredentials) {
             try {
@@ -779,11 +783,11 @@ export async function analyzeIFlowPerformance(params: {
                 const cpiCredentials: SAPCPICredentials = {
                     tenantUrl: tenant.tenantUrl,
                     authType: tenant.authType as any,
-                    clientId: tenant.clientId,
-                    clientSecret: tenant.clientSecret,
-                    username: tenant.username,
-                    password: tenant.password,
-                    tokenUrl: effectiveTokenUrl, // Use derived token URL
+                    clientId: tenant.clientId || undefined,
+                    clientSecret: tenant.clientSecret || undefined,
+                    username: tenant.username || undefined,
+                    password: tenant.password || undefined,
+                    tokenUrl: effectiveTokenUrl || undefined, // Use derived token URL
                 };
 
                 const cpiClient = createSAPCPIClient(cpiCredentials);
@@ -805,16 +809,9 @@ export async function analyzeIFlowPerformance(params: {
 
                 // Download and parse BPMN2 XML for deep analysis
                 try {
-                    console.log("Downloading and parsing BPMN2 for iFlow:", iflow.iFlowId);
                     bpmn2ParseResult = await cpiClient.downloadAndParseIFlow(iflow.iFlowId);
 
                     if (bpmn2ParseResult) {
-                        console.log("✅ BPMN2 parsed successfully:", {
-                            adapters: bpmn2ParseResult.adapters.length,
-                            scripts: bpmn2ParseResult.scripts.length,
-                            mappings: bpmn2ParseResult.mappings.length,
-                            errorHandlers: bpmn2ParseResult.errorHandlers.length,
-                        });
                     }
                 } catch (error) {
                     console.warn("Could not download/parse BPMN2:", error);
@@ -822,17 +819,7 @@ export async function analyzeIFlowPerformance(params: {
 
                 // Fetch performance metrics from SAP CPI monitoring
                 try {
-                    console.log("Fetching SAP CPI metrics for iFlow:", {
-                        iFlowId: iflow.iFlowId,
-                        iFlowName: iflow.name,
-                        daysBack,
-                    });
                     sapCPIMetrics = await cpiClient.getIFlowPerformanceMetrics(iflow.iFlowId, iflow.name, daysBack);
-                    console.log("✅ SAP CPI metrics fetched successfully:", {
-                        totalMessages: sapCPIMetrics.totalMessages,
-                        avgDuration: sapCPIMetrics.avgDuration,
-                        errorRate: sapCPIMetrics.errorRate,
-                    });
                 } catch (error) {
                     console.error("❌ Could not fetch SAP CPI performance metrics:", error);
                     console.error("Error details:", {
@@ -984,15 +971,6 @@ ${bpmn2ParseResult.errorHandlers.length > 0
         }
 
         // Only proceed with AI analysis if we have sufficient data
-        console.log("Performance analysis validation passed:", {
-            hasIFlowMetadata,
-            hasExecutionData,
-            hasMetrics,
-            hasSAPCPIMetrics,
-            executionCount: executions.length,
-            sapCPIAvailable,
-            dataSource: hasSAPCPIMetrics ? "SAP CPI + Database" : "Database only",
-        });
 
         // Generate AI-powered analysis
         const result = await runText({
@@ -1067,18 +1045,16 @@ Focus on actionable, specific recommendations based on the metrics provided.`,
 
         // Track execution in database
         try {
-            await prisma.aIAgentExecution.create({
-                data: {
-                    userId: currentUser.id,
-                    agentType: "PERFORMANCE_OPTIMIZER",
-                    tenantId: tenantId || undefined,
-                    iflowId: iflowId || undefined,
-                    input: `Analyze performance for ${iflow.name}`,
-                    output: JSON.stringify(analysis),
-                    tokensUsed,
-                    duration,
-                    success: true,
-                },
+            await db.insert(aiAgentExecutions).values({
+                userId: currentUser.id,
+                agentType: "PERFORMANCE_OPTIMIZER",
+                tenantId: tenantId || undefined,
+                iFlowId: iflowId || undefined,
+                input: `Analyze performance for ${iflow.name}`,
+                output: JSON.stringify(analysis),
+                tokensUsed,
+                duration,
+                success: true,
             });
         } catch (trackError) {
             console.error("Failed to track execution:", trackError);

@@ -96,14 +96,14 @@ export function AgentOutput({
           <div className="prose prose-sm dark:prose-invert max-w-none">
             <ReactMarkdown
               components={{
-                code({ node, inline, className, children, ...props }) {
+                code({ node, className, children, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || "");
-                  return !inline && match ? (
+                  const isInline = !match;
+                  return !isInline && match ? (
                     <SyntaxHighlighter
                       language={match[1]}
-                      style={vscDarkPlus}
+                      style={vscDarkPlus as any}
                       PreTag="div"
-                      {...props}
                     >
                       {String(children).replace(/\n$/, "")}
                     </SyntaxHighlighter>

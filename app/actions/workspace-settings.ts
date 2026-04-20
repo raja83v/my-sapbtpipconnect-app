@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { WorkspaceWithRole } from "@/types/workspace";
@@ -25,10 +27,10 @@ export async function getCurrentWorkspace(): Promise<ActionResult<WorkspaceWithR
     }
 
     // Get user's first tenant membership
-    const member = await prisma.tenantMember.findFirst({
-      where: { userId: user.id },
-      include: { tenant: true },
-      orderBy: { joinedAt: "asc" },
+    const member = await db.query.tenantMembers.findFirst({
+      where: eq(tenantMembers.userId, user.id),
+      with: { tenant: true },
+      orderBy: (tenantMembers, { asc }) => [asc(tenantMembers.joinedAt)],
     });
 
     if (!member) {
@@ -71,13 +73,11 @@ export async function updateWorkspace(
     const validatedData = updateWorkspaceSchema.parse(input);
 
     // Check if user is OWNER or ADMIN of this tenant
-    const member = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: validatedData.id,
-        },
-      },
+    const member = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, validatedData.id),
+      ),
     });
 
     if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -89,8 +89,8 @@ export async function updateWorkspace(
 
     // Check if slug is already taken (if changing slug)
     if (validatedData.slug) {
-      const existingTenant = await prisma.cpiTenant.findUnique({
-        where: { slug: validatedData.slug },
+      const existingTenant = await db.query.cpiTenants.findFirst({
+        where: eq(cpiTenants.slug, validatedData.slug),
       });
 
       if (existingTenant && existingTenant.id !== validatedData.id) {
@@ -102,13 +102,10 @@ export async function updateWorkspace(
     }
 
     // Update tenant
-    const updatedTenant = await prisma.cpiTenant.update({
-      where: { id: validatedData.id },
-      data: {
-        name: validatedData.name,
-        slug: validatedData.slug,
-      },
-    });
+    const [updatedTenant] = await db.update(cpiTenants).set({
+      name: validatedData.name,
+      slug: validatedData.slug,
+    }).where(eq(cpiTenants.id, validatedData.id)).returning();
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -153,8 +150,8 @@ export async function createUserWorkspace(
     const validatedData = createWorkspaceSchema.parse(input);
 
     // Check if tenant with slug already exists
-    const existingTenant = await prisma.cpiTenant.findUnique({
-      where: { slug: validatedData.slug },
+    const existingTenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.slug, validatedData.slug),
     });
 
     if (existingTenant) {
@@ -165,25 +162,21 @@ export async function createUserWorkspace(
     }
 
     // Create tenant with user as owner in a transaction
-    const tenant = await prisma.$transaction(async (tx) => {
-      const newTenant = await tx.cpiTenant.create({
-        data: {
+    const tenant = await db.transaction(async (tx) => {
+      const [newTenant] = await tx.insert(cpiTenants).values({
           name: validatedData.name,
           tenantUrl: `https://${validatedData.slug}.example.com`, // Placeholder URL
           slug: validatedData.slug,
           image: validatedData.image || undefined,
           authType: "OAUTH",
           status: "ACTIVE",
-        },
-      });
+      }).returning();
 
       // Add current user as OWNER
-      await tx.tenantMember.create({
-        data: {
+      await tx.insert(tenantMembers).values({
           userId: currentUser.id,
           tenantId: newTenant.id,
           role: "OWNER",
-        },
       });
 
       return newTenant;

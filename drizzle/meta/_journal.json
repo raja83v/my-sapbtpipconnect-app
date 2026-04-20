@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1776508863883,
+      "tag": "0000_late_hellfire_club",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776644787462,
+      "tag": "0001_add-chat-conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776646020847,
+      "tag": "0002_fix-conversation-updatedAt-default",
+      "breakpoints": true
+    }
+  ]
+}

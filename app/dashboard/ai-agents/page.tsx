@@ -1,7 +1,9 @@
 import { Suspense } from "react";
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { aiAgentExecutions } from "@/lib/db/schema";
+import { eq, count, sum } from "drizzle-orm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,17 +24,19 @@ export default async function AIAgentsV2Page() {
         redirect("/sign-in");
     }
 
-    // Get usage statistics from Prisma
-    const agentStatsRaw = await prisma.aIAgentExecution.groupBy({
-        by: ['agentType'],
-        where: { userId: user.id },
-        _count: { id: true },
-        _sum: { tokensUsed: true },
-    });
+    // Get usage statistics from Drizzle
+    const agentStatsRaw = await db.select({
+        agentType: aiAgentExecutions.agentType,
+        countId: count(),
+        sumTokensUsed: sum(aiAgentExecutions.tokensUsed),
+    }).from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.userId, user.id))
+      .groupBy(aiAgentExecutions.agentType);
+
     const agentStats = agentStatsRaw.map(stat => ({
         agentType: stat.agentType,
-        executions: stat._count.id,
-        tokens: stat._sum.tokensUsed || 0,
+        executions: stat.countId,
+        tokens: Number(stat.sumTokensUsed) || 0,
     }));
 
     const statsMap = new Map(

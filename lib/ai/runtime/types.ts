@@ -1,6 +1,6 @@
 import type { ZodTypeAny } from "zod";
 
-export type AIProvider = "llmlite" | "google";
+export type AIProvider = "llmlite" | "google" | "litellm" | "openai" | "claude" | "gemini";
 
 export type AIModelKind = "default" | "fast" | "orchestrator";
 

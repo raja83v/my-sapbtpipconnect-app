@@ -69,27 +69,9 @@ export async function sendTemplateEmail<T extends EmailTemplateId>(
     const html = await render(component);
 
     if (!resend) {
-      console.log(`
-=================================================================
-[DEV MODE] Email Mock Send
-=================================================================
-To: ${Array.isArray(options.to) ? options.to.join(", ") : options.to}
-Subject: ${subject}
-Template: ${templateId}
------------------------------------------------------------------
-HTML Content (Preview):
-${html.substring(0, 500)}...
------------------------------------------------------------------
-Full HTML content logged above.
-In a real scenario, this would be sent via Resend.
-=================================================================
-      `);
       
       // If it's a magic link, try to extract and log the link specifically for easier access
       if (templateId === "magic-link" && (data as any).magicLinkUrl) {
-        console.log(`
->>> MAGIC LINK URL: ${(data as any).magicLinkUrl}
-        `);
       }
 
       return {
@@ -166,20 +148,6 @@ export async function sendCustomEmail(
     const resend = getResendClient();
 
     if (!resend) {
-      console.log(`
-=================================================================
-[DEV MODE] Custom Email Mock Send
-=================================================================
-To: ${Array.isArray(options.to) ? options.to.join(", ") : options.to}
-Subject: ${subject}
------------------------------------------------------------------
-HTML Content (Preview):
-${html.substring(0, 500)}...
------------------------------------------------------------------
-Full HTML content logged above.
-In a real scenario, this would be sent via Resend.
-=================================================================
-      `);
 
       return {
         id: "mock-email-id-" + Date.now(),

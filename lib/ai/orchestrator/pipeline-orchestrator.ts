@@ -3,14 +3,16 @@
  *
  * Controls the multi-agent iFlow creation pipeline. Manages state transitions,
  * sequences agent execution, handles retries, and persists everything to PostgreSQL
- * via Prisma for real-time UI updates (via polling).
+ * via Drizzle for real-time UI updates (via polling).
  *
  * Usage:
  *   const orchestrator = new PipelineOrchestrator(pipelineId);
  *   await orchestrator.run(context);
  */
 
-import { prisma } from '@/lib/db';
+import { db } from '@/lib/db';
+import { eq, sql } from 'drizzle-orm';
+import { iFlowPipelines, iFlowPipelineAgentLogs } from '@/lib/db/schema';
 import type { BaseAgent } from './agent-base';
 import type {
   PipelinePhase,
@@ -55,13 +57,11 @@ export class PipelineOrchestrator {
       );
     }
 
-    console.log(`[Pipeline:${this.pipelineId}] Phase: ${this._currentPhase} → ${to}`);
     this._currentPhase = to;
 
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: { phase: to },
-    });
+    await db.update(iFlowPipelines)
+      .set({ phase: to })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
@@ -75,24 +75,23 @@ export class PipelineOrchestrator {
     attemptNumber?: number
   ): Promise<AgentResult<TOutput>> {
     // Log start
-    const agentLog = await prisma.iFlowPipelineAgentLog.create({
-      data: {
+    const [agentLog] = await db.insert(iFlowPipelineAgentLogs)
+      .values({
         pipelineId: this.pipelineId,
         agentName: agent.name,
         input: truncateForLog(JSON.stringify(input)),
         attemptNumber,
         status: 'RUNNING',
-      },
-    });
+      })
+      .returning();
 
     // Execute
     const result = await agent.execute(input, context);
 
     // Log completion
     const logStatus: AgentLogStatus = result.success ? 'COMPLETED' : 'FAILED';
-    await prisma.iFlowPipelineAgentLog.update({
-      where: { id: agentLog.id },
-      data: {
+    await db.update(iFlowPipelineAgentLogs)
+      .set({
         status: logStatus,
         output: result.output
           ? truncateForLog(JSON.stringify(result.output))
@@ -101,8 +100,8 @@ export class PipelineOrchestrator {
         tokensUsed: result.tokensUsed ?? 0,
         duration: result.duration ?? 0,
         completedAt: new Date(),
-      },
-    });
+      })
+      .where(eq(iFlowPipelineAgentLogs.id, agentLog.id));
 
     return result;
   }
@@ -114,40 +113,37 @@ export class PipelineOrchestrator {
     console.error(`[Pipeline:${this.pipelineId}] FAILED at ${phase}: ${message}`);
     this._currentPhase = 'FAILED';
 
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         phase: 'FAILED',
         errorPhase: phase,
         errorMessage: message,
         errorRecoverable: recoverable,
-      },
-    });
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
    * Store tenant capabilities
    */
   async setTenantCapabilities(capabilities: unknown): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         tenantCapabilities: JSON.stringify(capabilities),
-      },
-    });
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
    * Store architect result
    */
   async setArchitectResult(result: unknown, tokensUsed: number): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         architectResult: JSON.stringify(result),
-        totalTokensUsed: { increment: tokensUsed },
-      },
-    });
+        totalTokensUsed: sql`${iFlowPipelines.totalTokensUsed} + ${tokensUsed}`,
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
@@ -158,14 +154,13 @@ export class PipelineOrchestrator {
     tokensUsed: number,
     finalDesign?: unknown
   ): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         reviewerResult: JSON.stringify(result),
         finalDesign: finalDesign ? JSON.stringify(finalDesign) : undefined,
-        totalTokensUsed: { increment: tokensUsed },
-      },
-    });
+        totalTokensUsed: sql`${iFlowPipelines.totalTokensUsed} + ${tokensUsed}`,
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
@@ -175,25 +170,23 @@ export class PipelineOrchestrator {
     xml: string,
     scriptFiles?: { path: string; content: string }[]
   ): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         bpmn2Xml: xml,
         bpmn2ScriptFiles: scriptFiles ? JSON.stringify(scriptFiles) : undefined,
-      },
-    });
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
    * Store validator result
    */
   async setValidatorResult(result: unknown): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         validatorResult: JSON.stringify(result),
-      },
-    });
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
@@ -205,49 +198,45 @@ export class PipelineOrchestrator {
     updatedDesign?: unknown
   ): Promise<void> {
     // Get current fix attempts
-    const pipeline = await prisma.iFlowPipeline.findUnique({
-      where: { id: this.pipelineId },
-      select: { fixAttempts: true },
-    });
+    const [pipeline] = await db.select({ fixAttempts: iFlowPipelines.fixAttempts })
+      .from(iFlowPipelines)
+      .where(eq(iFlowPipelines.id, this.pipelineId));
 
     const existingAttempts = pipeline?.fixAttempts
       ? JSON.parse(pipeline.fixAttempts)
       : [];
     existingAttempts.push(attempt);
 
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         fixAttempts: JSON.stringify(existingAttempts),
         finalDesign: updatedDesign ? JSON.stringify(updatedDesign) : undefined,
-        totalTokensUsed: { increment: tokensUsed },
-      },
-    });
+        totalTokensUsed: sql`${iFlowPipelines.totalTokensUsed} + ${tokensUsed}`,
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
    * Store summarizer result
    */
   async setSummarizerResult(result: unknown, tokensUsed: number): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         summarizerResult: JSON.stringify(result),
-        totalTokensUsed: { increment: tokensUsed },
-      },
-    });
+        totalTokensUsed: sql`${iFlowPipelines.totalTokensUsed} + ${tokensUsed}`,
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**
    * Store deployment result
    */
   async setDeploymentResult(result: unknown): Promise<void> {
-    await prisma.iFlowPipeline.update({
-      where: { id: this.pipelineId },
-      data: {
+    await db.update(iFlowPipelines)
+      .set({
         deploymentResult: JSON.stringify(result),
-      },
-    });
+      })
+      .where(eq(iFlowPipelines.id, this.pipelineId));
   }
 
   /**

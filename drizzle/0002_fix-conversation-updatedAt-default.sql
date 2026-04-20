@@ -1,0 +1,1 @@
+ALTER TABLE "ai_chat_conversation" ALTER COLUMN "updatedAt" SET DEFAULT now();

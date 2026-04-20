@@ -4,17 +4,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState, useEffect } from "react";
-import { authClient } from "@/lib/auth-client";
+import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 import {
-  IconInnerShadowTop,
   IconCheck,
   IconAlertCircle,
   IconX,
 } from "@tabler/icons-react";
+import { Cloud } from "lucide-react";
+import { siteConfig } from "@/lib/config";
 import { buttonVariants } from "@/components/ui/button";
 
 // Password strength validation
@@ -52,7 +53,6 @@ export default function ResetPasswordAuth() {
 
   const router = useRouter();
   const searchParams = useSearchParams();
-  const token = searchParams.get("token");
   const tokenError = searchParams.get("error");
 
   const passwordValidation = validatePasswordStrength(newPassword);
@@ -69,13 +69,6 @@ export default function ResetPasswordAuth() {
     setLoading(true);
     setError(null);
 
-    // Validate token exists
-    if (!token) {
-      setError("No reset token provided. Please use the link from your email.");
-      setLoading(false);
-      return;
-    }
-
     // Validate password strength
     if (!passwordValidation.isValid) {
       setError("Please ensure your password meets all requirements.");
@@ -91,17 +84,13 @@ export default function ResetPasswordAuth() {
     }
 
     try {
-      const result = await authClient.resetPassword({
-        newPassword,
-        token,
+      const supabase = createClient();
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword,
       });
 
-      if (result.error) {
-        if (result.error.message?.includes("token")) {
-          setError("This reset link has expired or is invalid. Please request a new one.");
-        } else {
-          setError(result.error.message || "Failed to reset password. Please try again.");
-        }
+      if (updateError) {
+        setError(updateError.message || "Failed to reset password. Please try again.");
         return;
       }
 
@@ -133,8 +122,8 @@ export default function ResetPasswordAuth() {
         <div className="relative hidden h-full flex-col bg-muted p-10 text-white dark:border-r lg:flex">
           <div className="absolute inset-0 bg-zinc-900" />
           <div className="relative z-20 flex items-center text-lg font-medium">
-            <IconInnerShadowTop className="mr-2 h-6 w-6" />
-            HagenKit
+            <Cloud className="mr-2 h-6 w-6" />
+            {siteConfig.name}
           </div>
           <div className="relative z-20 mt-auto">
             <blockquote className="space-y-2">
@@ -213,7 +202,7 @@ export default function ResetPasswordAuth() {
                           setShowValidation(true);
                         }}
                         value={newPassword}
-                        disabled={loading || !!tokenError}
+                        disabled={loading}
                         autoComplete="new-password"
                       />
                     </div>
@@ -255,7 +244,7 @@ export default function ResetPasswordAuth() {
                         required
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         value={confirmPassword}
-                        disabled={loading || !!tokenError}
+                        disabled={loading}
                         autoComplete="new-password"
                       />
                       {confirmPassword && !passwordsMatch && (
@@ -276,7 +265,6 @@ export default function ResetPasswordAuth() {
                       type="submit"
                       disabled={
                         loading ||
-                        !!tokenError ||
                         !passwordValidation.isValid ||
                         !passwordsMatch
                       }
@@ -312,8 +300,8 @@ export default function ResetPasswordAuth() {
       {/* Mobile view */}
       <div className="flex min-h-screen flex-col items-center justify-center p-6 md:hidden">
         <div className="flex items-center text-lg font-medium mb-8">
-          <IconInnerShadowTop className="mr-2 h-6 w-6" />
-          HagenKit
+          <Cloud className="mr-2 h-6 w-6" />
+          CPI Connect
         </div>
 
         <div className="w-full max-w-sm space-y-6">
@@ -382,7 +370,7 @@ export default function ResetPasswordAuth() {
                         setShowValidation(true);
                       }}
                       value={newPassword}
-                      disabled={loading || !!tokenError}
+                      disabled={loading}
                       autoComplete="new-password"
                     />
                   </div>
@@ -424,7 +412,7 @@ export default function ResetPasswordAuth() {
                       required
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       value={confirmPassword}
-                      disabled={loading || !!tokenError}
+                      disabled={loading}
                       autoComplete="new-password"
                     />
                     {confirmPassword && !passwordsMatch && (

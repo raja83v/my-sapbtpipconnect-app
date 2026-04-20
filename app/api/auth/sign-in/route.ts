@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: NextRequest) {
@@ -26,10 +28,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Look up Prisma user
-    const user = await prisma.user.findUnique({
-      where: { email: data.user.email! },
-      select: {
+    // Look up user
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, data.user.email!),
+      columns: {
         id: true,
         email: true,
         name: true,
@@ -54,12 +56,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update last login time if user exists in Prisma
+    // Update last login time if user exists
     if (user) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { lastLoginAt: new Date() },
-      });
+      await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     }
 
     return NextResponse.json({

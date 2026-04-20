@@ -5,16 +5,18 @@ import {
   IconArrowLeft,
   IconBook,
   IconChartBar,
+  IconCloud,
+  IconCreditCard,
   IconDashboard,
   IconDatabase,
   IconFileDescription,
   IconHelp,
-  IconInnerShadowTop,
   IconKey,
   IconSettings,
   IconUserCog,
   IconUsers,
 } from "@tabler/icons-react";
+import { Cloud } from "lucide-react";
 import type { SidebarUser } from "@/types/user";
 
 import { NavMain } from "@/components/nav-main";
@@ -50,7 +52,7 @@ const data = {
     {
       title: "Workspace Management",
       url: "/admin/workspaces",
-      icon: IconInnerShadowTop,
+      icon: IconCloud,
     },
     {
       title: "System Settings",
@@ -61,6 +63,11 @@ const data = {
       title: "Analytics",
       url: "/admin/analytics",
       icon: IconChartBar,
+    },
+    {
+      title: "Billing",
+      url: "/admin/billing",
+      icon: IconCreditCard,
     },
     {
       title: "Audit Logs",
@@ -113,8 +120,8 @@ export function AdminSidebar({
               className="data-[slot=sidebar-menu-button]:p-1.5!"
             >
               <a href="/dashboard">
-                <IconInnerShadowTop className="size-5!" />
-                <span className="text-base font-semibold">HagenKit Admin</span>
+                <Cloud className="size-5!" />
+                <span className="text-base font-semibold">CPI Connect Admin</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>

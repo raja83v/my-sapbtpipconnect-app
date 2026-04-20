@@ -1,4 +1,7 @@
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants } from "@/lib/db/schema";
+import { eq, and, or, lt, isNull, asc } from "drizzle-orm";
+import { SAPCPIClient } from "@/lib/sap-cpi/client";
 
 /**
  * Sync all active, connected tenants that haven't been synced recently.
@@ -7,26 +10,23 @@ import { prisma } from "@/lib/db";
 export async function syncAllTenants() {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
-  const tenants = await prisma.cpiTenant.findMany({
-    where: {
-      status: "ACTIVE",
-      isConnected: true,
-      OR: [{ lastSyncAt: null }, { lastSyncAt: { lt: fiveMinutesAgo } }],
-    },
-    take: 10,
-    orderBy: { lastSyncAt: "asc" },
-  });
+  const tenants = await db.select().from(cpiTenants).where(
+    and(
+      eq(cpiTenants.status, "ACTIVE"),
+      eq(cpiTenants.isConnected, true),
+      or(isNull(cpiTenants.lastSyncAt), lt(cpiTenants.lastSyncAt, fiveMinutesAgo)),
+    )
+  ).limit(10).orderBy(asc(cpiTenants.lastSyncAt));
 
   if (tenants.length === 0) {
     return;
   }
 
-  console.log(`[Cron] Syncing ${tenants.length} tenant(s)...`);
 
   for (const tenant of tenants) {
     try {
       // Dynamic import to avoid circular dependencies
-      const { SapCpiClient } = await import("@/lib/sap-cpi/client");
+      const { SAPCPIClient } = await import("@/lib/sap-cpi/client");
       const { decrypt } = await import("@/lib/encryption");
 
       // Decrypt credentials
@@ -37,10 +37,10 @@ export async function syncAllTenants() {
         ? await decrypt(tenant.password)
         : undefined;
 
-      const client = new SapCpiClient({
+      const client = new SAPCPIClient({
         tenantUrl: tenant.tenantUrl,
         authType: tenant.authType,
-        authenticationUrl: tenant.authenticationUrl ?? undefined,
+        tokenUrl: tenant.authenticationUrl ?? undefined,
         clientId: tenant.clientId ?? undefined,
         clientSecret,
         username: tenant.username ?? undefined,
@@ -65,20 +65,13 @@ export async function syncAllTenants() {
       }
 
       // Update last sync time
-      await prisma.cpiTenant.update({
-        where: { id: tenant.id },
-        data: { lastSyncAt: new Date() },
-      });
+      await db.update(cpiTenants).set({ lastSyncAt: new Date() }).where(eq(cpiTenants.id, tenant.id));
 
-      console.log(`[Cron] Synced tenant: ${tenant.name}`);
     } catch (error) {
       console.error(`[Cron] Failed to sync tenant ${tenant.name}:`, error);
 
       // Mark tenant as errored if sync fails consistently
-      await prisma.cpiTenant.update({
-        where: { id: tenant.id },
-        data: { lastSyncAt: new Date() }, // Still update to avoid retrying immediately
-      });
+      await db.update(cpiTenants).set({ lastSyncAt: new Date() }).where(eq(cpiTenants.id, tenant.id)); // Still update to avoid retrying immediately
     }
   }
 }

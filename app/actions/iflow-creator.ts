@@ -1,13 +1,17 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { SAPCPIClient } from "@/lib/sap-cpi/client";
 import { decrypt } from "@/lib/encryption";
 import { runText } from "@/lib/ai/runtime/text";
 import { IFlowDescription, IFlowDesign } from "@/components/ai/v2/specialized/iflow-creator/types";
 import { createIFlowDesignPrompt, IFLOW_CREATOR_SYSTEM_PROMPT } from "@/lib/ai/prompts-iflow-creator";
+import { extractCatalogPatterns, type PatternExtractionResult } from "@/lib/sap-cpi/catalog-pattern-extractor";
+import type { CatalogPatternReference } from "@/types/catalog";
 
 export interface SAPCPIPackage {
     Id: string;
@@ -33,15 +37,15 @@ export async function getIntegrationPackages(tenantId: string): Promise<ActionRe
         }
 
         // Get tenant details
-        const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+        const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check if user has access to this tenant
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -118,15 +122,15 @@ export async function getPackageIFlows(tenantId: string, packageId: string): Pro
         }
 
         // Get tenant details
-        const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+        const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
 
         if (!tenant) {
             return { success: false, error: "Tenant not found" };
         }
 
         // Check if user has access to this tenant
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -142,11 +146,11 @@ export async function getPackageIFlows(tenantId: string, packageId: string): Pro
         const sapCpiClient = new SAPCPIClient({
             tenantUrl: tenant.tenantUrl,
             authType: tenant.authType as "OAUTH" | "BASIC_AUTH",
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret,
-            username: tenant.username,
-            password: tenant.password,
-            tokenUrl: tenant.authenticationUrl,
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+            tokenUrl: tenant.authenticationUrl || undefined,
         });
 
         // Fetch iFlows for the package
@@ -186,7 +190,8 @@ export async function getPackageIFlows(tenantId: string, packageId: string): Pro
  * Generate iFlow design using AI
  */
 export async function generateIFlowDesign(
-    description: IFlowDescription
+    description: IFlowDescription,
+    catalogPatterns?: CatalogPatternReference[]
 ): Promise<ActionResult<IFlowDesign>> {
     try {
         const currentUser = await getCurrentUser();
@@ -205,11 +210,9 @@ export async function generateIFlowDesign(
             return { success: false, error: "AI service not configured" };
         }
 
-        // Create prompt
-        const userPrompt = createIFlowDesignPrompt(description);
+        // Create prompt (with optional catalog reference patterns)
+        const userPrompt = createIFlowDesignPrompt(description, catalogPatterns);
 
-        console.log("🤖 Generating iFlow design with AI runtime...");
-        console.log("Description length:", description.description.length);
 
         // Call AI runtime (LLMLite/OpenAI primary with Google fallback)
         const result = await runText({
@@ -222,17 +225,6 @@ export async function generateIFlowDesign(
         const text = result.text;
 
         // Log the raw AI response
-        console.log("=".repeat(80));
-        console.log("🤖 RAW AI RESPONSE (first 1000 chars):");
-        console.log("=".repeat(80));
-        console.log(text.substring(0, 1000));
-        console.log("=".repeat(80));
-        console.log("📊 Response Stats:");
-        console.log(`   Total length: ${text.length} characters`);
-        console.log(`   Has markdown blocks: ${text.includes('```')}`);
-        console.log(`   Has newlines: ${text.includes('\n')}`);
-        console.log(`   Has control chars: ${/[\x00-\x1F\x7F]/.test(text)}`);
-        console.log("=".repeat(80));
 
         // Helper function to clean AI-generated JSON
         const cleanAIJson = (rawText: string): string => {
@@ -242,7 +234,6 @@ export async function generateIFlowDesign(
             // Handle both ```json and plain ``` blocks
             const codeBlockMatch = json.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
             if (codeBlockMatch) {
-                console.log("✂️ Extracted JSON from markdown code block");
                 json = codeBlockMatch[1].trim();
             }
 
@@ -250,7 +241,6 @@ export async function generateIFlowDesign(
             if (!json.startsWith('{') && !json.startsWith('[')) {
                 const jsonStart = json.search(/[\[{]/);
                 if (jsonStart !== -1) {
-                    console.log(`✂️ Trimmed ${jsonStart} characters from start to find JSON`);
                     json = json.substring(jsonStart);
                 }
             }
@@ -294,7 +284,6 @@ export async function generateIFlowDesign(
             }
 
             if (jsonEndIndex !== -1 && jsonEndIndex < json.length - 1) {
-                console.log(`✂️ Trimmed ${json.length - jsonEndIndex - 1} characters from end`);
                 json = json.substring(0, jsonEndIndex + 1);
             }
 
@@ -413,15 +402,9 @@ export async function generateIFlowDesign(
 
         let designJson = cleanAIJson(text);
 
-        console.log("📝 JSON after cleaning (first 1000 chars):");
-        console.log(designJson.substring(0, 1000));
-        console.log("=".repeat(80));
-        console.log("=".repeat(80));
-        console.log("📊 Cleaned JSON Stats:");
-        console.log(`   Total length: ${designJson.length} characters`);
 
         // Parse the JSON response
-        let design: IFlowDesign;
+        let design!: IFlowDesign;
         try {
             design = JSON.parse(designJson);
         } catch (parseError) {
@@ -474,7 +457,6 @@ export async function generateIFlowDesign(
                             // If script has complex patterns like .append('\"') or replaceAll('\\\"')
                             // Replace with a simplified placeholder
                             if (/\.append\s*\(\s*'\\/.test(content) || /replaceAll\s*\(\s*'\\{2,}/.test(content)) {
-                                console.log("🔧 Simplifying complex Groovy script content");
                                 return '"scriptContent": "// Complex script - see script file\\nimport com.sap.gateway.ip.core.customdev.util.Message\\n\\ndef Message processData(Message message) {\\n    def body = message.getBody(String)\\n    // TODO: Implement script logic\\n    message.setBody(body)\\n    return message\\n}"';
                             }
                             return match;
@@ -567,7 +549,6 @@ export async function generateIFlowDesign(
                 repairedJson = repair.fn(repairedJson);
                 try {
                     design = JSON.parse(repairedJson);
-                    console.log(`✅ Parsed after repair: ${repair.name}`);
                     parsed = true;
                     break;
                 } catch {
@@ -582,14 +563,11 @@ export async function generateIFlowDesign(
                     if (errorPos >= 0 && errorPos < repairedJson.length) {
                         const charAtError = repairedJson[errorPos];
                         const prevChar = errorPos > 0 ? repairedJson[errorPos - 1] : '';
-                        console.log(`Character at error position: "${charAtError}" (code: ${charAtError.charCodeAt(0)})`);
-                        console.log(`Previous character: "${prevChar}" (code: ${prevChar.charCodeAt(0)})`);
 
                         // If error is at a comma that shouldn't be there
                         if (charAtError === ',' && (prevChar === ',' || prevChar === '{' || prevChar === '[')) {
                             repairedJson = repairedJson.slice(0, errorPos) + repairedJson.slice(errorPos + 1);
                             design = JSON.parse(repairedJson);
-                            console.log("✅ Parsed after removing extra comma at error position");
                             parsed = true;
                         }
                     }
@@ -629,18 +607,6 @@ export async function generateIFlowDesign(
             securityNotes: design.securityNotes || [],
         };
 
-        console.log("✅ Successfully generated iFlow design:");
-        console.log(`   Name: ${design.metadata?.name || 'Unknown'}`);
-        console.log(`   Adapters: ${design.adapters.length}`);
-        console.log(`   Scripts: ${design.scripts.length}`);
-        console.log(`   Mappings: ${design.mappings.length}`);
-        console.log(`   Error Handlers: ${design.errorHandlers.length}`);
-        console.log(`   Routers: ${design.routers.length}`);
-        console.log(`   Splitters: ${design.splitters.length}`);
-        console.log(`   Converters: ${design.converters.length}`);
-        console.log(`   Security: ${design.encryptors.length + design.signers.length} components`);
-        console.log(`   Data Stores: ${design.dataStores.length}`);
-        console.log(`   Complexity: ${design.estimatedComplexity || 'medium'}`);
 
         // Validate the design has required components
         if (!design.metadata || !design.adapters || design.adapters.length === 0) {
@@ -662,6 +628,61 @@ export async function generateIFlowDesign(
         return {
             success: false,
             error: error instanceof Error ? error.message : "Failed to generate iFlow design"
+        };
+    }
+}
+
+/**
+ * Search the SAP content catalog for reference patterns matching the user's
+ * iFlow description. Returns extracted patterns that can be passed to
+ * generateIFlowDesign() to inform the AI.
+ *
+ * This is a non-blocking, best-effort operation — if the catalog is
+ * unreachable or returns no results the caller can proceed without patterns.
+ */
+export async function searchCatalogForPatterns(
+    tenantId: string,
+    description: IFlowDescription
+): Promise<ActionResult<PatternExtractionResult>> {
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            return { success: false, error: "Not authenticated" };
+        }
+
+        const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
+        if (!tenant) {
+            return { success: false, error: "Tenant not found" };
+        }
+
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
+        });
+        if (!membership) {
+            return { success: false, error: "You don't have access to this tenant" };
+        }
+
+        if (!tenant.tenantUrl) {
+            return { success: false, error: "Tenant URL is not configured" };
+        }
+
+        const sapCpiClient = new SAPCPIClient({
+            tenantUrl: tenant.tenantUrl,
+            authType: tenant.authType as "OAUTH" | "BASIC_AUTH",
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+            tokenUrl: tenant.authenticationUrl || undefined,
+        });
+
+        const result = await extractCatalogPatterns(sapCpiClient, description);
+        return { success: true, data: result };
+    } catch (error) {
+        console.error("Error searching catalog for patterns:", error);
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : "Failed to search catalog",
         };
     }
 }

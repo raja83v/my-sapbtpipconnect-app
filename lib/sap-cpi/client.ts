@@ -200,10 +200,6 @@ export class SAPCPIClient {
             if (looksEncrypted) {
                 try {
                     clientSecret = await decrypt(this.credentials.clientSecret);
-                    console.log("✅ Client secret decrypted successfully", {
-                        encryptedLength: this.credentials.clientSecret.length,
-                        decryptedLength: clientSecret.length,
-                    });
                 } catch (error) {
                     // Decryption failed - the colon might be part of the actual secret
                     console.warn("⚠️ Decryption failed, using value as-is:", error instanceof Error ? error.message : 'Unknown error');
@@ -211,7 +207,6 @@ export class SAPCPIClient {
                 }
             } else {
                 // Value doesn't look encrypted, use as-is (plain text)
-                console.log("ℹ️ Client secret appears to be plain text (no iv:ciphertext format detected)");
                 clientSecret = this.credentials.clientSecret;
             }
 
@@ -219,13 +214,6 @@ export class SAPCPIClient {
                 throw new Error("OAuth clientSecret is empty");
             }
 
-            console.log("OAuth token request:", {
-                tokenUrl,
-                clientId,
-                clientSecretLength: clientSecret.length,
-                hasClientSecret: true,
-                isValidSecret: true,
-            });
 
             // Use the same OAuth format as the sync function (form parameters)
             const params = new URLSearchParams({
@@ -234,12 +222,6 @@ export class SAPCPIClient {
                 client_secret: clientSecret,
             });
 
-            console.log("Making OAuth request:", {
-                url: tokenUrl,
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                bodyPreview: `grant_type=client_credentials&client_id=${clientId}&client_secret=${clientSecret.substring(0, 10)}...`,
-            });
 
             const response = await fetch(tokenUrl, {
                 method: "POST",
@@ -249,11 +231,6 @@ export class SAPCPIClient {
                 body: params.toString(),
             });
 
-            console.log("OAuth response received:", {
-                status: response.status,
-                statusText: response.statusText,
-                headers: Object.fromEntries(response.headers.entries()),
-            });
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -451,7 +428,6 @@ export class SAPCPIClient {
         const queryParams = [filterQuery, topQuery, orderBy].filter(Boolean).join("&");
         const endpoint = `/api/v1/MessageProcessingLogs?${queryParams}`;
 
-        console.log("Fetching message logs with filter:", filterQuery);
 
         const response = await this.request<{ d: { results: MessageProcessingLog[] } }>(endpoint);
         return response.d.results;
@@ -500,7 +476,6 @@ export class SAPCPIClient {
         const queryParams = [filterQuery, topQuery, skipQuery, orderBy, inlineCount].filter(Boolean).join("&");
         const endpoint = `/api/v1/MessageProcessingLogs?${queryParams}`;
 
-        console.log("Fetching all message logs:", { filters: filterQuery, top: params.top, skip: params.skip });
 
         const response = await this.request<{
             d: {
@@ -643,7 +618,6 @@ export class SAPCPIClient {
         const url = `${this.credentials.tenantUrl}${endpoint}`;
         const authHeader = await this.getAuthHeader();
 
-        console.log("Downloading iFlow package:", { iFlowId, version, url });
 
         const response = await fetch(url, {
             headers: {
@@ -670,8 +644,6 @@ export class SAPCPIClient {
             const zip = new AdmZip(zipBuffer);
             const zipEntries = zip.getEntries();
 
-            console.log("📦 ZIP Package Contents:");
-            console.log(`   Total entries: ${zipEntries.length}`);
 
             // Log all files in the ZIP for visibility
             const fileList = zipEntries.map(entry => ({
@@ -679,7 +651,6 @@ export class SAPCPIClient {
                 size: entry.header.size,
                 compressed: entry.header.compressedSize,
             }));
-            console.log("   Files:", JSON.stringify(fileList, null, 2));
 
             const bpmn2Files: string[] = [];
 
@@ -696,7 +667,6 @@ export class SAPCPIClient {
                     // Verify it's actually BPMN2 content
                     if (content.includes('bpmn2:definitions') || content.includes('bpmn:definitions')) {
                         bpmn2Files.push(content);
-                        console.log(`✅ Found BPMN2 file: ${entry.entryName} (${entry.header.size} bytes)`);
                     }
                 }
             }
@@ -705,7 +675,6 @@ export class SAPCPIClient {
                 console.warn("⚠️ No BPMN2 files found in package");
                 console.warn("   Searched for: .bpmn, .bpmn2, .iflw, META-INF/*.xml");
             } else {
-                console.log(`✅ Extracted ${bpmn2Files.length} BPMN2 file(s)`);
             }
 
             return bpmn2Files;
@@ -720,11 +689,9 @@ export class SAPCPIClient {
      */
     async downloadAndParseIFlow(iFlowId: string, version: string = "active"): Promise<BPMN2ParseResult | null> {
         try {
-            console.log("🔄 Starting iFlow download and parse:", { iFlowId, version });
 
             // Download ZIP package
             const zipBuffer = await this.downloadIFlowPackage(iFlowId, version);
-            console.log(`✅ Downloaded ZIP package: ${(zipBuffer.length / 1024).toFixed(2)} KB`);
 
             // Extract BPMN2 XML files
             const bpmn2Files = await this.extractBPMN2FromPackage(zipBuffer);
@@ -734,35 +701,19 @@ export class SAPCPIClient {
                 return null;
             }
 
-            console.log(`📄 Parsing BPMN2 XML (${(bpmn2Files[0].length / 1024).toFixed(2)} KB)...`);
 
             // Parse the first BPMN2 file (main integration flow)
             const parser = createBPMN2Parser();
             const parseResult = parser.parse(bpmn2Files[0]);
 
-            console.log("✅ Successfully parsed iFlow:");
-            console.log(`   📊 Metadata:`, {
-                name: parseResult.metadata.name,
-                totalSteps: parseResult.metadata.totalSteps,
-                hasParallelProcessing: parseResult.metadata.hasParallelProcessing,
-                hasLoops: parseResult.metadata.hasLoops,
-            });
-            console.log(`   🔌 Adapters: ${parseResult.adapters.length}`);
             parseResult.adapters.forEach((adapter, idx) => {
-                console.log(`      ${idx + 1}. ${adapter.name} (${adapter.type} - ${adapter.direction})`);
                 if (adapter.performanceIssues.length > 0) {
-                    console.log(`         ⚠️ Issues: ${adapter.performanceIssues.join(', ')}`);
                 }
             });
-            console.log(`   📝 Scripts: ${parseResult.scripts.length}`);
             parseResult.scripts.forEach((script, idx) => {
-                console.log(`      ${idx + 1}. ${script.name} (${script.type}) - ${script.linesOfCode} LOC, ${script.complexity} complexity`);
                 if (script.issues.length > 0) {
-                    console.log(`         ⚠️ Issues: ${script.issues.join(', ')}`);
                 }
             });
-            console.log(`   🔄 Mappings: ${parseResult.mappings.length}`);
-            console.log(`   ⚡ Error Handlers: ${parseResult.errorHandlers.length}`);
 
             return parseResult;
         } catch (error) {
@@ -980,13 +931,6 @@ export class SAPCPIClient {
         const toDate = new Date();
         const fromDate = new Date(toDate.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
-        console.log("Fetching performance metrics:", {
-            iFlowId,
-            iFlowName,
-            fromDate: fromDate.toISOString(),
-            toDate: toDate.toISOString(),
-            daysBack,
-        });
 
         const logs = await this.getMessageProcessingLogs({
             iFlowId,
@@ -996,7 +940,6 @@ export class SAPCPIClient {
             top: 1000,
         });
 
-        console.log(`Found ${logs.length} message logs for iFlow`);
 
         const completedLogs = logs.filter(log => log.Status === "COMPLETED");
         const durations = completedLogs
@@ -1176,7 +1119,6 @@ export class SAPCPIClient {
         const authHeader = await this.getAuthHeader();
 
         // Step 1: Fetch CSRF token (required for modifying operations)
-        console.log('🔑 Fetching CSRF token...');
         const csrfUrl = `${this.credentials.tenantUrl}/api/v1/`;
         const csrfResponse = await fetch(csrfUrl, {
             method: 'GET',
@@ -1190,18 +1132,14 @@ export class SAPCPIClient {
         const csrfToken = csrfResponse.headers.get('X-CSRF-Token') || '';
         const cookies = csrfResponse.headers.get('Set-Cookie') || '';
 
-        console.log('🔑 CSRF token obtained:', csrfToken ? 'Yes' : 'No');
 
         // Log ZIP contents for debugging
-        console.log('📦 ZIP contents:');
         zip.getEntries().forEach(entry => {
-            console.log(`   - ${entry.entryName} (${entry.header.size} bytes)`);
         });
 
         // Convert ZIP to base64 for SAP CPI API
         const base64Content = zipBuffer.toString('base64');
 
-        console.log(`📋 Operation mode: ${createNew ? 'CREATE NEW' : 'UPDATE EXISTING'} iFlow`);
 
         let response: Response;
 
@@ -1217,15 +1155,6 @@ export class SAPCPIClient {
                 ArtifactContent: base64Content,
             };
 
-            console.log('📤 Creating new iFlow via POST:', {
-                iflowId,
-                packageId,
-                iflowName,
-                endpoint: createEndpoint,
-                method: 'POST',
-                hasCSRF: !!csrfToken,
-                base64Size: base64Content.length
-            });
 
             response = await fetch(createUrl, {
                 method: 'POST',
@@ -1251,15 +1180,6 @@ export class SAPCPIClient {
             const updateEndpoint = `/api/v1/IntegrationDesigntimeArtifacts(Id='${iflowId}',Version='active')`;
             const updateUrl = `${this.credentials.tenantUrl}${updateEndpoint}`;
 
-            console.log('📤 Updating existing iFlow via PUT:', {
-                iflowId,
-                packageId,
-                iflowName,
-                endpoint: updateEndpoint,
-                method: 'PUT',
-                hasCSRF: !!csrfToken,
-                base64Size: base64Content.length
-            });
 
             // For update, we send the updated content
             response = await fetch(updateUrl, {
@@ -1279,16 +1199,11 @@ export class SAPCPIClient {
 
             // If PUT fails with 501 (not implemented), try via package endpoint
             if (response.status === 501 || response.status === 405) {
-                console.log(`⚠️ PUT failed with ${response.status}, trying via package endpoint...`);
 
                 // Try POST to IntegrationPackages/{packageId}/IntegrationDesigntimeArtifacts with update semantics
                 const packageEndpoint = `/api/v1/IntegrationPackages('${packageId}')/IntegrationDesigntimeArtifacts`;
                 const packageUrl = `${this.credentials.tenantUrl}${packageEndpoint}`;
 
-                console.log('📤 Attempting update via package endpoint:', {
-                    endpoint: packageEndpoint,
-                    method: 'POST'
-                });
 
                 response = await fetch(packageUrl, {
                     method: 'POST',
@@ -1315,16 +1230,11 @@ export class SAPCPIClient {
 
         // If response is still not ok, try Slug header approach as last resort
         if (response.status === 400 || response.status === 415 || response.status === 406) {
-            console.log(`⚠️ Previous approach failed with ${response.status}, trying Slug header approach...`);
 
             // Approach: POST with Slug header (some SAP CPI versions require this)
             const slugEndpoint = `/api/v1/IntegrationDesigntimeArtifacts`;
             const slugUrl = `${this.credentials.tenantUrl}${slugEndpoint}`;
 
-            console.log('📤 Attempting with Slug header:', {
-                endpoint: slugEndpoint,
-                method: 'POST'
-            });
 
             // Use application/octet-stream with Slug header
             response = await fetch(slugUrl, {
@@ -1352,7 +1262,6 @@ export class SAPCPIClient {
             throw new Error(`Failed to ${createNew ? 'create' : 'update'} iFlow (${response.status}): ${errorText}`);
         }
 
-        console.log(`✅ iFlow ${createNew ? 'created' : 'updated'} successfully`);
     }
 
     /**
@@ -1362,7 +1271,6 @@ export class SAPCPIClient {
         const authHeader = await this.getAuthHeader();
 
         // First, fetch CSRF token
-        console.log('🔑 Fetching CSRF token for deployment...');
         const csrfUrl = `${this.credentials.tenantUrl}/api/v1/`;
         const csrfResponse = await fetch(csrfUrl, {
             method: 'GET',
@@ -1379,7 +1287,6 @@ export class SAPCPIClient {
         const endpoint = `/api/v1/DeployIntegrationDesigntimeArtifact?Id='${iflowId}'&Version='active'`;
         const url = `${this.credentials.tenantUrl}${endpoint}`;
 
-        console.log('🚀 Deploying iFlow:', { iflowId, endpoint });
 
         const response = await fetch(url, {
             method: 'POST',
@@ -1396,7 +1303,6 @@ export class SAPCPIClient {
             throw new Error(`Failed to deploy iFlow (${response.status}): ${errorText}`);
         }
 
-        console.log('✅ iFlow deployment initiated successfully');
     }
 
     /**

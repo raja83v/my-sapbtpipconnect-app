@@ -1,6 +1,8 @@
 import { runStreamText } from "@/lib/ai/runtime/stream";
 import { getCurrentUser } from "@/app/actions/user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers, iFlows, aiAgentExecutions } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { decrypt } from "@/lib/encryption";
 import { getCachedToken, cacheToken } from "@/lib/token-cache";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
@@ -72,8 +74,8 @@ export async function POST(request: Request) {
         }
 
         // Get tenant
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -84,13 +86,8 @@ export async function POST(request: Request) {
         }
 
         // Check access
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: currentUser.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -103,13 +100,8 @@ export async function POST(request: Request) {
         // Try to find the iFlow in database by artifact ID (optional)
         let iflow = null;
         if (iFlowArtifactId) {
-            iflow = await prisma.iFlow.findUnique({
-                where: {
-                    tenantId_iFlowId: {
-                        tenantId,
-                        iFlowId: iFlowArtifactId,
-                    },
-                },
+            iflow = await db.query.iFlows.findFirst({
+                where: and(eq(iFlows.tenantId, tenantId), eq(iFlows.iFlowId, iFlowArtifactId)),
             });
         }
 
@@ -212,14 +204,42 @@ Provide a clear, actionable response formatted in markdown.`;
             maxTokens: 1024,
         });
 
+        // Track start time for duration measurement
+        const startTime = Date.now();
+
+        // Collect output chunks for analytics tracking
+        const outputChunks: string[] = [];
+
         // Create a readable stream for the response
         const stream = new ReadableStream({
             async start(controller) {
                 for await (const chunk of result.textStream) {
-                    // Format as SSE data for useCompletion
+                    outputChunks.push(chunk);
                     controller.enqueue(new TextEncoder().encode(chunk));
                 }
                 controller.close();
+
+                // Track execution in database after streaming completes
+                const duration = Date.now() - startTime;
+                const output = outputChunks.join("");
+                const inputTokens = Math.ceil(prompt.length / 4);
+                const outputTokens = Math.ceil(output.length / 4);
+
+                try {
+                    await db.insert(aiAgentExecutions).values({
+                        userId: currentUser.id,
+                        agentType: "ERROR_DIAGNOSTICIAN",
+                        tenantId,
+                        iFlowId: iFlowArtifactId || undefined,
+                        input: `Diagnose error for iFlow: ${iFlowName}\n${errorDetails}`.slice(0, 5000),
+                        output: output.slice(0, 10000),
+                        tokensUsed: inputTokens + outputTokens,
+                        duration,
+                        success: true,
+                    });
+                } catch (trackError) {
+                    console.error("Failed to track AI execution:", trackError);
+                }
             },
         });
 

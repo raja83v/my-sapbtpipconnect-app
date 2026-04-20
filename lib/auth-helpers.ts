@@ -1,4 +1,6 @@
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq, count } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
 import { cache } from "react";
 
@@ -14,8 +16,8 @@ export type CurrentUser = {
 };
 
 /**
- * Get the current authenticated user from Supabase session and fetch associated Prisma user data.
- * Lazy-creates the Prisma user on first login (first user becomes admin).
+ * Get the current authenticated user from Supabase session and fetch associated user data.
+ * Lazy-creates the user on first login (first user becomes admin).
  * This is cached per request to avoid multiple database calls.
  */
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
@@ -28,10 +30,10 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     return null;
   }
 
-  // Look up existing Prisma user by email
-  let user = await prisma.user.findUnique({
-    where: { email: supabaseUser.email },
-    select: {
+  // Look up existing user by email
+  let user = await db.query.users.findFirst({
+    where: eq(users.email, supabaseUser.email),
+    columns: {
       id: true,
       email: true,
       name: true,
@@ -44,44 +46,39 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     },
   });
 
-  // Lazy-create Prisma user if missing (e.g. first Supabase sign-up)
+  // Lazy-create user if missing (e.g. first Supabase sign-up)
   if (!user) {
-    const userCount = await prisma.user.count();
+    const [{ c: userCount }] = await db.select({ c: count() }).from(users);
     const isFirstUser = userCount === 0;
 
-    user = await prisma.user.create({
-      data: {
-        email: supabaseUser.email,
-        name:
-          supabaseUser.user_metadata?.full_name ??
-          supabaseUser.user_metadata?.name ??
-          undefined,
-        supabaseId: supabaseUser.id,
-        role: isFirstUser ? "admin" : "user",
-        status: "ACTIVE",
-        emailVerified: !!supabaseUser.email_confirmed_at,
-        onboardingCompleted: false,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        status: true,
-        image: true,
-        onboardingCompleted: true,
-        defaultTenantId: true,
-        supabaseId: true,
-      },
+    const [created] = await db.insert(users).values({
+      email: supabaseUser.email,
+      name:
+        supabaseUser.user_metadata?.full_name ??
+        supabaseUser.user_metadata?.name ??
+        undefined,
+      supabaseId: supabaseUser.id,
+      role: isFirstUser ? "admin" : "user",
+      status: "ACTIVE",
+      emailVerified: !!supabaseUser.email_confirmed_at,
+      onboardingCompleted: false,
+    }).returning({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      role: users.role,
+      status: users.status,
+      image: users.image,
+      onboardingCompleted: users.onboardingCompleted,
+      defaultTenantId: users.defaultTenantId,
+      supabaseId: users.supabaseId,
     });
+    user = created;
   }
 
   // Backfill supabaseId if user was created before migration
   if (!user.supabaseId) {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { supabaseId: supabaseUser.id },
-    });
+    await db.update(users).set({ supabaseId: supabaseUser.id }).where(eq(users.id, user.id));
   }
 
   if (user.status === "DELETED") {

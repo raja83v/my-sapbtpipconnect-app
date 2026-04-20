@@ -91,7 +91,6 @@ export async function POST(request: NextRequest) {
 
           // Don't fail if this test fails, as the endpoint might not exist
           // The important part is that OAuth authentication succeeded
-          console.log("Tenant URL test status:", testResponse.status);
         } catch (error) {
           console.warn("Tenant URL test failed (non-critical):", error);
         }

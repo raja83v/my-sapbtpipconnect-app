@@ -20,19 +20,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Or pull pre-built image instead of building locally:
+    # image: raja83v/cpiconnect:latest
     restart: unless-stopped
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
       DATABASE_URL: postgresql://cpiconnect:${POSTGRES_PASSWORD:-cpiconnect_secret}@db:5432/cpiconnect
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRY: ${JWT_EXPIRY:-30d}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-      AI_PROVIDER: ${AI_PROVIDER:-google}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_DEPLOYMENT_MODE: ${NEXT_PUBLIC_DEPLOYMENT_MODE:-self-hosted}
+      AI_PROVIDER: ${AI_PROVIDER:-llmlite}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       LLMLITE_BASE_URL: ${LLMLITE_BASE_URL:-}
       LLMLITE_API_KEY: ${LLMLITE_API_KEY:-}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       CRON_SECRET: ${CRON_SECRET:-}
     depends_on:
       db:

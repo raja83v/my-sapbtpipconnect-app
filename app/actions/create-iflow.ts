@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { decrypt } from "@/lib/encryption";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
 import { BPMN2Generator } from "@/lib/sap-cpi/bpmn2-generator";
@@ -13,6 +15,7 @@ export interface CreationResultWithXML extends CreationResult {
     generatedXML?: string;
     validationReport?: string;
     validationResult?: ValidationResult;
+    design?: IFlowDesign;
 }
 
 export async function createIFlowInSAPCPI(
@@ -33,8 +36,8 @@ export async function createIFlowInSAPCPI(
         }
 
         // 2. Get tenant credentials
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
         if (!tenant) {
             return {
@@ -46,13 +49,8 @@ export async function createIFlowInSAPCPI(
         }
 
         // 3. Verify user has access to this tenant
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: user.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, user.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -69,11 +67,11 @@ export async function createIFlowInSAPCPI(
         const sapCpiClient = createSAPCPIClient({
             tenantUrl: tenant.tenantUrl,
             authType: tenant.authType as "OAUTH" | "BASIC_AUTH",
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret, // Pass encrypted, client will decrypt
-            username: tenant.username,
-            password: tenant.password, // Pass encrypted, client will decrypt
-            tokenUrl: tenant.authenticationUrl,
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined, // Pass encrypted, client will decrypt
+            username: tenant.username || undefined,
+            password: tenant.password || undefined, // Pass encrypted, client will decrypt
+            tokenUrl: tenant.authenticationUrl || undefined,
         });
 
         const warnings: string[] = [];
@@ -95,15 +93,6 @@ export async function createIFlowInSAPCPI(
             ? design.metadata.name 
             : packageSelection.iflowName!;
 
-        console.log('📋 Using iFlow details:', {
-            mode: packageSelection.mode,
-            createNewIFlow: packageSelection.createNewIFlow,
-            shouldCreateNew,
-            selectedIFlowId: packageSelection.iflowId,
-            aiGeneratedId: design.metadata.id,
-            finalIFlowId: iflowId,
-            finalIFlowName: iflowName
-        });
 
         // 6. Create or verify package
         if (packageSelection.mode === 'new') {
@@ -131,13 +120,11 @@ export async function createIFlowInSAPCPI(
         const generator = new BPMN2Generator();
         const bpmn2Xml = generator.generate(design);
 
-        console.log(`✅ Generated BPMN2 XML (${bpmn2Xml.length} characters)`);
 
         // 7b. Validate the generated BPMN2 XML
         const validationResult = validateBPMN2(bpmn2Xml);
         const validationReport = generateValidationReport(validationResult);
 
-        console.log('📋 BPMN2 Validation:', validationResult.isValid ? '✅ PASSED' : '❌ FAILED');
 
         // CRITICAL: Block deployment if validation fails
         // This prevents malformed BPMN2 XML from being deployed to SAP CPI
@@ -163,7 +150,6 @@ export async function createIFlowInSAPCPI(
 
         // Log warnings but don't block deployment
         if (validationResult.warnings.length > 0) {
-            console.log('⚠️ Validation Warnings:', validationResult.warnings);
             validationResult.warnings.forEach(w => warnings.push(w));
         }
 

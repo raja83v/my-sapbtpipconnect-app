@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import {
@@ -26,13 +28,10 @@ export async function updateUserProfile(
     const validatedData = updateProfileSchema.parse(input);
 
     // Update user profile
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: {
-        name: validatedData.name,
-        phone: validatedData.phone === "" ? null : validatedData.phone,
-      },
-    });
+    await db.update(users).set({
+      name: validatedData.name,
+      phone: validatedData.phone === "" ? null : validatedData.phone,
+    }).where(eq(users.id, currentUser.id));
 
     // Revalidate paths
     revalidatePath("/dashboard");
@@ -41,8 +40,8 @@ export async function updateUserProfile(
     return {
       success: true,
       data: {
-        name: validatedData.name,
-        phone: validatedData.phone || null,
+        name: validatedData.name ?? null,
+        phone: validatedData.phone ?? null,
       },
     };
   } catch (error) {
@@ -66,10 +65,7 @@ export async function deleteUserAccount(): Promise<ActionResult<void>> {
     }
 
     // Soft delete by setting status to DELETED
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: { status: "DELETED" },
-    });
+    await db.update(users).set({ status: "DELETED" }).where(eq(users.id, currentUser.id));
 
     // Revalidate paths
     revalidatePath("/dashboard");

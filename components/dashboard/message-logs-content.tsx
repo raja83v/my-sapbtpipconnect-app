@@ -687,7 +687,7 @@ export function MessageLogsContent() {
                                                     mode="single"
                                                     selected={dateRange.to}
                                                     onSelect={(date) => setDateRange(prev => ({ ...prev, to: date }))}
-                                                    disabled={(date) => date > new Date() || (dateRange.from && date < dateRange.from)}
+                                                    disabled={(date) => date > new Date() || (dateRange.from ? date < dateRange.from : false)}
                                                     initialFocus
                                                 />
                                             </div>

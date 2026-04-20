@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,17 +23,24 @@ import {
     AlertCircle,
     Zap,
     Wrench,
+    ArrowUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { getChatHistory, clearChatHistory } from "@/app/actions/ai-agents-v2";
-import { sendChatMessageWithTools } from "@/app/actions/ai-agents-tools";
 import { ToolExecutionDisplay, ToolCallSummary, type ToolCall } from "@/components/ai/tool-execution-display";
 import { 
     ActionConfirmationDialog, 
     useConfirmationDialog,
     type ConfirmationRequest 
 } from "@/components/ai/action-confirmation-dialog";
+import { ChatSidebar } from "./chat-sidebar";
+import {
+    createConversation,
+    getConversationMessages,
+    autoTitleConversation,
+} from "@/app/actions/ai-conversations";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
     id: string;
@@ -77,10 +84,13 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
-    const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     const [totalTokensUsed, setTotalTokensUsed] = useState(0);
+    const [conversationId, setConversationId] = useState<string | null>(null);
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const isFirstMessageRef = useRef(false);
     
     // Confirmation dialog state
     const {
@@ -92,17 +102,13 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
     } = useConfirmationDialog();
 
     useEffect(() => {
-        loadChatHistory();
-    }, [tenantId]);
-
-    useEffect(() => {
         scrollToBottom();
     }, [messages]);
 
-    const loadChatHistory = async () => {
+    const loadConversationMessages = async (convId: string) => {
         setIsLoadingHistory(true);
         try {
-            const result = await getChatHistory({ tenantId, limit: 50 });
+            const result = await getConversationMessages({ conversationId: convId });
             if (result.success && result.data) {
                 const historyMessages: Message[] = result.data.map((msg: any) => ({
                     id: msg.id,
@@ -113,10 +119,27 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
                 setMessages(historyMessages);
             }
         } catch (error) {
-            console.error("Failed to load chat history:", error);
+            console.error("Failed to load conversation messages:", error);
         } finally {
             setIsLoadingHistory(false);
         }
+    };
+
+    const handleSelectConversation = async (convId: string) => {
+        if (convId === conversationId) return;
+        setConversationId(convId);
+        setTotalTokensUsed(0);
+        isFirstMessageRef.current = false;
+        await loadConversationMessages(convId);
+    };
+
+    const handleNewChat = () => {
+        setConversationId(null);
+        setMessages([]);
+        setInput("");
+        setTotalTokensUsed(0);
+        isFirstMessageRef.current = false;
+        inputRef.current?.focus();
     };
 
     const scrollToBottom = () => {
@@ -131,7 +154,6 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
     const handleSend = async () => {
         if (!input.trim() || isLoading) return;
 
-        // Check if tenant is selected for tool-enabled queries
         if (!tenantId) {
             toast.error("Please select a tenant first", {
                 description: "Tool-enabled queries require a tenant to be selected.",
@@ -139,10 +161,25 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
             return;
         }
 
+        const messageText = input.trim();
+
+        // If no conversation yet, create one
+        let currentConversationId = conversationId;
+        if (!currentConversationId) {
+            const result = await createConversation({ tenantId });
+            if (!result.success || !result.data) {
+                toast.error("Failed to create conversation");
+                return;
+            }
+            currentConversationId = result.data.id;
+            setConversationId(currentConversationId);
+            isFirstMessageRef.current = true;
+        }
+
         const userMessage: Message = {
             id: `user-${Date.now()}`,
             role: "user",
-            content: input.trim(),
+            content: messageText,
             timestamp: new Date(),
         };
 
@@ -150,7 +187,6 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
         setInput("");
         setIsLoading(true);
 
-        // Add placeholder for assistant response
         const assistantMessageId = `assistant-${Date.now()}`;
         const assistantMessage: Message = {
             id: assistantMessageId,
@@ -158,78 +194,154 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
             content: "",
             timestamp: new Date(),
             isStreaming: true,
+            toolCalls: [],
         };
         setMessages(prev => [...prev, assistantMessage]);
 
         try {
-            // Use the tool-enabled version
-            const result = await sendChatMessageWithTools({
-                message: userMessage.content,
-                tenantId,
-                iflowId,
-                conversationHistory: messages.map(m => ({
-                    role: m.role,
-                    content: m.content,
-                })),
-                enableTools: true,
+            const res = await fetch("/api/ai/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    message: messageText,
+                    tenantId,
+                    iflowId,
+                    conversationId: currentConversationId,
+                    conversationHistory: messages.slice(-10).map(m => ({
+                        role: m.role,
+                        content: m.content,
+                    })),
+                }),
             });
 
-            if (result.success && result.data) {
-                // Convert tool calls to our format
-                const toolCalls: ToolCall[] = result.data.toolCalls?.map(tc => ({
-                    id: tc.id,
-                    toolName: tc.toolName,
-                    parameters: tc.parameters,
-                    status: tc.status as "completed" | "failed",
-                    result: tc.result,
-                    error: tc.error,
-                    duration: tc.duration,
-                    cached: tc.cached,
-                    timestamp: new Date(),
-                })) || [];
-
-                // Check for confirmation requirement
-                if (result.data.requiresConfirmation) {
-                    requestConfirmation(result.data.requiresConfirmation);
-                }
-
-                setMessages(prev =>
-                    prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? {
-                                ...msg,
-                                content: result.data.response,
-                                isStreaming: false,
-                                tokensUsed: result.data.tokensUsed,
-                                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-                            }
-                            : msg
-                    )
-                );
-                setTotalTokensUsed(prev => prev + result.data.tokensUsed);
-            } else {
-                setMessages(prev =>
-                    prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? {
-                                ...msg,
-                                content: result.error || "I apologize, but I encountered an error. Please try again.",
-                                isStreaming: false,
-                            }
-                            : msg
-                    )
-                );
-                toast.error("Failed to get response", {
-                    description: result.error,
-                });
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({ error: "Request failed" }));
+                throw new Error(errData.error || `HTTP ${res.status}`);
             }
+
+            const reader = res.body?.getReader();
+            if (!reader) throw new Error("No response stream");
+
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            const updateAssistant = (updater: (prev: Message) => Partial<Message>) => {
+                setMessages(prev =>
+                    prev.map(msg =>
+                        msg.id === assistantMessageId
+                            ? { ...msg, ...updater(msg) }
+                            : msg
+                    )
+                );
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+
+                let eventType = "";
+                let eventData = "";
+
+                for (const line of lines) {
+                    if (line.startsWith("event: ")) {
+                        eventType = line.slice(7).trim();
+                    } else if (line.startsWith("data: ")) {
+                        eventData = line.slice(6);
+
+                        if (!eventType || !eventData) continue;
+
+                        try {
+                            const data = JSON.parse(eventData);
+
+                            if (eventType === "tool_start") {
+                                updateAssistant((prev) => ({
+                                    toolCalls: [
+                                        ...(prev.toolCalls || []),
+                                        {
+                                            id: data.id,
+                                            toolName: data.toolName,
+                                            parameters: data.parameters || {},
+                                            status: "executing" as const,
+                                            timestamp: new Date(),
+                                        },
+                                    ],
+                                }));
+                            } else if (eventType === "tool_call") {
+                                updateAssistant((prev) => ({
+                                    toolCalls: (prev.toolCalls || []).map(tc =>
+                                        tc.id === data.id
+                                            ? {
+                                                ...tc,
+                                                status: data.status as "completed" | "failed",
+                                                result: data.result,
+                                                error: data.error,
+                                                duration: data.duration,
+                                            }
+                                            : tc
+                                    ),
+                                }));
+                            } else if (eventType === "text") {
+                                updateAssistant((prev) => ({
+                                    content: prev.content + data,
+                                }));
+                            } else if (eventType === "done") {
+                                updateAssistant(() => ({
+                                    isStreaming: false,
+                                    tokensUsed: data.tokensUsed,
+                                }));
+                                if (data.tokensUsed) {
+                                    setTotalTokensUsed(prev => prev + data.tokensUsed);
+                                }
+                                // Auto-title on first message and refresh sidebar
+                                if (isFirstMessageRef.current && currentConversationId) {
+                                    isFirstMessageRef.current = false;
+                                    autoTitleConversation({
+                                        conversationId: currentConversationId,
+                                        firstMessage: messageText,
+                                    }).then(() => {
+                                        (window as any).__refreshChatSidebar?.();
+                                    });
+                                } else {
+                                    (window as any).__refreshChatSidebar?.();
+                                }
+                            } else if (eventType === "error") {
+                                updateAssistant(() => ({
+                                    content: data.message || "An error occurred.",
+                                    isStreaming: false,
+                                }));
+                                toast.error("AI Error", { description: data.message });
+                            }
+                        } catch {
+                            // text events may just be a raw string chunk
+                            if (eventType === "text") {
+                                updateAssistant((prev) => ({
+                                    content: prev.content + eventData,
+                                }));
+                            }
+                        }
+
+                        eventType = "";
+                        eventData = "";
+                    }
+                }
+            }
+
+            // Ensure streaming flag is cleared
+            updateAssistant((prev) => {
+                if (prev.isStreaming) return { isStreaming: false };
+                return {};
+            });
         } catch (error) {
             setMessages(prev =>
                 prev.map(msg =>
                     msg.id === assistantMessageId
                         ? {
                             ...msg,
-                            content: "I apologize, but I encountered an error. Please try again.",
+                            content: error instanceof Error ? error.message : "An error occurred. Please try again.",
                             isStreaming: false,
                         }
                         : msg
@@ -238,22 +350,6 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
             toast.error("Failed to send message");
         } finally {
             setIsLoading(false);
-        }
-    };
-
-    const handleClearHistory = async () => {
-        if (!confirm("Are you sure you want to clear the chat history?")) return;
-
-        try {
-            const result = await clearChatHistory({ tenantId });
-            if (result.success) {
-                setMessages([]);
-                toast.success("Chat history cleared");
-            } else {
-                toast.error("Failed to clear history");
-            }
-        } catch (error) {
-            toast.error("Failed to clear history");
         }
     };
 
@@ -271,44 +367,41 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
 
     return (
         <div className="container mx-auto p-6 max-w-7xl h-[calc(100vh-8rem)]">
-            <div className="flex flex-col h-full gap-6">
-                {/* Header */}
-                <div className="flex items-center justify-between">
-                    <div>
-                        <div>
-                            <h1 className="text-4xl font-bold tracking-tight flex items-center gap-3">
-                                <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20">
-                                    <MessageSquare className="h-8 w-8 text-indigo-500" />
-                                </div>
-                                AI Assistant
-                            </h1>
-                            <p className="text-muted-foreground mt-2">
-                                Ask me anything about SAP CPI, integrations, or get help with any task
-                            </p>
+            <div className="flex h-full gap-0 rounded-xl border overflow-hidden bg-card shadow-sm">
+                {/* Sidebar */}
+                <ChatSidebar
+                    tenantId={tenantId}
+                    activeConversationId={conversationId}
+                    onSelectConversation={handleSelectConversation}
+                    onNewChat={handleNewChat}
+                    collapsed={sidebarCollapsed}
+                    onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+                />
+
+                {/* Main Chat Area */}
+                <div className="flex flex-col flex-1 min-w-0">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-6 py-3 border-b">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="p-1.5 rounded-lg bg-linear-to-br from-indigo-500/20 to-purple-500/20">
+                                <MessageSquare className="h-5 w-5 text-indigo-500" />
+                            </div>
+                            <div className="min-w-0">
+                                <h1 className="text-lg font-semibold tracking-tight">AI Assistant</h1>
+                                <p className="text-xs text-muted-foreground truncate">
+                                    Ask me anything about SAP CPI
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
                             {totalTokensUsed > 0 && (
-                                <div className="flex items-center gap-2 mt-2">
-                                    <Badge variant="outline" className="text-xs">
-                                        <Zap className="mr-1 h-3 w-3" />
-                                        {totalTokensUsed.toLocaleString()} tokens used this session
-                                    </Badge>
-                                </div>
+                                <Badge variant="outline" className="text-xs">
+                                    <Zap className="mr-1 h-3 w-3" />
+                                    {totalTokensUsed.toLocaleString()} tokens
+                                </Badge>
                             )}
                         </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={loadChatHistory} disabled={isLoadingHistory}>
-                            <RefreshCw className={cn("mr-2 h-4 w-4", isLoadingHistory && "animate-spin")} />
-                            Refresh
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={handleClearHistory} disabled={messages.length === 0}>
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Clear
-                        </Button>
-                    </div>
-                </div>
-
-                {/* Chat Container */}
-                <Card className="flex-1 flex flex-col overflow-hidden">
                     {/* Messages Area */}
                     <ScrollArea ref={scrollAreaRef} className="flex-1 p-6">
                         {isLoadingHistory ? (
@@ -324,7 +417,7 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
                             <div className="flex flex-col items-center justify-center h-full space-y-8">
                                 <div className="text-center space-y-3">
                                     <div className="flex justify-center">
-                                        <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20">
+                                        <div className="p-4 rounded-2xl bg-linear-to-br from-indigo-500/20 to-purple-500/20">
                                             <Sparkles className="h-12 w-12 text-indigo-500" />
                                         </div>
                                     </div>
@@ -372,45 +465,58 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
 
                     {/* Input Area */}
                     <div className="p-4">
-                        <div className="flex gap-3">
-                            <div className="flex-1 relative">
-                                <textarea
-                                    ref={inputRef}
-                                    value={input}
-                                    onChange={(e) => setInput(e.target.value)}
-                                    onKeyDown={handleKeyDown}
-                                    placeholder={tenantId ? "Ask me anything about SAP CPI..." : "Select a tenant to enable AI tools..."}
-                                    className="w-full min-h-[60px] max-h-[200px] p-3 pr-12 rounded-lg border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-                                    disabled={isLoading || !tenantId}
-                                />
-                                <div className="absolute bottom-3 right-3 text-xs text-muted-foreground">
-                                    {input.length > 0 && `${input.length} chars`}
+                        <div className="relative rounded-2xl border bg-background shadow-sm focus-within:ring-2 focus-within:ring-primary focus-within:border-primary transition-all">
+                            <textarea
+                                ref={inputRef}
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder={tenantId ? "Ask me anything about SAP CPI..." : "Select a tenant to enable AI tools..."}
+                                className="w-full min-h-14 max-h-[200px] px-4 pt-3 pb-12 rounded-2xl bg-transparent resize-none focus:outline-none text-sm"
+                                disabled={isLoading || !tenantId}
+                                rows={1}
+                            />
+                            <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    {tenantId ? (
+                                        <>
+                                            <Wrench className="h-3 w-3" />
+                                            <span>Tools enabled</span>
+                                            {input.length > 0 && (
+                                                <>
+                                                    <span className="text-muted-foreground/50">·</span>
+                                                    <span>{input.length} chars</span>
+                                                </>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <span>Select a tenant to enable AI tools</span>
+                                    )}
                                 </div>
+                                <Button
+                                    onClick={handleSend}
+                                    disabled={!input.trim() || isLoading || !tenantId}
+                                    size="icon"
+                                    className={cn(
+                                        "h-8 w-8 rounded-lg shrink-0 transition-all",
+                                        input.trim() && !isLoading && tenantId
+                                            ? "bg-primary text-primary-foreground shadow-md hover:shadow-lg"
+                                            : "bg-muted text-muted-foreground"
+                                    )}
+                                >
+                                    {isLoading ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <ArrowUp className="h-4 w-4" />
+                                    )}
+                                </Button>
                             </div>
-                            <Button
-                                onClick={handleSend}
-                                disabled={!input.trim() || isLoading || !tenantId}
-                                size="lg"
-                                className="h-[60px] px-6"
-                            >
-                                {isLoading ? (
-                                    <Loader2 className="h-5 w-5 animate-spin" />
-                                ) : (
-                                    <>
-                                        <Send className="h-5 w-5" />
-                                    </>
-                                )}
-                            </Button>
                         </div>
                         <p className="text-xs text-muted-foreground mt-2 text-center">
-                            {tenantId ? (
-                                <>Press Enter to send, Shift+Enter for new line • <Wrench className="inline h-3 w-3" /> Tools enabled</>
-                            ) : (
-                                "Select a tenant from the sidebar to enable AI tools"
-                            )}
+                            Press Enter to send, Shift+Enter for new line
                         </p>
                     </div>
-                </Card>
+                </div>
             </div>
 
             {/* Confirmation Dialog */}
@@ -419,7 +525,6 @@ export function ChatInterface({ tenantId, iflowId }: ChatInterfaceProps) {
                 onOpenChange={setConfirmationOpen}
                 request={confirmationRequest}
                 onConfirm={async (token) => {
-                    // Handle confirmation - this would trigger the action
                     toast.success("Action confirmed", {
                         description: "Executing the requested action...",
                     });
@@ -476,7 +581,7 @@ function MessageBubble({ message }: { message: Message }) {
                             : "bg-muted"
                     )}
                 >
-                    {message.isStreaming ? (
+                    {message.isStreaming && !message.content ? (
                         <div className="flex items-center gap-2">
                             <Loader2 className="h-4 w-4 animate-spin" />
                             <span className="text-muted-foreground">
@@ -485,13 +590,22 @@ function MessageBubble({ message }: { message: Message }) {
                                     : "Thinking..."}
                             </span>
                         </div>
-                    ) : (
+                    ) : isUser ? (
                         <div className="whitespace-pre-wrap wrap-break-word">{message.content}</div>
+                    ) : (
+                        <div className="prose prose-sm dark:prose-invert max-w-none wrap-break-word [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:rounded-lg [&_table]:overflow-hidden [&_table]:text-sm [&_thead]:bg-muted-foreground/10 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_th]:border-b [&_th]:border-border [&_td]:px-3 [&_td]:py-2 [&_td]:border-b [&_td]:border-border/50 [&_tr:last-child_td]:border-b-0 [&_tr:hover]:bg-muted-foreground/5 [&_code]:bg-muted-foreground/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono [&_pre]:bg-muted-foreground/10 [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1.5 [&_h4]:text-sm [&_h4]:font-semibold [&_h4]:mt-2 [&_h4]:mb-1 [&_strong]:font-semibold [&_a]:text-primary [&_a]:underline">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {message.content}
+                            </ReactMarkdown>
+                            {message.isStreaming && (
+                                <span className="inline-block w-1.5 h-4 bg-foreground/70 animate-pulse ml-0.5 align-text-bottom rounded-sm" />
+                            )}
+                        </div>
                     )}
                 </div>
 
                 {/* Tool call summary */}
-                {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+                {!isUser && message.toolCalls && message.toolCalls.length > 0 && !message.isStreaming && (
                     <ToolCallSummary toolCalls={message.toolCalls} />
                 )}
             </div>

@@ -1,12 +1,21 @@
-import { prisma } from "@/lib/db";
-import type { Prisma, UserRole, UserStatus } from "@prisma/client";
+import { db } from "@/lib/db";
+import { eq, ne, and, count, ilike, or, sql } from "drizzle-orm";
+import {
+  users,
+  cpiTenants,
+  iFlows,
+  type UserRole,
+  type UserStatus,
+} from "@/lib/db/schema";
 
 export async function getUserById(id: string) {
-  return prisma.user.findUnique({ where: { id } });
+  return db.query.users.findFirst({ where: eq(users.id, id) }) ?? null;
 }
 
 export async function getUserByEmail(email: string) {
-  return prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+  return db.query.users.findFirst({
+    where: eq(users.email, email.toLowerCase()),
+  }) ?? null;
 }
 
 export async function createUser(data: {
@@ -16,8 +25,9 @@ export async function createUser(data: {
   role?: UserRole;
   image?: string;
 }) {
-  return prisma.user.create({
-    data: {
+  const [user] = await db
+    .insert(users)
+    .values({
       email: data.email.toLowerCase(),
       name: data.name,
       passwordHash: data.passwordHash,
@@ -25,22 +35,30 @@ export async function createUser(data: {
       status: "ACTIVE",
       emailVerified: true,
       onboardingCompleted: false,
-    },
-  });
+    })
+    .returning();
+  return user;
 }
 
 export async function updateUser(
   id: string,
-  data: Prisma.UserUpdateInput
+  data: Partial<typeof users.$inferInsert>
 ) {
-  return prisma.user.update({ where: { id }, data });
+  const [user] = await db
+    .update(users)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(users.id, id))
+    .returning();
+  return user;
 }
 
 export async function deleteUser(id: string) {
-  return prisma.user.update({
-    where: { id },
-    data: { status: "DELETED" },
-  });
+  const [user] = await db
+    .update(users)
+    .set({ status: "DELETED", updatedAt: new Date() })
+    .where(eq(users.id, id))
+    .returning();
+  return user;
 }
 
 export async function listUsers(options?: {
@@ -51,56 +69,68 @@ export async function listUsers(options?: {
 }) {
   const page = options?.page ?? 1;
   const pageSize = options?.pageSize ?? 20;
-  const skip = (page - 1) * pageSize;
+  const offset = (page - 1) * pageSize;
 
-  const where: Prisma.UserWhereInput = {};
-
+  const conditions = [];
   if (options?.status) {
-    where.status = options.status;
+    conditions.push(eq(users.status, options.status));
   }
-
   if (options?.search) {
-    where.OR = [
-      { email: { contains: options.search, mode: "insensitive" } },
-      { name: { contains: options.search, mode: "insensitive" } },
-    ];
+    conditions.push(
+      or(
+        ilike(users.email, `%${options.search}%`),
+        ilike(users.name, `%${options.search}%`)
+      )!
+    );
   }
 
-  const [users, total] = await Promise.all([
-    prisma.user.findMany({
-      where,
-      skip,
-      take: pageSize,
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        status: true,
-        image: true,
-        lastLoginAt: true,
-        createdAt: true,
-        onboardingCompleted: true,
-      },
-    }),
-    prisma.user.count({ where }),
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [userList, [{ total }]] = await Promise.all([
+    db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        status: users.status,
+        image: users.image,
+        lastLoginAt: users.lastLoginAt,
+        createdAt: users.createdAt,
+        onboardingCompleted: users.onboardingCompleted,
+      })
+      .from(users)
+      .where(where)
+      .orderBy(sql`${users.createdAt} desc`)
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ total: count() }).from(users).where(where),
   ]);
 
-  return { users, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
+  return {
+    users: userList,
+    total,
+    page,
+    pageSize,
+    totalPages: Math.ceil(total / pageSize),
+  };
 }
 
 export async function getUserCount() {
-  return prisma.user.count({ where: { status: { not: "DELETED" } } });
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(users)
+    .where(ne(users.status, "DELETED"));
+  return total;
 }
 
 export async function getAdminStats() {
   const [totalUsers, activeUsers, totalTenants, totalIFlows] =
     await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({ where: { status: "ACTIVE" } }),
-      prisma.cpiTenant.count(),
-      prisma.iFlow.count(),
+      db.select({ c: count() }).from(users).then((r) => r[0].c),
+      db.select({ c: count() }).from(users).where(eq(users.status, "ACTIVE")).then((r) => r[0].c),
+      db.select({ c: count() }).from(cpiTenants).then((r) => r[0].c),
+      db.select({ c: count() }).from(iFlows).then((r) => r[0].c),
     ]);
 
   return { totalUsers, activeUsers, totalTenants, totalIFlows };

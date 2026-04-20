@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers, users } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { encrypt } from "@/lib/encryption";
 
 export interface OnboardingData {
@@ -41,13 +43,25 @@ export async function completeOnboarding(data: OnboardingData) {
         .toLowerCase()
         .replace(/[^a-z0-9]/g, "-");
 
-      // Check if slug is already taken
-      const existingTenant = await prisma.cpiTenant.findUnique({
-        where: { slug: tenantSlug },
-      });
+      // Check if current user already has a tenant with this name
+      const userExistingTenantResult = await db.select({ id: cpiTenants.id })
+        .from(cpiTenants)
+        .innerJoin(tenantMembers, and(eq(tenantMembers.tenantId, cpiTenants.id), eq(tenantMembers.userId, currentUser.id)))
+        .where(eq(cpiTenants.slug, tenantSlug))
+        .limit(1);
+      const userExistingTenant = userExistingTenantResult[0] ?? null;
 
-      if (existingTenant) {
+      if (userExistingTenant) {
         throw new Error("Tenant name already exists. Please choose another.");
+      }
+
+      // If slug is globally taken by another user's tenant, append a unique suffix
+      let finalTenantSlug = tenantSlug;
+      const globalSlugConflict = await db.query.cpiTenants.findFirst({
+        where: eq(cpiTenants.slug, tenantSlug),
+      });
+      if (globalSlugConflict) {
+        finalTenantSlug = `${tenantSlug}-${currentUser.id.slice(-6)}`;
       }
 
       // Encrypt sensitive data
@@ -55,11 +69,10 @@ export async function completeOnboarding(data: OnboardingData) {
       const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
 
       // Create CPI tenant with owner membership in a transaction
-      const tenant = await prisma.$transaction(async (tx) => {
-        const newTenant = await tx.cpiTenant.create({
-          data: {
+      const tenant = await db.transaction(async (tx) => {
+        const [newTenant] = await tx.insert(cpiTenants).values({
             name: data.tenantName!,
-            slug: tenantSlug,
+            slug: finalTenantSlug,
             tenantUrl: data.tenantUrl!,
             authType: data.authType || "OAUTH",
             authenticationUrl: data.authenticationUrl || data.tokenUrl,
@@ -70,16 +83,13 @@ export async function completeOnboarding(data: OnboardingData) {
             status: "TESTING",
             isConnected: true,
             connectionTestAt: new Date(),
-          },
-        });
+        }).returning();
 
         // Add current user as OWNER
-        await tx.tenantMember.create({
-          data: {
+        await tx.insert(tenantMembers).values({
             userId: currentUser.id,
             tenantId: newTenant.id,
             role: "OWNER",
-          },
         });
 
         return newTenant;
@@ -93,15 +103,12 @@ export async function completeOnboarding(data: OnboardingData) {
         completedAt: new Date().toISOString(),
       };
 
-      await prisma.user.update({
-        where: { id: currentUser.id },
-        data: {
+      await db.update(users).set({
           onboardingCompleted: true,
           ...(data.firstName && { name: data.firstName }),
           onboardingData,
           defaultTenantId: tenant.id,
-        },
-      });
+      }).where(eq(users.id, currentUser.id));
 
       return { success: true, tenant };
     }
@@ -113,8 +120,8 @@ export async function completeOnboarding(data: OnboardingData) {
         .replace(/[^a-z0-9]/g, "-");
 
       // Check if slug is already taken
-      const existingTenant = await prisma.cpiTenant.findUnique({
-        where: { slug: tenantSlug },
+      const existingTenant = await db.query.cpiTenants.findFirst({
+        where: eq(cpiTenants.slug, tenantSlug),
       });
 
       if (existingTenant) {
@@ -122,24 +129,20 @@ export async function completeOnboarding(data: OnboardingData) {
       }
 
       // Create tenant (as workspace equivalent) with owner membership
-      const tenant = await prisma.$transaction(async (tx) => {
-        const newTenant = await tx.cpiTenant.create({
-          data: {
+      const tenant = await db.transaction(async (tx) => {
+        const [newTenant] = await tx.insert(cpiTenants).values({
             name: data.workspaceName!,
             slug: tenantSlug,
             tenantUrl: "", // No tenant URL for workspace-style creation
             authType: "OAUTH",
             status: "ACTIVE",
-          },
-        });
+        }).returning();
 
         // Add current user as OWNER
-        await tx.tenantMember.create({
-          data: {
+        await tx.insert(tenantMembers).values({
             userId: currentUser.id,
             tenantId: newTenant.id,
             role: "OWNER",
-          },
         });
 
         return newTenant;
@@ -155,15 +158,12 @@ export async function completeOnboarding(data: OnboardingData) {
         completedAt: new Date().toISOString(),
       };
 
-      await prisma.user.update({
-        where: { id: currentUser.id },
-        data: {
+      await db.update(users).set({
           onboardingCompleted: true,
           ...(data.firstName && { name: data.firstName }),
           onboardingData,
           defaultTenantId: tenant.id,
-        },
-      });
+      }).where(eq(users.id, currentUser.id));
 
       return { success: true, workspace: tenant }; // Return as workspace for compatibility
     }
@@ -171,6 +171,123 @@ export async function completeOnboarding(data: OnboardingData) {
     throw new Error("Invalid onboarding data: neither tenant nor workspace information provided");
   } catch (error) {
     console.error("Error completing onboarding:", error);
+    throw error;
+  }
+}
+
+/**
+ * Save CPI tenant configuration WITHOUT marking onboarding complete.
+ * Used in the tenant step so the user can proceed to the AI config step.
+ */
+export async function saveTenantConfig(data: OnboardingData) {
+  try {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      throw new Error("Unauthorized");
+    }
+
+    if (!data.tenantName || !data.tenantUrl) {
+      throw new Error("Tenant name and URL are required");
+    }
+
+    const tenantSlug = data.tenantName
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "-");
+
+    // Check if current user already has a tenant with this name
+    const userExistingTenantResult = await db.select({ id: cpiTenants.id })
+      .from(cpiTenants)
+      .innerJoin(tenantMembers, and(eq(tenantMembers.tenantId, cpiTenants.id), eq(tenantMembers.userId, currentUser.id)))
+      .where(eq(cpiTenants.slug, tenantSlug))
+      .limit(1);
+
+    if (userExistingTenantResult[0]) {
+      throw new Error("Tenant name already exists. Please choose another.");
+    }
+
+    let finalTenantSlug = tenantSlug;
+    const globalSlugConflict = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.slug, tenantSlug),
+    });
+    if (globalSlugConflict) {
+      finalTenantSlug = `${tenantSlug}-${currentUser.id.slice(-6)}`;
+    }
+
+    const encryptedClientSecret = data.clientSecret ? await encrypt(data.clientSecret) : undefined;
+    const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
+
+    const tenant = await db.transaction(async (tx) => {
+      const [newTenant] = await tx.insert(cpiTenants).values({
+        name: data.tenantName!,
+        slug: finalTenantSlug,
+        tenantUrl: data.tenantUrl!,
+        authType: data.authType || "OAUTH",
+        authenticationUrl: data.authenticationUrl || data.tokenUrl,
+        clientId: data.clientId,
+        clientSecret: encryptedClientSecret,
+        username: data.username,
+        password: encryptedPassword,
+        status: "TESTING",
+        isConnected: true,
+        connectionTestAt: new Date(),
+      }).returning();
+
+      await tx.insert(tenantMembers).values({
+        userId: currentUser.id,
+        tenantId: newTenant.id,
+        role: "OWNER",
+      });
+
+      return newTenant;
+    });
+
+    // Save profile data and set default tenant, but do NOT mark onboarding complete
+    const onboardingData = {
+      ...(data.organizationType && { organizationType: data.organizationType }),
+      ...(data.companyName && { companyName: data.companyName }),
+      ...(data.companySize && { companySize: data.companySize }),
+    };
+
+    await db.update(users).set({
+      ...(data.firstName && { name: data.firstName }),
+      onboardingData,
+      defaultTenantId: tenant.id,
+    }).where(eq(users.id, currentUser.id));
+
+    return { success: true, tenant };
+  } catch (error) {
+    console.error("Error saving tenant config:", error);
+    throw error;
+  }
+}
+
+/**
+ * Mark onboarding as complete. Called after the AI config step (or skip).
+ */
+export async function finalizeOnboarding() {
+  try {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      throw new Error("Unauthorized");
+    }
+
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, currentUser.id),
+    });
+
+    const currentData = (user?.onboardingData || {}) as Record<string, unknown>;
+
+    await db.update(users).set({
+      onboardingCompleted: true,
+      onboardingData: {
+        ...currentData,
+        completedAt: new Date().toISOString(),
+      },
+    }).where(eq(users.id, currentUser.id));
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error finalizing onboarding:", error);
     throw error;
   }
 }
@@ -184,21 +301,18 @@ export async function updateOnboardingData(data: Partial<OnboardingData>) {
     }
 
     // Get current user with onboarding data
-    const user = await prisma.user.findUnique({
-      where: { id: currentUser.id },
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, currentUser.id),
     });
 
     const currentData = (user?.onboardingData || {}) as OnboardingData;
 
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: {
+    await db.update(users).set({
         onboardingData: {
           ...currentData,
           ...data,
         },
-      },
-    });
+    }).where(eq(users.id, currentUser.id));
 
     return { success: true };
   } catch (error) {

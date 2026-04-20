@@ -2,7 +2,14 @@ import type { NextConfig } from "next";
 import { withContentCollections } from "@content-collections/next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@supabase/supabase-js", "@supabase/ssr"],
+  output: "standalone",
+  serverExternalPackages: [
+    "@supabase/supabase-js",
+    "@supabase/ssr",
+    "embedded-postgres",
+    "pg",
+    "postgres",
+  ],
   images: {
     remotePatterns: [
       {

@@ -20,9 +20,11 @@ import { TenantsTab } from "./tenants-tab";
 import { MembersTab } from "./members-tab";
 import { AccountTab } from "./account-tab";
 import { AddTenantDialog } from "./add-tenant-dialog";
+import { SelfHostedSettings } from "@/components/settings/self-hosted-settings";
+import { AIConfigurationTab } from "@/components/settings/ai-configuration-tab";
 import type { TenantWithRole } from "@/app/actions/tenant";
 
-const SECTION_VALUES = ["profile", "tenants", "members", "account"];
+const SECTION_VALUES = ["profile", "tenants", "members", "ai", "instance", "account"];
 
 interface SettingsContentProps {
   user: {
@@ -85,6 +87,14 @@ export function SettingsContent({ user, tenants, isAdmin }: SettingsContentProps
             </CardContent>
           </Card>
         )
+      )}
+
+      {activeSection === "ai" && (
+        <AIConfigurationTab />
+      )}
+
+      {activeSection === "instance" && (
+        <SelfHostedSettings />
       )}
 
       {activeSection === "account" && <AccountTab />}

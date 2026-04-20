@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users, tenantMembers, cpiTenants, iFlows, iFlowExecutions } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { encrypt, decrypt } from "@/lib/encryption";
 import type { ActionResult } from "@/types/actions";
 import { revalidatePath } from "next/cache";
@@ -43,10 +45,10 @@ export async function getUserTenants(): Promise<ActionResult<TenantWithRole[]>> 
       return { success: false, error: "Not authenticated" };
     }
 
-    const memberships = await prisma.tenantMember.findMany({
-      where: { userId: currentUser.id },
-      include: { tenant: true },
-      orderBy: { joinedAt: "desc" },
+    const memberships = await db.query.tenantMembers.findMany({
+      where: eq(tenantMembers.userId, currentUser.id),
+      with: { tenant: true },
+      orderBy: (tenantMembers, { desc }) => [desc(tenantMembers.joinedAt)],
     });
 
     const tenants: TenantWithRole[] = memberships.map((m) => ({
@@ -98,13 +100,11 @@ export async function getTenantById(tenantId: string): Promise<ActionResult<{
     }
 
     // Check if user has access to this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId),
+      ),
     });
 
     if (!membership) {
@@ -112,8 +112,8 @@ export async function getTenantById(tenantId: string): Promise<ActionResult<{
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, tenantId),
     });
 
     if (!tenant) {
@@ -166,13 +166,11 @@ export async function setDefaultTenant(tenantId: string): Promise<ActionResult<v
     }
 
     // Verify user has access to this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId),
+      ),
     });
 
     if (!membership) {
@@ -180,10 +178,7 @@ export async function setDefaultTenant(tenantId: string): Promise<ActionResult<v
     }
 
     // Update user's default tenant
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: { defaultTenantId: tenantId },
-    });
+    await db.update(users).set({ defaultTenantId: tenantId }).where(eq(users.id, currentUser.id));
 
     revalidatePath("/dashboard");
     return { success: true, data: undefined };
@@ -220,13 +215,27 @@ export async function createTenant(data: {
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
 
-    // Check if tenant slug already exists
-    const existingTenant = await prisma.cpiTenant.findUnique({
-      where: { slug: tenantSlug },
-    });
+    // Check if current user already has a tenant with this name
+    const userExistingTenantResult = await db.select({ id: cpiTenants.id })
+      .from(cpiTenants)
+      .innerJoin(tenantMembers, eq(tenantMembers.tenantId, cpiTenants.id))
+      .where(and(
+        eq(cpiTenants.slug, tenantSlug),
+        eq(tenantMembers.userId, currentUser.id),
+      ))
+      .limit(1);
 
-    if (existingTenant) {
+    if (userExistingTenantResult.length > 0) {
       return { success: false, error: "Tenant name already exists. Please choose another." };
+    }
+
+    // If slug is globally taken by another user's tenant, append a unique suffix
+    let finalSlug = tenantSlug;
+    const globalSlugConflict = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.slug, tenantSlug),
+    });
+    if (globalSlugConflict) {
+      finalSlug = `${tenantSlug}-${currentUser.id.slice(-6)}`;
     }
 
     // Encrypt sensitive credentials if provided
@@ -239,11 +248,9 @@ export async function createTenant(data: {
 
     if (data.authType === "OAUTH" && data.authenticationUrl && data.clientId && data.clientSecret) {
       try {
-        console.log("Testing OAuth connection...");
         await getSAPToken(data.authenticationUrl, data.clientId, data.clientSecret);
         isConnected = true;
         connectionTestAt = new Date();
-        console.log("✅ OAuth connection successful");
       } catch (error) {
         console.warn("⚠️ OAuth connection failed:", error instanceof Error ? error.message : "Unknown error");
         isConnected = false;
@@ -251,11 +258,10 @@ export async function createTenant(data: {
     }
 
     // Create tenant and add user as owner in a transaction
-    const tenant = await prisma.$transaction(async (tx) => {
-      const newTenant = await tx.cpiTenant.create({
-        data: {
+    const tenant = await db.transaction(async (tx) => {
+      const [newTenant] = await tx.insert(cpiTenants).values({
           name: data.tenantName,
-          slug: tenantSlug,
+          slug: finalSlug,
           description: data.description,
           tenantUrl: data.tenantUrl,
           authType: data.authType,
@@ -266,16 +272,13 @@ export async function createTenant(data: {
           password: encryptedPassword,
           isConnected,
           connectionTestAt,
-        },
-      });
+      }).returning();
 
       // Add user as OWNER
-      await tx.tenantMember.create({
-        data: {
+      await tx.insert(tenantMembers).values({
           userId: currentUser.id,
           tenantId: newTenant.id,
           role: "OWNER",
-        },
       });
 
       return newTenant;
@@ -315,13 +318,11 @@ export async function updateTenant(
     }
 
     // Check if user has admin rights on this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId),
+      ),
     });
 
     if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
@@ -349,10 +350,7 @@ export async function updateTenant(
     if (data.username !== undefined) updateData.username = data.username;
     if (data.password) updateData.password = await encrypt(data.password);
 
-    await prisma.cpiTenant.update({
-      where: { id: tenantId },
-      data: updateData,
-    });
+    await db.update(cpiTenants).set(updateData).where(eq(cpiTenants.id, tenantId));
 
     revalidatePath("/dashboard/settings");
     return { success: true };
@@ -374,22 +372,18 @@ export async function deleteTenant(tenantId: string): Promise<ActionResult<void>
     }
 
     // Check if user is the owner of this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId),
+      ),
     });
 
     if (!membership || membership.role !== "OWNER") {
       return { success: false, error: "Only the owner can delete this tenant" };
     }
 
-    await prisma.cpiTenant.delete({
-      where: { id: tenantId },
-    });
+    await db.delete(cpiTenants).where(eq(cpiTenants.id, tenantId));
 
     revalidatePath("/dashboard/settings");
     return { success: true };
@@ -498,12 +492,11 @@ export async function syncTenantExecutions(
 
   try {
     // Get all iFlows for this tenant
-    const iFlows = await prisma.iFlow.findMany({
-      where: { tenantId },
+    const iFlowsList = await db.query.iFlows.findMany({
+      where: eq(iFlows.tenantId, tenantId),
     });
 
-    if (iFlows.length === 0) {
-      if (!silent) console.log("[Sync] No iFlows found for tenant");
+    if (iFlowsList.length === 0) {
       return { synced: 0, errors: 0 };
     }
 
@@ -513,7 +506,7 @@ export async function syncTenantExecutions(
     };
 
     const iFlowMap = new Map<string, { id: string; name: string }>();
-    for (const iflow of iFlows) {
+    for (const iflow of iFlowsList) {
       const variants = [
         iflow.iFlowId,
         iflow.iFlowId.toLowerCase(),
@@ -530,8 +523,6 @@ export async function syncTenantExecutions(
     // Calculate date filter
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - daysBack);
-
-    if (!silent) console.log(`[Sync] Fetching all message logs (last ${daysBack} days, max ${maxLogs})...`);
 
     // Fetch ALL message logs in ONE API call
     const logsUrl = `${tenantUrl}/api/v1/MessageProcessingLogs?$format=json&$orderby=LogEnd desc&$top=${maxLogs}`;
@@ -552,14 +543,11 @@ export async function syncTenantExecutions(
 
     if (!logsResponse.ok) {
       const errorText = await logsResponse.text().catch(() => "Unknown error");
-      if (!silent) console.error(`[Sync] Failed to fetch logs: ${logsResponse.status} - ${errorText.substring(0, 200)}`);
       return { synced: 0, errors: 1 };
     }
 
     const logsData = await logsResponse.json();
     const allLogs = logsData.d?.results || [];
-
-    if (!silent) console.log(`[Sync] Fetched ${allLogs.length} total message logs from SAP CPI`);
 
     if (allLogs.length === 0) {
       return { synced: 0, errors: 0 };
@@ -621,18 +609,14 @@ export async function syncTenantExecutions(
       }
     }
 
-    if (!silent) console.log(`[Sync] ${logsToInsert.length} logs matched to known iFlows`);
-
     if (logsToInsert.length === 0) return { synced: 0, errors: 0 };
 
-    // Batch insert executions using Prisma
-    // Use skipDuplicates to avoid errors on existing messageIds
+    // Batch insert executions using Drizzle
+    // Use onConflictDoUpdate to handle existing messageIds
     let created = 0;
     for (const log of logsToInsert) {
       try {
-        await prisma.iFlowExecution.upsert({
-          where: { messageId: log.messageId },
-          create: {
+        await db.insert(iFlowExecutions).values({
             messageId: log.messageId,
             status: log.status,
             startTime: log.startTime,
@@ -644,8 +628,9 @@ export async function syncTenantExecutions(
             errorMessage: log.errorMessage,
             errorCategory: log.errorCategory,
             iFlowId: log.iFlowId,
-          },
-          update: {
+        }).onConflictDoUpdate({
+          target: iFlowExecutions.messageId,
+          set: {
             status: log.status,
             endTime: log.endTime,
             duration: log.duration,
@@ -664,16 +649,12 @@ export async function syncTenantExecutions(
     // Update lastExecutedAt for affected iFlows
     for (const [id, time] of iFlowLastExecuted.entries()) {
       try {
-        await prisma.iFlow.update({
-          where: { id },
-          data: { lastExecutedAt: time },
-        });
+        await db.update(iFlows).set({ lastExecutedAt: time }).where(eq(iFlows.id, id));
       } catch {
         // Ignore errors
       }
     }
 
-    if (!silent) console.log(`[Sync] Successfully synced ${totalSynced} executions`);
     return { synced: totalSynced, errors: 0 };
   } catch (error) {
     console.error("[Sync] Error:", error);
@@ -687,8 +668,8 @@ export async function syncTenantExecutions(
  */
 export async function syncTenantInternal(tenantId: string): Promise<ActionResult<{ iflows: number; executions: number }>> {
   try {
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, tenantId),
     });
 
     if (!tenant) {
@@ -769,7 +750,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
       }
     }
 
-    // Batch sync iFlows using Prisma
+    // Batch sync iFlows using Drizzle
     const iflowsToSync = runtimeIflows.map((iflow: any) => ({
       iFlowId: iflow.Id,
       name: iflow.Name || iflow.Id,
@@ -781,14 +762,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
 
     // Upsert iFlows
     for (const iflowData of iflowsToSync) {
-      await prisma.iFlow.upsert({
-        where: {
-          tenantId_iFlowId: {
-            tenantId,
-            iFlowId: iflowData.iFlowId,
-          },
-        },
-        create: {
+      await db.insert(iFlows).values({
           tenantId,
           iFlowId: iflowData.iFlowId,
           name: iflowData.name,
@@ -796,8 +770,9 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
           version: iflowData.version,
           status: iflowData.status,
           lastDeployedAt: iflowData.lastDeployedAt,
-        },
-        update: {
+      }).onConflictDoUpdate({
+        target: [iFlows.tenantId, iFlows.iFlowId],
+        set: {
           name: iflowData.name,
           packageName: iflowData.packageName,
           version: iflowData.version,
@@ -811,13 +786,10 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
     const executionResult = await syncTenantExecutions(tenantId, accessToken, tenant.tenantUrl, { silent: true });
 
     // Update tenant
-    await prisma.cpiTenant.update({
-      where: { id: tenantId },
-      data: {
-        lastSyncAt: new Date(),
-        isConnected: true,
-      },
-    });
+    await db.update(cpiTenants).set({
+      lastSyncAt: new Date(),
+      isConnected: true,
+    }).where(eq(cpiTenants.id, tenantId));
 
     return {
       success: true,
@@ -827,10 +799,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
     console.error(`Error syncing tenant ${tenantId}:`, error);
 
     try {
-      await prisma.cpiTenant.update({
-        where: { id: tenantId },
-        data: { isConnected: false },
-      });
+      await db.update(cpiTenants).set({ isConnected: false }).where(eq(cpiTenants.id, tenantId));
     } catch {
       // Ignore update errors
     }
@@ -854,13 +823,11 @@ export async function syncTenantIFlows(
     }
 
     // Check if user has access to this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId),
+      ),
     });
 
     if (!membership) {
@@ -868,8 +835,8 @@ export async function syncTenantIFlows(
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, tenantId),
     });
 
     if (!tenant) {
@@ -918,7 +885,6 @@ export async function syncTenantIFlows(
     const runtimeIflows = iflowsData.d?.results || [];
 
     if (runtimeIflows.length > 0) {
-      console.log('[Sync] Sample iFlow from API:', JSON.stringify(runtimeIflows[0], null, 2));
     }
 
     // Fetch packages to get PackageId for each iFlow
@@ -938,7 +904,6 @@ export async function syncTenantIFlows(
         const packagesData = await packagesResponse.json();
         const packages = packagesData.d?.results || [];
 
-        console.log(`[Sync] Found ${packages.length} packages, fetching artifacts...`);
 
         for (const pkg of packages) {
           try {
@@ -963,7 +928,6 @@ export async function syncTenantIFlows(
           }
         }
 
-        console.log(`[Sync] Mapped ${packageMap.size} iFlows to packages`);
       }
     } catch (err) {
       console.warn('[Sync] Failed to fetch packages, continuing without package info:', err);
@@ -985,23 +949,14 @@ export async function syncTenantIFlows(
     let updated = 0;
 
     for (const iflowData of iflowsToSync) {
-      const existing = await prisma.iFlow.findUnique({
-        where: {
-          tenantId_iFlowId: {
-            tenantId,
-            iFlowId: iflowData.iFlowId,
-          },
-        },
+      const existing = await db.query.iFlows.findFirst({
+        where: and(
+          eq(iFlows.tenantId, tenantId),
+          eq(iFlows.iFlowId, iflowData.iFlowId),
+        ),
       });
 
-      await prisma.iFlow.upsert({
-        where: {
-          tenantId_iFlowId: {
-            tenantId,
-            iFlowId: iflowData.iFlowId,
-          },
-        },
-        create: {
+      await db.insert(iFlows).values({
           tenantId,
           iFlowId: iflowData.iFlowId,
           name: iflowData.name,
@@ -1009,8 +964,9 @@ export async function syncTenantIFlows(
           version: iflowData.version,
           status: iflowData.status,
           lastDeployedAt: iflowData.lastDeployedAt,
-        },
-        update: {
+      }).onConflictDoUpdate({
+        target: [iFlows.tenantId, iFlows.iFlowId],
+        set: {
           name: iflowData.name,
           packageName: iflowData.packageName,
           version: iflowData.version,
@@ -1028,7 +984,6 @@ export async function syncTenantIFlows(
 
     const syncedCount = created + updated;
     console.timeEnd('iFlow sync');
-    console.log(`Synced ${syncedCount} iFlows (${updated} updated, ${created} created)`);
 
     // Sync executions if enabled
     let executionsSynced = 0;
@@ -1042,17 +997,13 @@ export async function syncTenantIFlows(
       );
       executionsSynced = executionResult.synced;
       console.timeEnd('Execution sync');
-      console.log(`Synced ${executionsSynced} executions (${executionResult.errors} errors)`);
     }
 
     // Update tenant's last sync time
-    await prisma.cpiTenant.update({
-      where: { id: tenantId },
-      data: {
-        lastSyncAt: new Date(),
-        isConnected: true,
-      },
-    });
+    await db.update(cpiTenants).set({
+      lastSyncAt: new Date(),
+      isConnected: true,
+    }).where(eq(cpiTenants.id, tenantId));
 
     revalidatePath("/dashboard/settings");
     revalidatePath("/dashboard/iflows");
@@ -1070,10 +1021,7 @@ export async function syncTenantIFlows(
 
     // Update tenant connection status
     try {
-      await prisma.cpiTenant.update({
-        where: { id: tenantId },
-        data: { isConnected: false },
-      });
+      await db.update(cpiTenants).set({ isConnected: false }).where(eq(cpiTenants.id, tenantId));
     } catch (updateError) {
       console.error("Failed to update tenant connection status:", updateError);
     }

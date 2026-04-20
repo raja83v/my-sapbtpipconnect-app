@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers, tenantInvitations, users } from "@/lib/db/schema";
+import { eq, or, ilike, count, desc, asc } from "drizzle-orm";
 import {
   createWorkspaceSchema,
   updateWorkspaceSchema,
@@ -50,47 +52,39 @@ export async function getWorkspaces(params?: {
     const skip = (page - 1) * pageSize;
 
     // Build where clause
-    const where: any = {};
-
-    if (params?.search) {
-      where.OR = [
-        { name: { contains: params.search, mode: "insensitive" } },
-        { slug: { contains: params.search, mode: "insensitive" } },
-      ];
-    }
+    const whereConditions = params?.search
+      ? or(
+          ilike(cpiTenants.name, `%${params.search}%`),
+          ilike(cpiTenants.slug, `%${params.search}%`),
+        )
+      : undefined;
 
     // Build orderBy
-    const orderBy: any = {};
-    if (params?.sortBy) {
-      orderBy[params.sortBy] = params.sortOrder || "asc";
-    } else {
-      orderBy.createdAt = "desc";
-    }
+    const orderByClause = params?.sortBy
+      ? (params.sortOrder === "desc" ? desc(cpiTenants[params.sortBy as keyof typeof cpiTenants._.columns] as any) : asc(cpiTenants[params.sortBy as keyof typeof cpiTenants._.columns] as any))
+      : desc(cpiTenants.createdAt);
 
-    const [tenants, total] = await Promise.all([
-      prisma.cpiTenant.findMany({
-        where,
-        skip,
-        take: pageSize,
-        orderBy,
-        include: {
-          _count: {
-            select: {
-              members: true,
-              invitations: true,
-            },
-          },
+    const [tenantsResult, totalResult] = await Promise.all([
+      db.query.cpiTenants.findMany({
+        where: whereConditions,
+        offset: skip,
+        limit: pageSize,
+        orderBy: () => [orderByClause],
+        with: {
+          members: { columns: { id: true } },
+          invitations: { columns: { id: true } },
         },
       }),
-      prisma.cpiTenant.count({ where }),
+      db.select({ c: count() }).from(cpiTenants).where(whereConditions).then(r => r[0].c),
     ]);
 
+    const total = totalResult;
     const pageCount = Math.ceil(total / pageSize);
 
     return {
       success: true,
       data: {
-        workspaces: tenants.map((tenant) => ({
+        workspaces: tenantsResult.map((tenant) => ({
           id: tenant.id,
           name: tenant.name,
           slug: tenant.slug,
@@ -98,8 +92,8 @@ export async function getWorkspaces(params?: {
           createdAt: tenant.createdAt,
           updatedAt: tenant.updatedAt,
           _count: {
-            members: tenant._count.members,
-            invitations: tenant._count.invitations,
+            members: tenant.members.length,
+            invitations: tenant.invitations.length,
           },
         })),
         total,
@@ -118,13 +112,13 @@ export async function getWorkspaceById(id: string): Promise<ActionResult<any>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id },
-      include: {
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, id),
+      with: {
         members: {
-          include: {
+          with: {
             user: {
-              select: {
+              columns: {
                 id: true,
                 email: true,
                 name: true,
@@ -134,9 +128,7 @@ export async function getWorkspaceById(id: string): Promise<ActionResult<any>> {
             },
           },
         },
-        _count: {
-          select: { invitations: true },
-        },
+        invitations: { columns: { id: true } },
       },
     });
 
@@ -160,7 +152,7 @@ export async function getWorkspaceById(id: string): Promise<ActionResult<any>> {
           user: m.user,
         })),
         _count: {
-          invitations: tenant._count.invitations,
+          invitations: tenant.invitations.length,
         },
       },
     };
@@ -180,8 +172,8 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Acti
     const validatedData = createWorkspaceSchema.parse(input);
 
     // Check if tenant with slug already exists
-    const existingTenant = await prisma.cpiTenant.findUnique({
-      where: { slug: validatedData.slug },
+    const existingTenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.slug, validatedData.slug),
     });
 
     if (existingTenant) {
@@ -196,24 +188,20 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Acti
     }
 
     // Create tenant with creator as owner in a transaction
-    const tenant = await prisma.$transaction(async (tx) => {
-      const newTenant = await tx.cpiTenant.create({
-        data: {
+    const tenant = await db.transaction(async (tx) => {
+      const [newTenant] = await tx.insert(cpiTenants).values({
           name: validatedData.name,
           slug: validatedData.slug,
           tenantUrl: "https://placeholder.example.com", // Admin-created tenants need manual configuration
           authType: "OAUTH",
           status: "ACTIVE",
-        },
-      });
+      }).returning();
 
       // Add current user as OWNER
-      await tx.tenantMember.create({
-        data: {
+      await tx.insert(tenantMembers).values({
           userId: currentUser.id,
           tenantId: newTenant.id,
           role: "OWNER",
-        },
       });
 
       return newTenant;
@@ -255,8 +243,8 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
     const validatedData = updateWorkspaceSchema.parse(input);
 
     // Check if tenant exists
-    const existingTenant = await prisma.cpiTenant.findUnique({
-      where: { id: validatedData.id },
+    const existingTenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, validatedData.id),
     });
 
     if (!existingTenant) {
@@ -265,8 +253,8 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
 
     // If slug is being updated, check for conflicts
     if (validatedData.slug && validatedData.slug !== existingTenant.slug) {
-      const slugConflict = await prisma.cpiTenant.findUnique({
-        where: { slug: validatedData.slug },
+      const slugConflict = await db.query.cpiTenants.findFirst({
+        where: eq(cpiTenants.slug, validatedData.slug),
       });
 
       if (slugConflict) {
@@ -275,18 +263,10 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
     }
 
     // Update tenant
-    const tenant = await prisma.cpiTenant.update({
-      where: { id: validatedData.id },
-      data: {
-        name: validatedData.name,
-        slug: validatedData.slug,
-      },
-      include: {
-        _count: {
-          select: { members: true },
-        },
-      },
-    });
+    const [tenant] = await db.update(cpiTenants).set({
+      name: validatedData.name,
+      slug: validatedData.slug,
+    }).where(eq(cpiTenants.id, validatedData.id)).returning();
 
     revalidatePath("/admin/workspaces");
     revalidatePath(`/admin/workspaces/${validatedData.id}`);
@@ -299,9 +279,6 @@ export async function updateWorkspace(input: UpdateWorkspaceInput): Promise<Acti
         slug: tenant.slug,
         image: tenant.image || null,
         updatedAt: tenant.updatedAt,
-        _count: {
-          members: tenant._count.members,
-        },
       },
     };
   } catch (error: any) {
@@ -325,8 +302,8 @@ export async function deleteWorkspace(input: DeleteWorkspaceInput): Promise<Acti
     const validatedData = deleteWorkspaceSchema.parse(input);
 
     // Check if tenant exists
-    const existingTenant = await prisma.cpiTenant.findUnique({
-      where: { id: validatedData.id },
+    const existingTenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, validatedData.id),
     });
 
     if (!existingTenant) {
@@ -334,9 +311,7 @@ export async function deleteWorkspace(input: DeleteWorkspaceInput): Promise<Acti
     }
 
     // Delete tenant (cascade will handle members, invitations, iflows, etc.)
-    await prisma.cpiTenant.delete({
-      where: { id: validatedData.id },
-    });
+    await db.delete(cpiTenants).where(eq(cpiTenants.id, validatedData.id));
 
     revalidatePath("/admin/workspaces");
 

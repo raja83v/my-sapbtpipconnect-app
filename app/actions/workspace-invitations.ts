@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, users, tenantInvitations, cpiTenants } from "@/lib/db/schema";
+import { eq, and, gt, isNull } from "drizzle-orm";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { PendingInvitation } from "@/types/workspace";
@@ -22,10 +24,11 @@ async function checkWorkspaceAdmin(
   userId: string,
   tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await prisma.tenantMember.findUnique({
-    where: {
-      userId_tenantId: { userId, tenantId },
-    },
+  const member = await db.query.tenantMembers.findFirst({
+    where: and(
+      eq(tenantMembers.userId, userId),
+      eq(tenantMembers.tenantId, tenantId),
+    ),
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -62,18 +65,16 @@ export async function inviteMember(
     }
 
     // Check if user is already a member
-    const existingUser = await prisma.user.findUnique({
-      where: { email: validatedData.email },
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, validatedData.email),
     });
 
     if (existingUser) {
-      const existingMember = await prisma.tenantMember.findUnique({
-        where: {
-          userId_tenantId: {
-            userId: existingUser.id,
-            tenantId,
-          },
-        },
+      const existingMember = await db.query.tenantMembers.findFirst({
+        where: and(
+          eq(tenantMembers.userId, existingUser.id),
+          eq(tenantMembers.tenantId, tenantId),
+        ),
       });
 
       if (existingMember) {
@@ -85,31 +86,29 @@ export async function inviteMember(
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, tenantId),
     });
     if (!tenant) {
       return { success: false, error: "Workspace not found" };
     }
 
     // Get inviter details
-    const inviter = await prisma.user.findUnique({
-      where: { id: currentUser.id },
+    const inviter = await db.query.users.findFirst({
+      where: eq(users.id, currentUser.id),
     });
     if (!inviter) {
       return { success: false, error: "Inviter not found" };
     }
 
     // Create invitation
-    const invitation = await prisma.tenantInvitation.create({
-      data: {
-        tenantId,
-        email: validatedData.email,
-        role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
-        invitedById: currentUser.id,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-      },
-    });
+    const [invitation] = await db.insert(tenantInvitations).values({
+      tenantId,
+      email: validatedData.email,
+      role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER",
+      invitedById: currentUser.id,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+    }).returning();
 
     // Send invitation email
     const acceptUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invitation?token=${invitation.token}`;
@@ -171,16 +170,16 @@ export async function getPendingInvitations(
     }
 
     // Get pending invitations
-    const invitations = await prisma.tenantInvitation.findMany({
-      where: {
-        tenantId: workspaceId,
-        acceptedAt: null,
-        expiresAt: { gt: new Date() },
+    const invitations = await db.query.tenantInvitations.findMany({
+      where: and(
+        eq(tenantInvitations.tenantId, workspaceId),
+        isNull(tenantInvitations.acceptedAt),
+        gt(tenantInvitations.expiresAt, new Date()),
+      ),
+      with: {
+        invitedBy: { columns: { id: true, name: true, email: true } },
       },
-      include: {
-        invitedBy: { select: { id: true, name: true, email: true } },
-      },
-      orderBy: { createdAt: "desc" },
+      orderBy: (tenantInvitations, { desc }) => [desc(tenantInvitations.createdAt)],
     });
 
     const pendingInvitations: PendingInvitation[] = invitations.map((inv) => ({
@@ -220,8 +219,8 @@ export async function cancelInvitation(
     const validatedData = cancelInvitationSchema.parse(input);
 
     // Get invitation to check tenant
-    const invitation = await prisma.tenantInvitation.findUnique({
-      where: { id: validatedData.invitationId },
+    const invitation = await db.query.tenantInvitations.findFirst({
+      where: eq(tenantInvitations.id, validatedData.invitationId),
     });
 
     if (!invitation) {
@@ -238,9 +237,7 @@ export async function cancelInvitation(
     }
 
     // Delete invitation
-    await prisma.tenantInvitation.delete({
-      where: { id: validatedData.invitationId },
-    });
+    await db.delete(tenantInvitations).where(eq(tenantInvitations.id, validatedData.invitationId));
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -272,8 +269,8 @@ export async function acceptInvitation(
     const validatedData = acceptInvitationSchema.parse(input);
 
     // Get invitation
-    const invitation = await prisma.tenantInvitation.findUnique({
-      where: { token: validatedData.token },
+    const invitation = await db.query.tenantInvitations.findFirst({
+      where: eq(tenantInvitations.token, validatedData.token),
     });
 
     if (!invitation) {
@@ -289,20 +286,15 @@ export async function acceptInvitation(
     }
 
     // Accept invitation and add member in a transaction
-    await prisma.$transaction(async (tx) => {
+    await db.transaction(async (tx) => {
       // Mark invitation as accepted
-      await tx.tenantInvitation.update({
-        where: { token: validatedData.token },
-        data: { acceptedAt: new Date() },
-      });
+      await tx.update(tenantInvitations).set({ acceptedAt: new Date() }).where(eq(tenantInvitations.token, validatedData.token));
 
       // Add user as member
-      await tx.tenantMember.create({
-        data: {
+      await tx.insert(tenantMembers).values({
           userId: currentUser.id,
           tenantId: invitation.tenantId,
           role: invitation.role,
-        },
       });
     });
 

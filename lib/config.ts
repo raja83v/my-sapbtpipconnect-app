@@ -33,6 +33,11 @@ export const siteConfig = {
   twitterHandle: "@cpiconnect",
   locale: "en_US",
   category: "Software",
+  // Upgrade configuration
+  upgrade: {
+    href: "https://www.cpiconnect.io/pricing",
+    label: "Upgrade to Pro",
+  },
   // Email branding configuration
   email: {
     brandName: "CPI Connect",

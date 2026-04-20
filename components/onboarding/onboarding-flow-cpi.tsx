@@ -5,10 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { completeOnboarding } from "@/app/actions/onboarding";
+import { saveTenantConfig, finalizeOnboarding } from "@/app/actions/onboarding";
 import { toast } from "sonner";
 import {
-  IconInnerShadowTop,
   IconServer,
   IconCheck,
   IconRocket,
@@ -16,6 +15,7 @@ import {
   IconKey,
   IconLoader2,
 } from "@tabler/icons-react";
+import { Cloud } from "lucide-react";
 import Link from "next/link";
 import confetti from "canvas-confetti";
 import { siteConfig } from "@/lib/config";
@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { AIModelSelectionStep } from "./ai-model-selection-step";
 
 interface OnboardingFlowProps {
   userName: string | null;
@@ -50,7 +51,7 @@ const companySizes = [
   { value: "1000+", label: "1000+ employees" },
 ];
 
-type StepType = "profile" | "tenant" | "complete";
+type StepType = "profile" | "tenant" | "ai" | "complete";
 
 export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) {
   const router = useRouter();
@@ -59,7 +60,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
   // Determine initial step from URL
   const getInitialStep = (): StepType => {
     const step = searchParams.get("step");
-    if (step === "tenant" || step === "complete") {
+    if (step === "tenant" || step === "ai" || step === "complete") {
       return step as StepType;
     }
     return "profile";
@@ -126,8 +127,8 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
 
       setIsValidating(false);
 
-      // If validation passes, proceed with onboarding
-      const result = await completeOnboarding({
+      // If validation passes, save tenant config (without completing onboarding)
+      const result = await saveTenantConfig({
         organizationType,
         companySize,
         companyName: companyName.trim(),
@@ -144,8 +145,8 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
       });
 
       if (result.success) {
-        setCurrentStep("complete");
-        router.replace("/onboarding?step=complete");
+        setCurrentStep("ai");
+        router.replace("/onboarding?step=ai");
         toast.success("CPI Tenant connected successfully!");
       }
     } catch (err: unknown) {
@@ -200,6 +201,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
   const steps = [
     { key: "profile", label: "Profile" },
     { key: "tenant", label: "Tenant" },
+    { key: "ai", label: "AI Provider" },
     { key: "complete", label: "Complete" },
   ];
 
@@ -211,7 +213,7 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
       <div className="relative hidden h-full flex-col bg-muted p-10 text-white dark:border-r lg:flex">
         <div className="absolute inset-0 bg-zinc-900" />
         <div className="relative z-20 flex items-center text-lg font-medium">
-          <IconInnerShadowTop className="mr-2 h-6 w-6" />
+          <Cloud className="mr-2 h-6 w-6" />
           {siteConfig.name}
         </div>
         <div className="relative z-20 mt-auto">
@@ -589,7 +591,22 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
             </>
           )}
 
-          {/* Step 3: Success */}
+          {/* Step 3: AI Model Selection */}
+          {currentStep === "ai" && (
+            <AIModelSelectionStep
+              onComplete={async () => {
+                await finalizeOnboarding();
+                setCurrentStep("complete");
+                router.replace("/onboarding?step=complete");
+              }}
+              onBack={() => {
+                setCurrentStep("tenant");
+                router.replace("/onboarding?step=tenant");
+              }}
+            />
+          )}
+
+          {/* Step 4: Success */}
           {currentStep === "complete" && (
             <>
               <div className="flex flex-col space-y-2 text-center">

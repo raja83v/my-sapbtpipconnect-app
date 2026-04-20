@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, cpiTenants, aiAgentExecutions } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { runText } from "@/lib/ai/runtime/text";
 import { createSAPCPIClient, type SAPCPICredentials } from "@/lib/sap-cpi/client";
@@ -56,8 +58,8 @@ export async function getIFlowsForCostAnalyzer(params: {
         const { tenantId } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -65,8 +67,8 @@ export async function getIFlowsForCostAnalyzer(params: {
         }
 
         // Get tenant details for SAP CPI connection
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -102,11 +104,11 @@ export async function getIFlowsForCostAnalyzer(params: {
         const cpiCredentials: SAPCPICredentials = {
             tenantUrl: tenant.tenantUrl,
             authType: tenant.authType as any,
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret,
-            username: tenant.username,
-            password: tenant.password,
-            tokenUrl: effectiveTokenUrl,
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+            tokenUrl: effectiveTokenUrl || undefined,
         };
 
         const cpiClient = createSAPCPIClient(cpiCredentials);
@@ -152,23 +154,23 @@ export async function getCostMetrics(params: {
         // Merge custom pricing with defaults, ensuring all values are valid numbers
         const pricingConfig: CostPricingConfig = {
             costPerExecution: Number.isFinite(customPricing?.costPerExecution)
-                ? customPricing.costPerExecution
+                ? customPricing!.costPerExecution!
                 : DEFAULT_PRICING_CONFIG.costPerExecution,
             costPerMBTransferred: Number.isFinite(customPricing?.costPerMBTransferred)
-                ? customPricing.costPerMBTransferred
+                ? customPricing!.costPerMBTransferred!
                 : DEFAULT_PRICING_CONFIG.costPerMBTransferred,
             costPerMinuteRuntime: Number.isFinite(customPricing?.costPerMinuteRuntime)
-                ? customPricing.costPerMinuteRuntime
+                ? customPricing!.costPerMinuteRuntime!
                 : DEFAULT_PRICING_CONFIG.costPerMinuteRuntime,
             currency: customPricing?.currency || DEFAULT_PRICING_CONFIG.currency,
             monthlyBaseCost: Number.isFinite(customPricing?.monthlyBaseCost)
-                ? customPricing.monthlyBaseCost
+                ? customPricing!.monthlyBaseCost!
                 : DEFAULT_PRICING_CONFIG.monthlyBaseCost,
         };
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -176,8 +178,8 @@ export async function getCostMetrics(params: {
         }
 
         // Get tenant details
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -213,11 +215,11 @@ export async function getCostMetrics(params: {
         const cpiCredentials: SAPCPICredentials = {
             tenantUrl: tenant.tenantUrl,
             authType: tenant.authType as any,
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret,
-            username: tenant.username,
-            password: tenant.password,
-            tokenUrl: effectiveTokenUrl,
+            clientId: tenant.clientId || undefined,
+            clientSecret: tenant.clientSecret || undefined,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+            tokenUrl: effectiveTokenUrl || undefined,
         };
 
         const cpiClient = createSAPCPIClient(cpiCredentials);
@@ -370,8 +372,8 @@ export async function analyzeCostsWithAI(params: {
         const { tenantId, costAnalysis, budgetThreshold } = params;
 
         // Validate tenant access
-        const membership = await prisma.tenantMember.findUnique({
-            where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
         });
 
         if (!membership) {
@@ -392,22 +394,20 @@ export async function analyzeCostsWithAI(params: {
 
         // Track execution in database
         const durationMs = Date.now() - startTime;
-        await prisma.aIAgentExecution.create({
-            data: {
-                agentType: "COST_ANALYZER",
-                tenantId: tenantId,
-                userId: currentUser.id,
-                tokensUsed: totalTokens,
-                duration: durationMs,
-                success: true,
-                input: JSON.stringify({
-                    periodDays: costAnalysis.periodDays,
-                    iflowCount: costAnalysis.summary.iflowCount,
-                    totalCost: costAnalysis.summary.totalCost,
-                    budgetThreshold,
-                }),
-                output: fullText.substring(0, 500), // Store summary
-            },
+        await db.insert(aiAgentExecutions).values({
+            agentType: "COST_ANALYZER",
+            tenantId: tenantId,
+            userId: currentUser.id,
+            tokensUsed: totalTokens,
+            duration: durationMs,
+            success: true,
+            input: JSON.stringify({
+                periodDays: costAnalysis.periodDays,
+                iflowCount: costAnalysis.summary.iflowCount,
+                totalCost: costAnalysis.summary.totalCost,
+                budgetThreshold,
+            }),
+            output: fullText.substring(0, 500), // Store summary
         });
 
         // Parse AI response into structured insights

@@ -11,9 +11,8 @@
 
 import { XMLParser } from 'fast-xml-parser';
 
-// Enable debug logging
-const DEBUG = true;
-const log = (...args: any[]) => DEBUG && console.log('[BPMN2Parser]', ...args);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const log = (..._args: any[]) => {};
 
 // ============================================================================
 // Type Definitions

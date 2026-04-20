@@ -38,6 +38,34 @@ CPI Connect gives you **full visibility** into your SAP CPI landscape — iFlows
 
 ---
 
+## What's New
+
+### April 2026
+
+- **Documentation Generator — Major Overhaul**
+  - Section selection is now fully respected — select exactly which of 13 sections to include and only those appear in the output
+  - 8-step resilient JSON parsing with regex-based content extraction and nuclear-parse recovery
+  - Fuzzy section ID matching handles AI response variations (no more empty placeholders)
+  - Rich fallback content generated directly from iFlow metadata when AI misses a section
+  - Professional `.docx` export: real tables with dark-blue headers, manual TOC with dot-leaders, page headers/footers, numbered headings, code blocks, cover page
+  - Mermaid diagrams validated client-side before rendering (no more "error in text" messages)
+  - AI content sanitized — all HTML tags stripped and converted to proper Markdown
+
+- **Database — Prisma → Drizzle ORM**
+  - Migrated from Prisma 6 to Drizzle ORM for better performance and type safety
+  - Schema defined in `lib/db/schema.ts`; migrations managed with `drizzle-kit`
+
+- **Billing & Subscription Management**
+  - Stripe integration for subscription plans and invoice management
+  - Admin subscription overview with usage tracking
+
+- **Self-Hosting Improvements**
+  - Dedicated `docker-compose.selfhost.yml` with full stack (app + Supabase + LiteLLM)
+  - GitHub Actions CI/CD workflows
+  - Automated entrypoint with migration support
+
+---
+
 ## Quick Start
 
 > **Prerequisites:** [Node.js 20+](https://nodejs.org/), [pnpm](https://pnpm.io/), [Docker](https://www.docker.com/products/docker-desktop/)
@@ -114,7 +142,7 @@ See [.env.example](.env.example) for the full list of optional variables (AI pro
 ### 4. Run Database Migrations
 
 ```bash
-npx prisma migrate deploy
+npx drizzle-kit migrate
 ```
 
 ### 5. Start the Dev Server
@@ -133,15 +161,17 @@ Open [http://localhost:3000](http://localhost:3000). The first user to register 
 | `pnpm build` | Production build |
 | `pnpm start` | Start production server |
 | `pnpm lint` | Run ESLint |
-| `pnpm db:push` | Push Prisma schema to database |
-| `pnpm db:studio` | Open Prisma Studio |
-| `npx prisma migrate deploy` | Apply migrations |
+| `npx drizzle-kit migrate` | Apply Drizzle migrations |
+| `npx drizzle-kit studio` | Open Drizzle Studio (DB admin UI) |
+| `npx drizzle-kit push` | Push schema changes to database |
 
 ---
 
 ## Self-Hosting Guide
 
-CPI Connect can be deployed on any machine that runs Docker. Below are step-by-step instructions for a **production-grade self-hosted** setup.
+CPI Connect can be deployed on any machine that runs Docker. The full stack includes Supabase (auth + database), LiteLLM (AI proxy), and the application — all in one command.
+
+> **Detailed instructions:** See [SELF_HOSTING.md](SELF_HOSTING.md) for the complete guide, including LiteLLM model configuration, backup/restore, and troubleshooting.
 
 ### Prerequisites
 
@@ -151,184 +181,58 @@ CPI Connect can be deployed on any machine that runs Docker. Below are step-by-s
 | Docker Compose | v2 |
 | RAM | 4 GB |
 | Disk | 20 GB |
-| OS | Linux (recommended), macOS, Windows with WSL2 |
 
-### Option A — Docker Compose (Recommended)
-
-This is the simplest path. It runs CPI Connect + PostgreSQL together.
-
-#### Step 1: Prepare the environment file
+### One-Command Setup
 
 ```bash
-mkdir cpiconnect && cd cpiconnect
-
-cat > .env <<'EOF'
-# Database
-POSTGRES_PASSWORD=change_me_to_a_strong_password
-DB_PORT=5432
-APP_PORT=3000
-
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<your-anon-key>
-SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>
-
-# Encryption (generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")
-ENCRYPTION_KEY=<your-encryption-key>
-
-# App
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-
-# AI (optional)
-AI_PROVIDER=google
-GOOGLE_API_KEY=
-EOF
-```
-
-#### Step 2: Download docker-compose.yml
-
-```bash
-curl -O https://raw.githubusercontent.com/raja83v/my-sapbtpipconnect-app/main/docker-compose.yml
-```
-
-#### Step 3: Start the stack
-
-```bash
-docker compose up -d
-```
-
-This creates two containers:
-
-| Container | Image | Port | Description |
-|-----------|-------|------|-------------|
-| `cpiconnect-db` | `postgres:16-alpine` | `5432` | PostgreSQL database with health checks |
-| `cpiconnect-app` | Built from `Dockerfile` | `3000` | Next.js app (auto-runs Prisma migrations on start) |
-
-Data is persisted in a Docker volume (`postgres_data`).
-
-#### Step 4: Verify
-
-```bash
-docker compose ps          # both containers should be "Up"
-docker compose logs app    # check for "Ready on http://0.0.0.0:3000"
-```
-
-Open `http://<your-server-ip>:3000` and register your admin account.
-
-#### Updating
-
-```bash
-docker compose pull        # pull latest images
-docker compose up -d       # restart with new version (runs migrations automatically)
-```
-
-### Option B — Manual Setup (Without Docker)
-
-If you prefer running directly on the host:
-
-```bash
-# 1. Install Node.js 20+ and pnpm
-corepack enable && corepack prepare pnpm@latest --activate
-
-# 2. Clone and install
 git clone https://github.com/raja83v/my-sapbtpipconnect-app.git
 cd my-sapbtpipconnect-app
-pnpm install
-
-# 3. Set up Supabase (local Docker)
-npx supabase start
-
-# 4. Configure .env (see Quick Start section)
-cp .env.example .env
-# Edit .env with your Supabase keys
-
-# 5. Run migrations
-npx prisma migrate deploy
-
-# 6. Build and start
-pnpm build
-pnpm start
+bash docker/setup.sh
 ```
 
-### Option C — Supabase Self-Hosted (Full Docker Stack)
+This generates all secrets, writes `.env`, and starts the entire stack. Open **http://localhost:3000** to get started.
 
-For a fully self-contained deployment with Supabase running alongside the app:
+### Or Pull from Docker Hub
 
 ```bash
-# 1. Clone the Supabase Docker repo
-git clone --depth 1 https://github.com/supabase/supabase
-cd supabase/docker
+docker pull raja83v/cpiconnect:latest
+```
 
-# 2. Copy the example env and edit it
+Then use the provided `docker-compose.selfhost.yml`:
+
+```bash
+curl -O https://raw.githubusercontent.com/raja83v/my-sapbtpipconnect-app/main/docker-compose.selfhost.yml
+curl -O https://raw.githubusercontent.com/raja83v/my-sapbtpipconnect-app/main/.env.example
 cp .env.example .env
-# IMPORTANT: Change POSTGRES_PASSWORD, JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY
-
-# 3. Start Supabase stack
-docker compose up -d
-
-# 4. In a separate directory, clone CPI Connect
-cd ~/
-git clone https://github.com/raja83v/my-sapbtpipconnect-app.git
-cd my-sapbtpipconnect-app
-
-# 5. Configure .env with the Supabase keys from step 2
-cp .env.example .env
-# Set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
-# Set DATABASE_URL to point at the Supabase Postgres instance
-
-# 6. Build and run
-pnpm install
-npx prisma migrate deploy
-pnpm build
-pnpm start
+# Edit .env with your secrets (see SELF_HOSTING.md)
+docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-### Supabase Docker Containers — Deep Dive
+### Services & Ports
 
-When running the full Supabase stack, these containers work together:
+| Service | Port | Description |
+|---------|------|-------------|
+| CPI Connect | `3000` | Application |
+| Supabase API | `8000` | Auth & REST gateway |
+| LiteLLM | `4000` | AI model proxy (100+ providers) |
+| Supabase Studio | `3100` | Database admin UI |
+| PostgreSQL | `5433` | Direct DB access |
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                     Your Browser / App                               │
-│                  http://localhost:3000                                │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  Kong API Gateway (:54321)                                           │
-│  Routes /auth/* → GoTrue, /rest/* → PostgREST, /storage/* → Storage │
-└──────┬──────────────┬───────────────┬──────────────┬─────────────────┘
-       │              │               │              │
-       ▼              ▼               ▼              ▼
-┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────────┐
-│  GoTrue    │ │ PostgREST  │ │  Storage   │ │ Edge Runtime   │
-│  (Auth)    │ │ (REST API) │ │  (Files)   │ │ (Deno funcs)   │
-│  :9999     │ │  :3000     │ │  :5000     │ │  :54325        │
-└─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └────────────────┘
-      │              │              │
-      └──────────────┴──────────────┘
-                     │
-                     ▼
-        ┌─────────────────────┐       ┌─────────────────┐
-        │  PostgreSQL (:54322)│◄──────│  Realtime        │
-        │  (All app data +   │       │  (WebSocket      │
-        │   auth.users table)│       │   subscriptions) │
-        └─────────────────────┘       └─────────────────┘
-                     │
-              ┌──────┴──────┐
-              ▼             ▼
-     ┌─────────────┐  ┌──────────────┐
-     │  pg_meta     │  │  Studio      │
-     │  (metadata)  │  │  (:54323)    │
-     └─────────────┘  └──────────────┘
+All ports are configurable via `.env`.
+
+### Updating
+
+```bash
+docker compose -f docker-compose.selfhost.yml pull
+docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-**Key things to know:**
+Migrations run automatically on startup.
+```
 
-- **GoTrue** manages `auth.users` — when a user registers in CPI Connect, a row is created here *and* in the app's `public.User` table via Prisma.
-- **Kong** validates JWT tokens on every API request. If your `SUPABASE_ANON_KEY` or `SUPABASE_SERVICE_ROLE_KEY` don't match the JWT secret configured in GoTrue, you'll get `invalid JWT` errors.
-- **Mailpit** (`:54324`) captures all emails locally — useful for testing email confirmation flows.
-- **Studio** (`:54323`) is the admin UI — you can browse auth users, run SQL, and inspect tables.
+### Development Setup (Without Docker)
+
+For local development, see the [Quick Start](#quick-start) section above.
 
 ### Troubleshooting
 
@@ -364,8 +268,8 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
                ┌──────────────┼──────────────┐
                ▼              ▼              ▼
 ┌────────────────────┐ ┌────────────┐ ┌────────────────┐
-│  Supabase Auth     │ │  Prisma 6  │ │  AI Runtime    │
-│  (GoTrue JWT)      │ │  (ORM)     │ │  (LLMLite /    │
+│  Supabase Auth     │ │  Drizzle   │ │  AI Runtime    │
+│  (GoTrue JWT)      │ │  ORM       │ │  (LLMLite /    │
 │                    │ │            │ │   Google AI)   │
 └────────────────────┘ └─────┬──────┘ └────────────────┘
                              │
@@ -388,7 +292,7 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
 |-------|-----------|
 | Framework | Next.js 16, React 19, Turbopack |
 | Auth | Supabase Auth (GoTrue) with email/password |
-| Database | PostgreSQL 17 via Prisma 6 ORM |
+| Database | PostgreSQL 17 via **Drizzle ORM** |
 | UI | Shadcn UI, Tailwind CSS 4, Radix primitives |
 | Charts | Recharts |
 | Icons | Lucide React, Tabler Icons |
@@ -397,6 +301,7 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
 | Email | React Email + Resend |
 | Content | MDX via content-collections |
 | MCP | Custom MCP server for AI assistant integration |
+| Documents | `docx` v9 — professional .docx export with tables, TOC, and diagrams |
 | Deployment | Docker, Vercel, any Node.js host |
 
 ### Route Groups
@@ -433,10 +338,20 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
 | Performance Optimizer | Optimization recommendations |
 | Error Diagnostician | Root-cause analysis and fix suggestions |
 | Security Auditor | Compliance checks and vulnerability detection |
-| Documentation Generator | Auto-generate iFlow documentation |
+| Documentation Generator | Auto-generate iFlow documentation with selectable sections and .docx export |
 | Test Case Generator | Create test scenarios |
 | Cost Analyzer | Usage analysis and cost insights |
 | Predictive Insights | Trend analysis and forecasts |
+
+#### Documentation Generator Highlights
+
+The Documentation Generator produces professional technical documentation from live iFlow metadata:
+
+- **13 selectable sections** — Overview, Architecture Diagram, Data Flow, Adapter Configuration, Message Mappings, Scripts & Logic, Error Handling, API Endpoints, Security, Testing, Troubleshooting, Configuration, Deployment
+- **Professional .docx export** — Real tables with dark-blue headers, manual TOC with dot-leader tab stops, page headers/footers with page numbers, numbered section headings, code blocks with language labels, cover page
+- **Mermaid diagrams** — Architecture and data-flow diagrams rendered client-side with syntax validation
+- **Resilient JSON parsing** — 8-step repair pipeline including regex-based section extraction and content recovery from malformed AI responses
+- **Fuzzy section matching** — Handles AI ID variations (e.g. `architecture-diagram` → `architecture`) so all selected sections always appear
 
 ### MCP Server
 
@@ -466,7 +381,7 @@ Features: Zod validation, 30-60s caching, rate limiting, audit logging, confirma
 
 ## Data Models
 
-CPI Connect uses **Prisma 6** with PostgreSQL. Core models:
+CPI Connect uses **Drizzle ORM** with PostgreSQL. Core models:
 
 | Model | Description |
 |-------|-------------|
@@ -479,6 +394,8 @@ CPI Connect uses **Prisma 6** with PostgreSQL. Core models:
 | `TenantInvitation` | Pending team invitations |
 | `AIAgentExecution` | AI agent interaction history |
 | `IFlowPipeline` | Multi-agent iFlow creation pipelines |
+
+Schema is defined in `lib/db/schema.ts` and managed via `drizzle-kit`.
 
 ---
 
@@ -510,17 +427,20 @@ CPI Connect uses **Prisma 6** with PostgreSQL. Core models:
 │   └── settings/          # Settings components
 ├── lib/
 │   ├── supabase/          # Supabase client utilities (client, server, admin, middleware)
-│   ├── ai/                # AI agent types, prompts, tools
+│   ├── ai/                # AI agent types, prompts, tools, runtime
 │   ├── sap-cpi/           # SAP CPI client and BPMN2 parser
-│   ├── db/                # Prisma client extensions
+│   ├── db/                # Drizzle ORM schema, client, and query helpers
+│   ├── docx-export.ts     # Professional .docx generation (tables, TOC, headers)
 │   └── validations/       # Zod schemas
 ├── mcp-server/            # MCP server implementation
-├── prisma/                # Database schema and migrations
+├── drizzle/               # Drizzle migrations
 ├── content/               # MDX content (blog, help, legal)
+├── docker/                # Docker support files (entrypoint, LiteLLM config, Supabase init)
 ├── emails/                # React Email templates
 ├── scripts/               # Seed and utility scripts
 ├── types/                 # TypeScript type definitions
-└── docker-compose.yml     # Docker deployment config
+├── docker-compose.yml     # Dev Docker config (app + Postgres)
+└── docker-compose.selfhost.yml  # Full self-hosted stack
 ```
 
 ---
@@ -535,8 +455,10 @@ CPI Connect uses **Prisma 6** with PostgreSQL. Core models:
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `ENCRYPTION_KEY` | Yes | 32-byte AES-256 key (base64) for SAP credential encryption |
 | `NEXT_PUBLIC_APP_URL` | Yes | Public app URL |
-| `AI_PROVIDER` | No | `google` or `llmlite` (default: `google`) |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | No | Google Gemini API key |
+| `NEXT_PUBLIC_DEPLOYMENT_MODE` | No | `self-hosted` (default) or `cloud` |
+| `AI_PROVIDER` | No | `llmlite` (default) or `google` |
+| `LITELLM_MASTER_KEY` | No | LiteLLM proxy master key |
+| `GOOGLE_API_KEY` | No | Google Gemini API key |
 | `LLMLITE_BASE_URL` | No | LLMLite-compatible endpoint URL |
 | `LLMLITE_API_KEY` | No | LLMLite API key |
 | `CRON_SECRET` | No | Secret to protect cron trigger endpoints |

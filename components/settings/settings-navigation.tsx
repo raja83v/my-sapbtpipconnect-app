@@ -1,7 +1,7 @@
 "use client";
 
 import { parseAsStringEnum, useQueryState } from "nuqs";
-import { IconUser, IconShield, IconUsers, IconServer } from "@tabler/icons-react";
+import { IconUser, IconShield, IconUsers, IconServer, IconBrain } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -12,14 +12,16 @@ interface NavigationItem {
   icon: typeof IconUser;
 }
 
-const allNavigationItems: NavigationItem[] = [
+const baseNavigationItems: NavigationItem[] = [
   { id: "profile", label: "Profile", icon: IconUser },
   { id: "tenants", label: "Tenants", icon: IconServer },
   { id: "members", label: "Members", icon: IconUsers },
+  { id: "ai", label: "AI Provider", icon: IconBrain },
+  { id: "instance", label: "Instance", icon: IconServer },
   { id: "account", label: "Account", icon: IconShield },
 ];
 
-const SECTION_VALUES = ["profile", "tenants", "members", "account"];
+const SECTION_VALUES = ["profile", "tenants", "members", "ai", "instance", "account"];
 
 interface SettingsNavigationProps {
   isAdmin: boolean;
@@ -38,12 +40,12 @@ export function SettingsNavigation({ isAdmin }: SettingsNavigationProps) {
       })
   );
 
-  // Filter navigation items based on admin status
-  const navigationItems = isAdmin
-    ? allNavigationItems
-    : allNavigationItems.filter(
-        (item) => item.id === "profile" || item.id === "account"
-      );
+  // Filter navigation items based on admin status and deployment mode
+  const navigationItems = baseNavigationItems.filter((item) => {
+    // Tenants and members only for admins
+    if ((item.id === "tenants" || item.id === "members") && !isAdmin) return false;
+    return true;
+  });
 
   return (
     <nav className="space-y-1 rounded-lg border border-border bg-muted/30 p-2">

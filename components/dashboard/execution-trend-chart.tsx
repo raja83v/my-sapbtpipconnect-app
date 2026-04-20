@@ -35,7 +35,7 @@ export function ExecutionTrendChart({ data }: ExecutionTrendChartProps) {
                 <div
                   key={index}
                   className="w-12 bg-muted rounded-t animate-pulse"
-                  style={{ height: `${20 + Math.random() * 60}%` }}
+                  style={{ height: `${20 + ((index * 37 + 13) % 60)}%` }}
                 />
               ))}
             </div>

@@ -18,9 +18,9 @@ export function DashboardProEmptyState() {
         <EmptyMedia variant="icon">
           <RocketIcon />
         </EmptyMedia>
-        <EmptyTitle>HagenKit Pro Unlocks More</EmptyTitle>
+        <EmptyTitle>CPI Connect Pro Unlocks More</EmptyTitle>
         <EmptyDescription>
-          Activate HagenKit Pro to access advanced analytics, automation, and
+          Activate CPI Connect Pro to access advanced analytics, automation, and
           collaboration workflows across your team.
         </EmptyDescription>
       </EmptyHeader>

@@ -478,7 +478,7 @@ export interface SuccessFactorsAdapterConfig extends Omit<AdapterConfig, 'type'>
  * Ariba Adapter Configuration
  * Used for SAP Ariba integrations
  */
-export interface AribaAdapterConfig extends Omit<AdapterConfig, 'type'> {
+export interface AribaAdapterConfig extends Omit<AdapterConfig, 'type' | 'direction'> {
     type: 'Ariba' | 'Ariba_Network';
 
     // Connection
@@ -1165,7 +1165,9 @@ export type FlowStepType =
     | 'dataStore' | 'variable' | 'persistMessage'
     | 'requestReply' | 'contentEnricher' | 'loopingCall' | 'idempotentCall'
     | 'localProcess' | 'exceptionSubprocess' | 'timer'
-    | 'start' | 'end' | 'error' | 'terminate' | 'escalation';
+    | 'start' | 'end' | 'error' | 'terminate' | 'escalation'
+    | 'odata' | 'http' | 'soap' | 'rest' | 'sftp' | 'jdbc'
+    | 'log' | 'trace' | 'startEvent' | 'endEvent';
 
 export interface FlowStep {
     id: string;
@@ -1284,6 +1286,7 @@ export interface IFlowDesign {
     flowDiagram: FlowNode[];
 
     // Flow Steps (unified step list for complex flows)
+    steps?: FlowStep[];
     flowSteps?: FlowStep[];
 
     // Metadata
@@ -1324,6 +1327,9 @@ export interface CreationResult {
 }
 
 // Wizard State
+// Catalog search status for wizard UI
+export type CatalogSearchStatus = 'idle' | 'searching' | 'found' | 'not-found' | 'error';
+
 export interface WizardState {
     currentStep: number;
     packageSelection?: PackageSelection;
@@ -1331,6 +1337,12 @@ export interface WizardState {
     design?: IFlowDesign;
     modifications?: UserModifications;
     result?: CreationResult;
+    /** Catalog reference patterns found during catalog search. */
+    catalogPatterns?: import("@/types/catalog").CatalogPatternReference[];
+    /** Current status of the catalog search. */
+    catalogSearchStatus?: CatalogSearchStatus;
+    /** Warnings from catalog search (non-fatal). */
+    catalogWarnings?: string[];
 }
 
 // SAP CPI Package (from API)

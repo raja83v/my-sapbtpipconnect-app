@@ -173,12 +173,5 @@ export function logEmailEvent(
   error?: string
 ): void {
   if (process.env.NODE_ENV === "development") {
-    console.log("[Email Event]", {
-      templateId,
-      to,
-      success,
-      error,
-      timestamp: new Date().toISOString(),
-    });
   }
 }

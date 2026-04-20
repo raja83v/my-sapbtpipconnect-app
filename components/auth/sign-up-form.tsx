@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,12 @@ export function SignUpForm() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { refreshUser } = useAuth();
+
+  // Preserve ?plan= and ?interval= from the pricing page through onboarding
+  const planParam = searchParams.get("plan");
+  const intervalParam = searchParams.get("interval");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -54,7 +59,13 @@ export function SignUpForm() {
       }
 
       await refreshUser();
-      router.push("/onboarding");
+      // Pass the selected plan and billing interval forward so onboarding can pre-select them
+      const params = new URLSearchParams();
+      if (planParam) params.set("plan", planParam);
+      if (intervalParam) params.set("interval", intervalParam);
+      const query = params.toString();
+      const dest = query ? `/onboarding?${query}` : "/onboarding";
+      router.push(dest);
     } catch {
       setError("An unexpected error occurred");
     } finally {

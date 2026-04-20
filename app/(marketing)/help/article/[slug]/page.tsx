@@ -39,7 +39,7 @@ export async function generateMetadata({
   const { title, summary } = post;
 
   return constructMetadata({
-    title: `${title} – HagenKit Help Center`,
+    title: `${title} – CPI Connect Help Center`,
     description: summary,
     image: `/api/og/help?title=${encodeURIComponent(
       title
@@ -70,6 +70,7 @@ export default async function HelpArticle({
 
   const images = await Promise.all(
     imageSources.map(async (src: string) => ({
+      alt: data.title,
       src,
       blurDataURL: await getBlurDataURL(src),
     }))
@@ -93,12 +94,12 @@ export default async function HelpArticle({
     <>
       <StructuredData data={helpArticleStructuredData} />
       <StructuredData data={breadcrumbStructuredData} />
-      <MaxWidthWrapper className="flex max-w-screen-lg flex-col py-10 mt-28">
+      <MaxWidthWrapper className="flex max-w-5xl flex-col py-10 mt-28">
         <SearchButton />
       </MaxWidthWrapper>
 
       <div className=" bg-white/50 shadow-[inset_10px_-50px_94px_0_rgb(199,199,199,0.2)] backdrop-blur-lg">
-        <MaxWidthWrapper className="grid max-w-screen-lg grid-cols-4 gap-10 py-10">
+        <MaxWidthWrapper className="grid max-w-5xl grid-cols-4 gap-10 py-10">
           <div className="col-span-4 flex flex-col space-y-8 sm:col-span-3 sm:pr-10">
             <div className="flex items-center space-x-2">
               <Link
@@ -124,7 +125,7 @@ export default async function HelpArticle({
             </div>
             <div className="flex flex-col space-y-4">
               <Link href={`/help/article/${data.slug}`}>
-                <h1 className="font-display text-3xl font-bold !leading-snug sm:text-4xl">
+                <h1 className="font-display text-3xl font-bold leading-snug sm:text-4xl">
                   {data.title}
                 </h1>
               </Link>
@@ -152,7 +153,7 @@ export default async function HelpArticle({
             )}
             <div className="flex justify-center pt-5">
               <Link
-                href={`https://github.com/codehagen/hagenkit/blob/main/content/help/${slug}.mdx`}
+                href={`https://github.com/raja83v/my-sapbtpipconnect-app/blob/main/content/help/${slug}.mdx`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-gray-500 transition-colors hover:text-gray-800"

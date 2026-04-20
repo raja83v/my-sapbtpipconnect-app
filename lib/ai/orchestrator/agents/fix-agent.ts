@@ -68,12 +68,11 @@ export class FixAgent extends BaseAgent<FixAgentInput, FixAgentOutput> {
     const { design, xml, errors, attemptNumber, previousAttempts, tenantCapabilities } = input;
 
     // Log what we're fixing for diagnostics
-    console.log(`[FixAgent] Attempt ${attemptNumber}/${MAX_FIX_ATTEMPTS}, ${errors.length} errors, ${previousAttempts.length} previous attempts`);
     for (const e of errors.slice(0, 5)) {
-      console.log(`[FixAgent]   - [${e.severity}] ${e.message}`);
     }
-    if (errors.length > 5) console.log(`[FixAgent]   ... and ${errors.length - 5} more`);
-
+    if (errors.length > 5) {
+      // more than 5 errors, log truncation
+    }
     // Determine fix strategy based on attempt number and error types
     const strategy = selectStrategy(errors, attemptNumber, previousAttempts);
 

@@ -67,7 +67,7 @@ export function IFlowDetailTabs({ iflow: initialIflow }: IFlowDetailTabsProps) {
       if (result.success) {
         toast.success(`iFlow ${action === "deploy" ? "deployment" : "undeployment"} initiated`);
         // Refresh data to get new status
-        await loadData(true);
+        await loadData();
       } else {
         toast.error(result.error || `Failed to ${action} iFlow`);
       }
@@ -152,7 +152,7 @@ export function IFlowDetailTabs({ iflow: initialIflow }: IFlowDetailTabsProps) {
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               {/* SAP CPI Link */}
               {iflow.sapCpiWebLink && (
                 <Button

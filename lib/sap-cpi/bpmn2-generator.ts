@@ -43,7 +43,8 @@ import {
     TimerStartEventConfig,
     ExceptionSubprocessConfig,
     LocalIntegrationProcessConfig,
-    FlowStep
+    FlowStep,
+    RoutingCondition
 } from "@/components/ai/v2/specialized/iflow-creator/types";
 
 export class BPMN2Generator {
@@ -302,7 +303,6 @@ export class BPMN2Generator {
         
         // Extract elements from flowSteps into appropriate arrays
         if (design.flowSteps && design.flowSteps.length > 0) {
-            console.log(`[BPMN2Generator] Normalizing ${design.flowSteps.length} flowSteps into component arrays`);
             
             for (const step of design.flowSteps) {
                 const config = step.config as any;
@@ -454,7 +454,6 @@ export class BPMN2Generator {
                 if (localProcess.steps && localProcess.steps.length > 0) {
                     // These steps are handled separately in generateLocalIntegrationProcess
                     // but we need to ensure the IDs are tracked
-                    console.log(`[BPMN2Generator] Local process "${localProcess.id}" has ${localProcess.steps.length} internal steps`);
                 }
             }
         }

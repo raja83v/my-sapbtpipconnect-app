@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users, cpiTenants } from "@/lib/db/schema";
+import { count, eq, gte, lt, and, desc } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 
 // Helper to check if user is admin
@@ -66,23 +68,22 @@ export async function getDashboardStats(): Promise<
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
-    const [total, newUsers, activeUsers, previousPeriodNew] = await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({
-        where: { createdAt: { gte: thirtyDaysAgo } },
-      }),
-      prisma.user.count({
-        where: { lastLoginAt: { gte: thirtyDaysAgo } },
-      }),
-      prisma.user.count({
-        where: {
-          createdAt: {
-            gte: sixtyDaysAgo,
-            lt: thirtyDaysAgo,
-          },
-        },
-      }),
+    const [totalResult, newUsersResult, activeUsersResult, previousPeriodNewResult] = await Promise.all([
+      db.select({ c: count() }).from(users),
+      db.select({ c: count() }).from(users).where(gte(users.createdAt, thirtyDaysAgo)),
+      db.select({ c: count() }).from(users).where(gte(users.lastLoginAt, thirtyDaysAgo)),
+      db.select({ c: count() }).from(users).where(
+        and(
+          gte(users.createdAt, sixtyDaysAgo),
+          lt(users.createdAt, thirtyDaysAgo)
+        )
+      ),
     ]);
+
+    const total = totalResult[0].c;
+    const newUsers = newUsersResult[0].c;
+    const activeUsers = activeUsersResult[0].c;
+    const previousPeriodNew = previousPeriodNewResult[0].c;
 
     const trend = previousPeriodNew > 0
       ? Math.round(((newUsers - previousPeriodNew) / previousPeriodNew) * 100)
@@ -111,14 +112,14 @@ export async function getRecentUsers(): Promise<ActionResult<RecentUser[]>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const users = await prisma.user.findMany({
-      take: 5,
-      orderBy: { createdAt: "desc" },
+    const recentUsersData = await db.query.users.findMany({
+      limit: 5,
+      orderBy: desc(users.createdAt),
     });
 
     return {
       success: true,
-      data: users.map((u) => ({
+      data: recentUsersData.map((u) => ({
         id: u.id,
         email: u.email,
         name: u.name || null,
@@ -143,15 +144,15 @@ export async function getRecentActivity(): Promise<
 
   try {
     // Get recent users
-    const recentUsers = await prisma.user.findMany({
-      take: 3,
-      orderBy: { createdAt: "desc" },
+    const recentUsers = await db.query.users.findMany({
+      limit: 3,
+      orderBy: desc(users.createdAt),
     });
 
     // Get recent tenants
-    const recentTenants = await prisma.cpiTenant.findMany({
-      take: 3,
-      orderBy: { createdAt: "desc" },
+    const recentTenants = await db.query.cpiTenants.findMany({
+      limit: 3,
+      orderBy: desc(cpiTenants.createdAt),
     });
 
     // Combine and format activities

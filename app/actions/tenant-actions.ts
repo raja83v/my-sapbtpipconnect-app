@@ -1,7 +1,9 @@
 "use server";
 
 import { requireAuth } from "@/lib/auth-helpers";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { encrypt } from "@/lib/encryption";
 
 /**
@@ -26,9 +28,8 @@ export async function createTenant(data: {
     const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
 
     // Create tenant with encrypted credentials and add user as owner
-    const tenant = await prisma.$transaction(async (tx) => {
-        const newTenant = await tx.cpiTenant.create({
-            data: {
+    const tenant = await db.transaction(async (tx) => {
+        const [newTenant] = await tx.insert(cpiTenants).values({
                 name: data.name,
                 slug: data.slug,
                 description: data.description,
@@ -40,16 +41,13 @@ export async function createTenant(data: {
                 username: data.username,
                 password: encryptedPassword,
                 status: "ACTIVE",
-            },
-        });
+        }).returning();
 
         // Add user as OWNER
-        await tx.tenantMember.create({
-            data: {
+        await tx.insert(tenantMembers).values({
                 userId: user.id,
                 tenantId: newTenant.id,
                 role: "OWNER",
-            },
         });
 
         return newTenant;
@@ -90,10 +88,7 @@ export async function updateTenant(data: {
     }
 
     // Update tenant with encrypted credentials
-    await prisma.cpiTenant.update({
-        where: { id: data.id },
-        data: updateData,
-    });
+    await db.update(cpiTenants).set(updateData).where(eq(cpiTenants.id, data.id));
 
     return data.id;
 }
@@ -106,13 +101,10 @@ export async function testTenantConnection(tenantId: string) {
 
     // This would call the SAP sync test connection action
     // For now, just mark as connected
-    await prisma.cpiTenant.update({
-        where: { id: tenantId },
-        data: {
-            isConnected: true,
-            connectionTestAt: new Date(),
-        },
-    });
+    await db.update(cpiTenants).set({
+        isConnected: true,
+        connectionTestAt: new Date(),
+    }).where(eq(cpiTenants.id, tenantId));
 
     return { success: true };
 }

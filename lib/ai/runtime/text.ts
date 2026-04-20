@@ -1,11 +1,17 @@
+import { generateText } from "ai";
 import type { AITextRequest, AITextResponse, AIUsage } from "./types";
 import {
   createLLMLiteClient,
+  createClaudeClient,
   getOpenAIModelForKind,
+  getGoogleModelForKind,
+  ensureConfig,
+  resolveProviderAsync,
   resolveProvider,
   runGoogleFallback,
   toAIError,
 } from "./provider";
+import { getModelForKind } from "./models";
 
 function normalizeUsageFromOpenAI(usage?: {
   prompt_tokens?: number;
@@ -30,10 +36,12 @@ function normalizeUsageFromAISDK(usage?: {
 }
 
 export async function runText(request: AITextRequest): Promise<AITextResponse> {
-  const provider = resolveProvider(request.providerOverride);
+  await ensureConfig();
+  const provider = await resolveProviderAsync(request.providerOverride);
   const modelKind = request.modelKind || "default";
 
-  if (provider === "google") {
+  // Google / Gemini path
+  if (provider === "google" || provider === "gemini") {
     const result = await runGoogleFallback({
       prompt: request.prompt,
       system: request.system,
@@ -44,11 +52,31 @@ export async function runText(request: AITextRequest): Promise<AITextResponse> {
     return {
       text: result.text,
       usage: normalizeUsageFromAISDK(result.usage),
-      provider: "google",
-      model: "google-fallback",
+      provider,
+      model: getModelForKind(modelKind),
     };
   }
 
+  // Claude (Anthropic) path
+  if (provider === "claude") {
+    const anthropic = await createClaudeClient();
+    const model = getModelForKind(modelKind);
+    const result = await generateText({
+      model: anthropic(model),
+      system: request.system,
+      prompt: request.prompt,
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+    });
+    return {
+      text: result.text,
+      usage: normalizeUsageFromAISDK(result.usage),
+      provider: "claude",
+      model,
+    };
+  }
+
+  // OpenAI / LiteLLM path (OpenAI-compatible)
   try {
     const client = createLLMLiteClient();
     const model = getOpenAIModelForKind(modelKind);
@@ -66,11 +94,11 @@ export async function runText(request: AITextRequest): Promise<AITextResponse> {
     return {
       text,
       usage: normalizeUsageFromOpenAI(completion.usage),
-      provider: "llmlite",
+      provider,
       model,
     };
   } catch (error) {
-    const aiError = toAIError("llmlite", error);
+    const aiError = toAIError(provider, error);
     if (aiError.retryable && process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
       const fallback = await runGoogleFallback({
         prompt: request.prompt,

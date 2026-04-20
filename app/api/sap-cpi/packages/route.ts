@@ -26,11 +26,12 @@ export async function GET(request: NextRequest) {
         const tenant = tenantResult.data;
 
         // Initialize SAP CPI client
-        const sapCpiClient = new SAPCPIClient(
-            tenant.tmUrl,
-            tenant.username,
-            tenant.password
-        );
+        const sapCpiClient = new SAPCPIClient({
+            tenantUrl: tenant.tmUrl,
+            authType: "BASIC_AUTH" as const,
+            username: tenant.username || undefined,
+            password: tenant.password || undefined,
+        });
 
         // Fetch integration packages
         const packages = await sapCpiClient.getIntegrationPackages();

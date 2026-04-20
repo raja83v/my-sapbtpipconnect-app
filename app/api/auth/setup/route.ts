@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { count } from "drizzle-orm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -10,7 +12,7 @@ import { createClient } from "@/lib/supabase/server";
 export async function POST(request: NextRequest) {
   try {
     // Check if any users exist
-    const userCount = await prisma.user.count();
+    const [{ total: userCount }] = await db.select({ total: count() }).from(users);
     if (userCount > 0) {
       return NextResponse.json(
         { error: "Setup has already been completed" },
@@ -51,18 +53,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create Prisma user
-    const admin = await prisma.user.create({
-      data: {
-        email: email.toLowerCase().trim(),
-        name: name?.trim() || "Admin",
-        supabaseId: supabaseData.user.id,
-        role: "admin",
-        status: "ACTIVE",
-        emailVerified: true,
-        onboardingCompleted: false,
-      },
-    });
+    // Create admin user
+    const [admin] = await db.insert(users).values({
+      email: email.toLowerCase().trim(),
+      name: name?.trim() || "Admin",
+      supabaseId: supabaseData.user.id,
+      role: "admin",
+      status: "ACTIVE",
+      emailVerified: true,
+      onboardingCompleted: false,
+    }).returning();
 
     // Sign in the newly created admin
     const supabase = await createClient();
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
  */
 export async function GET() {
   try {
-    const userCount = await prisma.user.count();
+    const [{ total: userCount }] = await db.select({ total: count() }).from(users);
     return NextResponse.json({ setupRequired: userCount === 0 });
   } catch (error) {
     console.error("Setup check error:", error);

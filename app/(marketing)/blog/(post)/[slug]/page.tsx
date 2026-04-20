@@ -36,7 +36,7 @@ export async function generateMetadata({
   const { title, seoTitle, summary, seoDescription, image } = post;
 
   return constructMetadata({
-    title: `${seoTitle || title} – HagenKit`,
+    title: `${seoTitle || title} – CPI Connect`,
     description: seoDescription || summary,
     image,
   });
@@ -93,7 +93,7 @@ export default async function BlogArticle({
       <StructuredData data={blogPostStructuredData} />
       <StructuredData data={breadcrumbStructuredData} />
       <MaxWidthWrapper className="pt-28">
-        <div className="flex max-w-screen-md flex-col space-y-4">
+        <div className="flex max-w-3xl flex-col space-y-4">
           {category && (
             <Link
               href={`/blog/category/${category.slug}`}
@@ -102,7 +102,7 @@ export default async function BlogArticle({
               ← {category.title}
             </Link>
           )}
-          <h1 className="font-display text-3xl font-extrabold text-gray-700 [text-wrap:balance] sm:text-4xl sm:leading-snug">
+          <h1 className="font-display text-3xl font-extrabold text-gray-700 [text-balance] sm:text-4xl sm:leading-snug">
             {data.title}
           </h1>
           <p className="text-xl text-gray-500">{data.summary}</p>
@@ -125,7 +125,7 @@ export default async function BlogArticle({
         <MaxWidthWrapper className="grid grid-cols-4 gap-5 px-0 pt-10 lg:gap-10">
           <div className="relative col-span-4 flex flex-col space-y-8 bg-white sm:rounded-t-xl sm:border sm:border-gray-200 md:col-span-3">
             <BlurImage
-              className="aspect-[1200/630] rounded-t-xl object-cover"
+              className="aspect-1200/630 rounded-t-xl object-cover"
               src={data.image}
               blurDataURL={thumbnailBlurhash}
               width={1200}

@@ -1,0 +1,212 @@
+# =============================================================================
+# CPI Connect — Full Self-Hosted Stack
+# =============================================================================
+# Includes: PostgreSQL + Supabase Auth (GoTrue) + Kong API Gateway +
+#           Supabase Studio + LiteLLM Proxy + CPI Connect App
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in values
+#        OR run: bash docker/setup.sh
+#   2. docker compose -f docker-compose.selfhost.yml up -d
+#   3. Open http://localhost:3000/setup to create admin account
+#
+# Ports (all configurable via .env):
+#   3000  — CPI Connect App
+#   8000  — Supabase API Gateway (Kong)
+#   3100  — Supabase Studio (admin UI)
+#   4000  — LiteLLM Proxy
+#   5433  — PostgreSQL (direct access, optional)
+# =============================================================================
+
+services:
+  # ── PostgreSQL (Supabase-flavored) ────────────────────────────────────────
+  supabase-db:
+    image: supabase/postgres:15.8.1.060
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cpiconnect_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-cpiconnect}
+      JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      JWT_EXP: 3600
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+      - ./docker/supabase/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Supabase Auth (GoTrue) ────────────────────────────────────────────────
+  supabase-auth:
+    image: supabase/gotrue:v2.158.1
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://localhost:8000}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:${POSTGRES_PASSWORD:-cpiconnect_secret}@supabase-db:5432/${POSTGRES_DB:-cpiconnect}
+      GOTRUE_SITE_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS:-}
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-admin@localhost}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-CPI Connect}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Supabase REST (PostgREST) ─────────────────────────────────────────────
+  supabase-rest:
+    image: postgrest/postgrest:v12.2.3
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgresql://authenticator:${POSTGRES_PASSWORD:-cpiconnect_secret}@supabase-db:5432/${POSTGRES_DB:-cpiconnect}
+      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: 3600
+
+  # ── Kong API Gateway (Supabase entrypoint) ────────────────────────────────
+  supabase-kong:
+    image: kong:3.7
+    restart: unless-stopped
+    ports:
+      - "${SUPABASE_PORT:-8000}:8000"
+    depends_on:
+      supabase-auth:
+        condition: service_healthy
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./docker/supabase/kong.yml:/var/lib/kong/kong.yml:ro
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Supabase Studio (admin UI) ────────────────────────────────────────────
+  supabase-studio:
+    image: supabase/studio:20240422-5cf8f30
+    restart: unless-stopped
+    ports:
+      - "${STUDIO_PORT:-3100}:3000"
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      STUDIO_PG_META_URL: http://supabase-meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cpiconnect_secret}
+      DEFAULT_ORGANIZATION_NAME: "CPI Connect"
+      DEFAULT_PROJECT_NAME: "CPI Connect"
+      SUPABASE_URL: http://supabase-kong:8000
+      SUPABASE_PUBLIC_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://localhost:8000}
+      SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+
+  # ── Supabase Metadata (pg_meta) ───────────────────────────────────────────
+  supabase-meta:
+    image: supabase/postgres-meta:v0.83.2
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: supabase-db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: ${POSTGRES_DB:-cpiconnect}
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-cpiconnect_secret}
+
+  # ── LiteLLM Proxy ────────────────────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    volumes:
+      - ./docker/litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── CPI Connect App ──────────────────────────────────────────────────────
+  app:
+    image: ${CPICONNECT_IMAGE:-raja83v/cpiconnect:latest}
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      # Database (connects to Supabase Postgres)
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-cpiconnect_secret}@supabase-db:5432/${POSTGRES_DB:-cpiconnect}
+      # Supabase
+      NEXT_PUBLIC_SUPABASE_URL: http://supabase-kong:8000
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Encryption & Auth
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      JWT_EXPIRY: ${JWT_EXPIRY:-30d}
+      # App
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_DEPLOYMENT_MODE: self-hosted
+      CRON_SECRET: ${CRON_SECRET:-}
+      # AI — routes through LiteLLM proxy
+      AI_PROVIDER: ${AI_PROVIDER:-llmlite}
+      LLMLITE_BASE_URL: http://litellm:4000/v1
+      LLMLITE_API_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-key}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      # Optional self-hosted limits (default: unlimited)
+      SELF_HOSTED_AI_CALLS_LIMIT: ${SELF_HOSTED_AI_CALLS_LIMIT:-}
+      SELF_HOSTED_MAX_TENANTS: ${SELF_HOSTED_MAX_TENANTS:-}
+      SELF_HOSTED_MAX_IFLOWS: ${SELF_HOSTED_MAX_IFLOWS:-}
+      SELF_HOSTED_MAX_MEMBERS: ${SELF_HOSTED_MAX_MEMBERS:-}
+    depends_on:
+      supabase-kong:
+        condition: service_healthy
+      supabase-db:
+        condition: service_healthy
+
+volumes:
+  supabase_db_data:

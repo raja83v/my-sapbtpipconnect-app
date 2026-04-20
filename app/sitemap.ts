@@ -9,7 +9,7 @@ import {
 } from "content-collections"
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://hagenkit.com"
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://cpiconnect.io"
 
   // Static pages
   const staticPages: MetadataRoute.Sitemap = [

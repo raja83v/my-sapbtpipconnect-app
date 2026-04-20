@@ -33,6 +33,8 @@ import {
   GetErrorTrendsInputSchema,
   GetPerformanceMetricsInputSchema,
   GetTopErrorsInputSchema,
+  // Catalog schemas
+  SearchSAPCatalogInputSchema,
 } from "../types";
 
 // ============================================================================
@@ -371,6 +373,26 @@ Returns ranked list of errors with counts and examples.`,
     requiresConfirmation: false,
     cacheTTLSeconds: 60,
     rateLimit: { maxCalls: 30, windowSeconds: 60 },
+  },
+
+  // ==========================================================================
+  // CATALOG TOOLS - SAP standard content catalog
+  // ==========================================================================
+
+  search_sap_catalog: {
+    name: "search_sap_catalog",
+    description: `Search the SAP standard content catalog for integration packages. Use this to:
+- Find SAP-provided standard iFlows and integration content
+- Discover best-practice patterns for specific SAP products
+- Check if a standard integration already exists before building custom
+- Browse available adapters and integration patterns
+
+Returns matching catalog packages with their artifacts.`,
+    category: "iflow",
+    inputSchema: SearchSAPCatalogInputSchema,
+    requiresConfirmation: false,
+    cacheTTLSeconds: 3600, // Catalog content is relatively static
+    rateLimit: { maxCalls: 10, windowSeconds: 60 },
   },
 };
 

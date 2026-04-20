@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { sessions, users } from "@/lib/db/schema";
+import { eq, desc } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 
 // Helper to check if user is admin
@@ -52,9 +54,9 @@ export async function getImpersonationStatus(): Promise<
     }
 
     // Get the latest session to check impersonatedBy field
-    const latestSession = await prisma.session.findFirst({
-      where: { userId: currentUser.id },
-      orderBy: { createdAt: "desc" },
+    const latestSession = await db.query.sessions.findFirst({
+      where: eq(sessions.userId, currentUser.id),
+      orderBy: desc(sessions.createdAt),
     });
 
     if (!latestSession?.impersonatedBy) {
@@ -65,13 +67,13 @@ export async function getImpersonationStatus(): Promise<
     }
 
     // Get user details
-    const user = await prisma.user.findUnique({
-      where: { id: currentUser.id },
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, currentUser.id),
     });
 
     // Get admin user details
-    const adminUser = await prisma.user.findUnique({
-      where: { id: latestSession.impersonatedBy },
+    const adminUser = await db.query.users.findFirst({
+      where: eq(users.id, latestSession.impersonatedBy),
     });
 
     return {
@@ -104,8 +106,8 @@ export async function impersonateUser(userId: string): Promise<ActionResult> {
 
   try {
     // Check if target user exists
-    const targetUser = await prisma.user.findUnique({
-      where: { id: userId },
+    const targetUser = await db.query.users.findFirst({
+      where: eq(users.id, userId),
     });
 
     if (!targetUser) {

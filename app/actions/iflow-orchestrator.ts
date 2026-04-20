@@ -14,7 +14,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, tenantMembers, iFlowPipelines } from "@/lib/db/schema";
+import { eq, and, notInArray } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { decrypt } from "@/lib/encryption";
 import { createSAPCPIClient } from "@/lib/sap-cpi/client";
@@ -71,46 +73,46 @@ export async function startIFlowPipeline(
     }
 
     // 2. Verify tenant access
-    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+    const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
-    const membership = await prisma.tenantMember.findUnique({
-      where: { userId_tenantId: { userId: user.id, tenantId } },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, user.id),
+        eq(tenantMembers.tenantId, tenantId)
+      ),
     });
     if (!membership) {
       return { success: false, error: "You don't have access to this tenant" };
     }
 
     // 3. Check for existing active pipeline — auto-cancel stale ones
-    const active = await prisma.iFlowPipeline.findFirst({
-      where: {
-        userId: user.id,
-        tenantId,
-        phase: { notIn: ["COMPLETED", "CANCELLED", "FAILED"] },
-      },
+    const active = await db.query.iFlowPipelines.findFirst({
+      where: and(
+        eq(iFlowPipelines.userId, user.id),
+        eq(iFlowPipelines.tenantId, tenantId),
+        notInArray(iFlowPipelines.phase, ["COMPLETED", "CANCELLED", "FAILED"])
+      ),
     }).catch(() => null);
     if (active) {
       // Auto-cancel the stale pipeline so the user can start fresh
-      console.log(`[Pipeline] Auto-cancelling stale pipeline ${active.id} (phase: ${active.phase})`);
-      await prisma.iFlowPipeline.update({
-        where: { id: active.id },
-        data: { phase: "CANCELLED" },
-      }).catch((err: unknown) => {
-        console.error(`[Pipeline] Failed to auto-cancel stale pipeline:`, err);
-      });
+      await db.update(iFlowPipelines)
+        .set({ phase: "CANCELLED" })
+        .where(eq(iFlowPipelines.id, active.id))
+        .catch((err: unknown) => {
+          console.error(`[Pipeline] Failed to auto-cancel stale pipeline:`, err);
+        });
     }
 
     // 4. Create pipeline record
-    const pipeline = await prisma.iFlowPipeline.create({
-      data: {
-        userId: user.id,
-        tenantId,
-        packageSelection: JSON.stringify(packageSelection),
-        description: JSON.stringify(description),
-      },
-    });
+    const [pipeline] = await db.insert(iFlowPipelines).values({
+      userId: user.id,
+      tenantId,
+      packageSelection: JSON.stringify(packageSelection),
+      description: JSON.stringify(description),
+    }).returning();
     const pipelineId = pipeline.id;
 
     // 5. Run the pipeline in the background (don't await)
@@ -154,8 +156,11 @@ export async function approveIFlowPipeline(
     }
 
     // Fetch pipeline details
-    const pipeline = await prisma.iFlowPipeline.findFirst({
-      where: { id: pipelineId, userId: user.id },
+    const pipeline = await db.query.iFlowPipelines.findFirst({
+      where: and(
+        eq(iFlowPipelines.id, pipelineId),
+        eq(iFlowPipelines.userId, user.id)
+      ),
     });
 
     if (!pipeline) {
@@ -190,8 +195,8 @@ export async function approveIFlowPipeline(
     }
 
     // Get tenant for deployment
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: pipeline.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, pipeline.tenantId),
     });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -248,18 +253,20 @@ export async function cancelIFlowPipeline(
     const user = await getCurrentUser();
     if (!user) return { success: false, error: "Not authenticated" };
 
-    const pipeline = await prisma.iFlowPipeline.findFirst({
-      where: { id: pipelineId, userId: user.id },
+    const pipeline = await db.query.iFlowPipelines.findFirst({
+      where: and(
+        eq(iFlowPipelines.id, pipelineId),
+        eq(iFlowPipelines.userId, user.id)
+      ),
     });
 
     if (!pipeline) {
       return { success: false, error: "Pipeline not found or access denied" };
     }
 
-    await prisma.iFlowPipeline.update({
-      where: { id: pipelineId },
-      data: { phase: "CANCELLED" },
-    });
+    await db.update(iFlowPipelines)
+      .set({ phase: "CANCELLED" })
+      .where(eq(iFlowPipelines.id, pipelineId));
 
     return { success: true, data: undefined };
   } catch (error) {
@@ -281,8 +288,11 @@ export async function retryIFlowPipeline(
     const user = await getCurrentUser();
     if (!user) return { success: false, error: "Not authenticated" };
 
-    const pipeline = await prisma.iFlowPipeline.findFirst({
-      where: { id: pipelineId, userId: user.id },
+    const pipeline = await db.query.iFlowPipelines.findFirst({
+      where: and(
+        eq(iFlowPipelines.id, pipelineId),
+        eq(iFlowPipelines.userId, user.id)
+      ),
     });
 
     if (!pipeline) {
@@ -293,8 +303,8 @@ export async function retryIFlowPipeline(
       return { success: false, error: "Can only retry from FAILED state" };
     }
 
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: pipeline.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, pipeline.tenantId),
     });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -304,10 +314,9 @@ export async function retryIFlowPipeline(
     const description: IFlowDescription = JSON.parse(pipeline.description);
 
     // Reset to ARCHITECTURE and re-run
-    await prisma.iFlowPipeline.update({
-      where: { id: pipelineId },
-      data: { phase: "ARCHITECTURE" },
-    });
+    await db.update(iFlowPipelines)
+      .set({ phase: "ARCHITECTURE" })
+      .where(eq(iFlowPipelines.id, pipelineId));
 
     runPipelineAsync(
       pipelineId,
@@ -546,7 +555,6 @@ async function runPipelineAsync(
 
       if (fixableErrors.length === 0) break;
 
-      console.log(`[Pipeline:${pipelineId}] Fix attempt ${fixAttemptCount}: ${fixableErrors.length} fixable errors (${fixableErrors.map(e => e.id).join(', ')})`);
 
       const fixResult = await orchestrator.runAgent(fixAgent, {
         design: currentDesign,
@@ -699,7 +707,6 @@ async function runPipelineAsync(
 
     // Pipeline is now paused — user must call approveIFlowPipeline()
     // or cancelIFlowPipeline() to proceed.
-    console.log(`[Pipeline:${pipelineId}] Completed all agents — awaiting user approval`);
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Pipeline failed unexpectedly";
     console.error(`[Pipeline:${pipelineId}] Fatal error:`, error);

@@ -24,11 +24,11 @@ export default function BlogLayoutHero() {
       <MaxWidthWrapper>
         <div className="md:pb-15 max-w-screen-sm pb-16 pt-32 md:pt-40">
           <h1 className="font-display text-3xl font-extrabold text-warm-white sm:text-4xl">
-            {data?.title || "HagenKit Blog"}
+            {data?.title || "CPI Connect Blog"}
           </h1>
           <p className="mt-4 text-xl text-warm-white/80">
             {data?.description ||
-              "Insights, product updates, and playbooks from the HagenKit team."}
+              "Insights, product updates, and playbooks from the CPI Connect team."}
           </p>
           <nav className="mt-6 hidden w-fit items-center space-x-2 rounded-full border border-warm-grey/20 bg-warm-white/5 p-2 backdrop-blur-sm md:flex">
             <CategoryLink title="Overview" href="/blog" active={!slug} />
@@ -140,7 +140,7 @@ const CategoryLink = ({
       {active && (
         <motion.div
           layoutId="indicator"
-          className="absolute left-0 top-0 h-full w-full rounded-full bg-gradient-to-tr from-warm-grey/20 via-warm-grey/10 to-warm-grey/20"
+          className="absolute left-0 top-0 h-full w-full rounded-full bg-linear-to-tr from-warm-grey/20 via-warm-grey/10 to-warm-grey/20"
           style={{ zIndex: -1 }}
         />
       )}

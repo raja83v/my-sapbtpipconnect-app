@@ -714,7 +714,7 @@ export function MessageLogDetailSheet({
                                                                 )}
                                                                 <div className="space-y-1">
                                                                     <p className="text-xs text-muted-foreground">Message</p>
-                                                                    <pre className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-3 rounded whitespace-pre-wrap overflow-x-auto max-h-64">
+                                                                    <pre className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-3 rounded whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
                                                                         {errorMessage}
                                                                     </pre>
                                                                 </div>
@@ -741,7 +741,7 @@ export function MessageLogDetailSheet({
                                                                 </div>
                                                             </CardHeader>
                                                             <CardContent>
-                                                                <pre className="text-xs bg-muted p-3 rounded overflow-x-auto whitespace-pre-wrap max-h-96 font-mono">
+                                                                <pre className="text-xs bg-muted p-3 rounded whitespace-pre-wrap break-all max-h-96 overflow-y-auto font-mono">
                                                                     {parsed.stackTrace}
                                                                 </pre>
                                                             </CardContent>
@@ -897,7 +897,7 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
     // If we couldn't parse structured sections, show as plain markdown
     if (!hasStructuredContent) {
         return (
-            <div className="prose prose-sm dark:prose-invert max-w-none">
+            <div className="prose prose-sm dark:prose-invert max-w-none w-full min-w-0 [&_p]:wrap-break-word [&_li]:wrap-break-word [&_code]:break-all">
                 <ReactMarkdown>{diagnosis}</ReactMarkdown>
             </div>
         );
@@ -908,11 +908,11 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
     };
 
     return (
-        <div className="space-y-3">
+        <div className="space-y-3 w-full min-w-0">
             {/* Explanation Section */}
             {sections.explanation && (
                 <Collapsible open={openSections.explanation} onOpenChange={() => toggleSection('explanation')}>
-                    <Card className="border-blue-200 dark:border-blue-900/50">
+                    <Card className="border-blue-200 dark:border-blue-900/50 overflow-hidden">
                         <CollapsibleTrigger asChild>
                             <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
                                 <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -927,8 +927,8 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
                             </CardHeader>
                         </CollapsibleTrigger>
                         <CollapsibleContent>
-                            <CardContent className="pt-0">
-                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground">
+                            <CardContent className="pt-0 min-w-0">
+                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground [&_p]:wrap-break-word [&_li]:wrap-break-word [&_code]:break-all">
                                     <ReactMarkdown>{sections.explanation.trim()}</ReactMarkdown>
                                 </div>
                             </CardContent>
@@ -940,7 +940,7 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
             {/* Root Cause Section */}
             {sections.rootCause && (
                 <Collapsible open={openSections.rootCause} onOpenChange={() => toggleSection('rootCause')}>
-                    <Card className="border-amber-200 dark:border-amber-900/50">
+                    <Card className="border-amber-200 dark:border-amber-900/50 overflow-hidden">
                         <CollapsibleTrigger asChild>
                             <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
                                 <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -955,8 +955,8 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
                             </CardHeader>
                         </CollapsibleTrigger>
                         <CollapsibleContent>
-                            <CardContent className="pt-0">
-                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground">
+                            <CardContent className="pt-0 min-w-0">
+                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground [&_p]:wrap-break-word [&_li]:wrap-break-word [&_code]:break-all">
                                     <ReactMarkdown>{sections.rootCause.trim()}</ReactMarkdown>
                                 </div>
                             </CardContent>
@@ -968,7 +968,7 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
             {/* Solutions Section */}
             {sections.solutions && (
                 <Collapsible open={openSections.solutions} onOpenChange={() => toggleSection('solutions')}>
-                    <Card className="border-green-200 dark:border-green-900/50">
+                    <Card className="border-green-200 dark:border-green-900/50 overflow-hidden">
                         <CollapsibleTrigger asChild>
                             <CardHeader className="pb-2 cursor-pointer hover:bg-muted/50 transition-colors">
                                 <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -983,8 +983,8 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
                             </CardHeader>
                         </CollapsibleTrigger>
                         <CollapsibleContent>
-                            <CardContent className="pt-0">
-                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground [&_ul]:space-y-2 [&_ol]:space-y-2 [&_li]:leading-relaxed">
+                            <CardContent className="pt-0 min-w-0">
+                                <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground [&_ul]:space-y-2 [&_ol]:space-y-2 [&_li]:leading-relaxed [&_p]:wrap-break-word [&_li]:wrap-break-word [&_code]:break-all">
                                     <ReactMarkdown>{sections.solutions.trim()}</ReactMarkdown>
                                 </div>
                             </CardContent>
@@ -995,9 +995,9 @@ function AIAnalysisContent({ diagnosis }: { diagnosis: string }) {
 
             {/* Other content that didn't fit into sections */}
             {sections.other.trim() && (
-                <Card>
-                    <CardContent className="pt-4">
-                        <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground">
+                <Card className="overflow-hidden">
+                    <CardContent className="pt-4 min-w-0">
+                        <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground [&_p]:wrap-break-word [&_li]:wrap-break-word [&_code]:break-all">
                             <ReactMarkdown>{sections.other.trim()}</ReactMarkdown>
                         </div>
                     </CardContent>

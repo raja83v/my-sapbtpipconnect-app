@@ -6,9 +6,9 @@ import CategoryCard from "@/components/blog/category-card";
 import HelpArticleLink from "@/components/blog/help-article-link";
 
 export const metadata = constructMetadata({
-  title: "HagenKit Help Center",
+  title: "CPI Connect Help Center",
   description:
-    "Find HagenKit guides, troubleshooting steps, and expert workflows that help teams ship launches faster, stay organized, and resolve roadblocks.",
+    "Find CPI Connect guides, troubleshooting steps, and expert workflows that help teams ship launches faster, stay organized, and resolve roadblocks.",
 });
 
 export default function HelpCenter() {
@@ -16,10 +16,10 @@ export default function HelpCenter() {
 
   return (
     <>
-      <MaxWidthWrapper className="max-w-screen-lg pt-28">
+      <MaxWidthWrapper className="max-w-5xl pt-28">
         <div className="flex flex-col space-y-4 pb-10">
           <h1 className="font-display text-xl font-bold text-gray-700 sm:text-3xl">
-            👋 How can we help you ship faster with HagenKit?
+            👋 How can we help you ship faster with CPI Connect?
           </h1>
           <SearchButton />
         </div>
@@ -27,7 +27,7 @@ export default function HelpCenter() {
 
       <div className="relative">
         <div className="absolute top-28 h-full w-full border border-gray-200 bg-white/50 shadow-[inset_10px_-50px_94px_0_rgb(199,199,199,0.2)] backdrop-blur-lg" />
-        <MaxWidthWrapper className="max-w-screen-lg pb-20">
+        <MaxWidthWrapper className="max-w-5xl pb-20">
           <div className="relative mb-10 rounded-xl border border-gray-200 bg-white px-4 py-6">
             <h2 className="px-4 font-display text-2xl font-bold text-gray-700">
               Popular Articles

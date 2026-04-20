@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq, count } from "drizzle-orm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,9 +25,9 @@ export async function POST(request: NextRequest) {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Check if user already exists in Prisma
-    const existingUser = await prisma.user.findUnique({
-      where: { email: normalizedEmail },
+    // Check if user already exists
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, normalizedEmail),
     });
 
     if (existingUser) {
@@ -76,21 +78,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if this is the first user (make them admin)
-    const userCount = await prisma.user.count();
+    const [{ total: userCount }] = await db.select({ total: count() }).from(users);
     const isFirstUser = userCount === 0;
 
-    // Create Prisma user
-    const user = await prisma.user.create({
-      data: {
-        email: normalizedEmail,
-        name: name?.trim() || undefined,
-        supabaseId: supabaseUserId,
-        role: isFirstUser ? "admin" : "user",
-        status: "ACTIVE",
-        emailVerified: true,
-        onboardingCompleted: false,
-      },
-    });
+    // Create user
+    const [user] = await db.insert(users).values({
+      email: normalizedEmail,
+      name: name?.trim() || undefined,
+      supabaseId: supabaseUserId,
+      role: isFirstUser ? "admin" : "user",
+      status: "ACTIVE",
+      emailVerified: true,
+      onboardingCompleted: false,
+    }).returning();
 
     // Sign the user in so the session cookie is set server-side
     const supabase = await createClient();

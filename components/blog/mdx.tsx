@@ -39,6 +39,10 @@ import ZoomImage from "./zoom-image"
 const CustomLink = (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
   const href = props.href
 
+  if (!href) {
+    return <a {...props} />
+  }
+
   if (href.startsWith("/")) {
     return (
       <Link {...props} href={href}>
@@ -210,7 +214,7 @@ const components = {
     text: string
   }) => (
     <div className="my-10 flex flex-col items-center justify-center space-y-6 rounded-md border border-warm-grey-2/20 bg-warm-grey-2/10 p-10">
-      <div className="w-fit rounded-full bg-gradient-to-r from-warm-grey-2/20 to-warm-grey-1/20 p-1.5">
+      <div className="w-fit rounded-full bg-linear-to-r from-warm-grey-2/20 to-warm-grey-1/20 p-1.5">
         <BlurImage
           className="h-20 w-20 rounded-full border-2 border-warm-grey-2/20"
           src={props.authorSrc}
@@ -219,7 +223,7 @@ const components = {
           height={80}
         />
       </div>
-      <p className="text-center text-lg leading-relaxed text-warm-white/80 [text-wrap:balance]">
+      <p className="text-center text-lg leading-relaxed text-warm-white/80 [text-balance]">
         &ldquo;{props.text}&rdquo;
       </p>
       <div className="flex items-center justify-center space-x-4">
@@ -313,23 +317,23 @@ const components = {
         .filter((post) => post.publishedAt <= props.before)
         .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
         .slice(0, props.count)
-        .map((post: Record<string, unknown>) => (
-          <li key={post.slug}>
+        .map((post) => (
+          <li key={post.slug as string}>
             <Link
-              href={`/${post.type === "BlogPost" ? "blog" : "changelog"}/${
+              href={`/${(post as any).type === "BlogPost" ? "blog" : "changelog"}/${
                 post.slug
               }`}
               className="group flex items-center justify-between rounded-lg px-2 py-3 transition-colors hover:bg-warm-grey-2/20 active:bg-warm-grey-2/30 sm:px-4"
             >
               <div>
                 <p className="text-xs font-medium text-warm-white/60 group-hover:text-warm-white/80">
-                  {formatDate(post.publishedAt)}
+                  {formatDate(post.publishedAt as string)}
                 </p>
                 <h3 className="my-px text-base font-medium text-warm-white">
-                  {post.title}
+                  {post.title as string}
                 </h3>
                 <p className="line-clamp-1 text-sm text-warm-white/80 group-hover:text-warm-white">
-                  {post.summary}
+                  {post.summary as string}
                 </p>
               </div>
               <ExpandingArrow className="-ml-4 h-4 w-4 text-warm-white/60 group-hover:text-warm-white/80" />
@@ -365,7 +369,7 @@ const components = {
     }[]
   }) => {
     const MDXImage = (props: React.ImgHTMLAttributes<HTMLImageElement>) => {
-      return <ZoomImage {...props} />
+      return <ZoomImage src={String(props.src ?? "")} alt={props.alt ?? ""} width={Number(props.width) || 800} height={Number(props.height) || 400} />
     }
 
     return (
@@ -529,7 +533,7 @@ export function MDX({ code, images, className }: MDXProps) {
       (image) => image.src === props.src,
     )?.blurDataURL
 
-    return <ZoomImage {...props} blurDataURL={blurDataURL} />
+    return <ZoomImage src={String(props.src ?? "")} alt={props.alt ?? ""} width={Number(props.width) || 800} height={Number(props.height) || 600} blurDataURL={blurDataURL} />
   }
 
   return (

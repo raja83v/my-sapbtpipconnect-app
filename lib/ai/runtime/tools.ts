@@ -7,12 +7,15 @@ import type {
 } from "./types";
 import {
   createLLMLiteClient,
+  createClaudeClient,
   getOpenAIModelForKind,
   getGoogleModelForKind,
-  resolveProvider,
+  ensureConfig,
+  resolveProviderAsync,
   toAIError,
 } from "./provider";
 import { generateText } from "ai";
+import { getModelForKind } from "./models";
 
 function normalizeUsage(usage: {
   prompt_tokens?: number;
@@ -47,12 +50,22 @@ function toJsonSchema(schema: unknown) {
 export async function runWithTools(
   request: AIToolRequest
 ): Promise<AIToolResponse> {
-  const provider = resolveProvider(request.providerOverride);
+  await ensureConfig();
+  const provider = await resolveProviderAsync(request.providerOverride);
   const modelKind = request.modelKind || "default";
 
-  if (provider === "google") {
+  // AI SDK path (google, gemini, claude) — uses Vercel AI SDK generateText with tools
+  if (provider === "google" || provider === "gemini" || provider === "claude") {
+    let aiModel;
+    if (provider === "claude") {
+      const anthropic = await createClaudeClient();
+      aiModel = anthropic(getModelForKind(modelKind));
+    } else {
+      aiModel = getGoogleModelForKind(modelKind);
+    }
+
     const result = await generateText({
-      model: getGoogleModelForKind(modelKind),
+      model: aiModel,
       system: request.system,
       prompt: request.prompt,
       temperature: request.temperature,
@@ -86,8 +99,8 @@ export async function runWithTools(
     return {
       text: result.text,
       usage: normalizeUsageAI(result.usage),
-      provider: "google",
-      model: "google-fallback",
+      provider,
+      model: getModelForKind(modelKind),
       toolCalls,
     };
   }
@@ -176,12 +189,12 @@ export async function runWithTools(
     return {
       text: finalText,
       usage,
-      provider: "llmlite",
+      provider,
       model,
       toolCalls: executedToolCalls,
     };
   } catch (error) {
-    const aiError = toAIError("llmlite", error);
+    const aiError = toAIError(provider, error);
     if (aiError.retryable && process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
       const fallback = await generateText({
         model: getGoogleModelForKind(modelKind),

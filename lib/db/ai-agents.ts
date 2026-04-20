@@ -1,5 +1,10 @@
-import { prisma } from "@/lib/db";
-import type { Prisma, AIAgentType, AIAgentStatus } from "@prisma/client";
+import { db } from "@/lib/db";
+import { eq, and, count, sum, sql, desc } from "drizzle-orm";
+import {
+  aiAgentExecutions,
+  type AIAgentType,
+  type AIAgentStatus,
+} from "@/lib/db/schema";
 
 export async function createExecution(data: {
   agentType: AIAgentType;
@@ -8,8 +13,9 @@ export async function createExecution(data: {
   tenantId?: string;
   iFlowId?: string;
 }) {
-  return prisma.aIAgentExecution.create({
-    data: {
+  const [execution] = await db
+    .insert(aiAgentExecutions)
+    .values({
       agentType: data.agentType,
       status: "RUNNING",
       input: data.input,
@@ -19,8 +25,10 @@ export async function createExecution(data: {
       userId: data.userId,
       tenantId: data.tenantId,
       iFlowId: data.iFlowId,
-    },
-  });
+      updatedAt: new Date(),
+    })
+    .returning();
+  return execution;
 }
 
 export async function updateExecution(
@@ -34,11 +42,18 @@ export async function updateExecution(
     success?: boolean;
   }
 ) {
-  return prisma.aIAgentExecution.update({ where: { id }, data });
+  const [execution] = await db
+    .update(aiAgentExecutions)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(aiAgentExecutions.id, id))
+    .returning();
+  return execution;
 }
 
 export async function getExecutionById(id: string) {
-  return prisma.aIAgentExecution.findUnique({ where: { id } });
+  return db.query.aiAgentExecutions.findFirst({
+    where: eq(aiAgentExecutions.id, id),
+  }) ?? null;
 }
 
 export async function getExecutionsByUser(
@@ -52,20 +67,22 @@ export async function getExecutionsByUser(
 ) {
   const page = options?.page ?? 1;
   const pageSize = options?.pageSize ?? 20;
-  const skip = (page - 1) * pageSize;
+  const offset = (page - 1) * pageSize;
 
-  const where: Prisma.AIAgentExecutionWhereInput = { userId };
-  if (options?.agentType) where.agentType = options.agentType;
-  if (options?.status) where.status = options.status;
+  const conditions = [eq(aiAgentExecutions.userId, userId)];
+  if (options?.agentType) conditions.push(eq(aiAgentExecutions.agentType, options.agentType));
+  if (options?.status) conditions.push(eq(aiAgentExecutions.status, options.status));
+  const where = and(...conditions);
 
-  const [executions, total] = await Promise.all([
-    prisma.aIAgentExecution.findMany({
-      where,
-      skip,
-      take: pageSize,
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.aIAgentExecution.count({ where }),
+  const [executions, [{ total }]] = await Promise.all([
+    db
+      .select()
+      .from(aiAgentExecutions)
+      .where(where)
+      .orderBy(desc(aiAgentExecutions.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ total: count() }).from(aiAgentExecutions).where(where),
   ]);
 
   return { executions, total, page, pageSize };
@@ -77,34 +94,57 @@ export async function getExecutionsByType(
 ) {
   const page = options?.page ?? 1;
   const pageSize = options?.pageSize ?? 20;
-  const skip = (page - 1) * pageSize;
+  const offset = (page - 1) * pageSize;
 
-  const [executions, total] = await Promise.all([
-    prisma.aIAgentExecution.findMany({
-      where: { agentType },
-      skip,
-      take: pageSize,
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.aIAgentExecution.count({ where: { agentType } }),
+  const [executions, [{ total }]] = await Promise.all([
+    db
+      .select()
+      .from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.agentType, agentType))
+      .orderBy(desc(aiAgentExecutions.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db
+      .select({ total: count() })
+      .from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.agentType, agentType)),
   ]);
 
   return { executions, total };
 }
 
 export async function getAgentStats(userId?: string) {
-  const where: Prisma.AIAgentExecutionWhereInput = userId ? { userId } : {};
+  const baseWhere = userId ? eq(aiAgentExecutions.userId, userId) : undefined;
 
   const [totalExecutions, successCount, failCount, byType] = await Promise.all([
-    prisma.aIAgentExecution.count({ where }),
-    prisma.aIAgentExecution.count({ where: { ...where, success: true } }),
-    prisma.aIAgentExecution.count({ where: { ...where, status: "FAILED" } }),
-    prisma.aIAgentExecution.groupBy({
-      by: ["agentType"],
-      where,
-      _count: { agentType: true },
-      _sum: { tokensUsed: true },
-    }),
+    db
+      .select({ c: count() })
+      .from(aiAgentExecutions)
+      .where(baseWhere)
+      .then((r) => r[0].c),
+    db
+      .select({ c: count() })
+      .from(aiAgentExecutions)
+      .where(baseWhere ? and(baseWhere, eq(aiAgentExecutions.success, true)) : eq(aiAgentExecutions.success, true))
+      .then((r) => r[0].c),
+    db
+      .select({ c: count() })
+      .from(aiAgentExecutions)
+      .where(
+        baseWhere
+          ? and(baseWhere, eq(aiAgentExecutions.status, "FAILED"))
+          : eq(aiAgentExecutions.status, "FAILED")
+      )
+      .then((r) => r[0].c),
+    db
+      .select({
+        agentType: aiAgentExecutions.agentType,
+        count: count(),
+        totalTokens: sum(aiAgentExecutions.tokensUsed),
+      })
+      .from(aiAgentExecutions)
+      .where(baseWhere)
+      .groupBy(aiAgentExecutions.agentType),
   ]);
 
   return {
@@ -114,8 +154,8 @@ export async function getAgentStats(userId?: string) {
     successRate: totalExecutions > 0 ? successCount / totalExecutions : 0,
     byType: byType.map((t) => ({
       type: t.agentType,
-      count: t._count.agentType,
-      totalTokens: t._sum.tokensUsed ?? 0,
+      count: t.count,
+      totalTokens: Number(t.totalTokens ?? 0),
     })),
   };
 }

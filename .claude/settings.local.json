@@ -11,7 +11,9 @@
       "Bash(pnpm install:*)",
       "Bash(npx prisma generate:*)",
       "Bash(pnpm remove:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(pnpm build)",
+      "Bash(npx prisma migrate dev --name add-billing-models)"
     ]
   },
   "enableAllProjectMcpServers": true,

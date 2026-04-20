@@ -8,6 +8,12 @@ import { workspaceInvitationTemplate } from "./templates/workspace-invitation";
 import { emailVerificationTemplate } from "./templates/email-verification";
 import { passwordResetTemplate } from "./templates/password-reset";
 import { magicLinkTemplate } from "./templates/magic-link";
+import { subscriptionActivatedEmailTemplate } from "./templates/subscription-activated";
+import { paymentFailedEmailTemplate } from "./templates/payment-failed";
+import { subscriptionCanceledEmailTemplate } from "./templates/subscription-canceled";
+import { invoicePaidEmailTemplate } from "./templates/invoice-paid";
+import { usageWarningEmailTemplate } from "./templates/usage-warning";
+import { trialEndingEmailTemplate } from "./templates/trial-ending";
 
 /**
  * Type-safe email template registry
@@ -29,6 +35,12 @@ export const emailTemplates: EmailTemplateRegistry = {
   [EmailTemplateId.EMAIL_VERIFICATION]: emailVerificationTemplate,
   [EmailTemplateId.PASSWORD_RESET]: passwordResetTemplate,
   [EmailTemplateId.MAGIC_LINK]: magicLinkTemplate,
+  [EmailTemplateId.BILLING_SUBSCRIPTION_ACTIVATED]: subscriptionActivatedEmailTemplate,
+  [EmailTemplateId.BILLING_PAYMENT_FAILED]: paymentFailedEmailTemplate,
+  [EmailTemplateId.BILLING_SUBSCRIPTION_CANCELED]: subscriptionCanceledEmailTemplate,
+  [EmailTemplateId.BILLING_INVOICE_PAID]: invoicePaidEmailTemplate,
+  [EmailTemplateId.BILLING_USAGE_WARNING]: usageWarningEmailTemplate,
+  [EmailTemplateId.BILLING_TRIAL_ENDING]: trialEndingEmailTemplate,
 };
 
 /**

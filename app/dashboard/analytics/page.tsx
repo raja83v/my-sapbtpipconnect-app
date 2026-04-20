@@ -1,6 +1,8 @@
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { aiAgentExecutions } from "@/lib/db/schema";
+import { eq, count, sum, avg, desc, gte } from "drizzle-orm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -33,31 +35,34 @@ export default async function AnalyticsPage() {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const [aggregates, byAgentTypeRaw, recentExecutions] = await Promise.all([
-    prisma.aIAgentExecution.aggregate({
-      where: { userId: user.id, createdAt: { gte: thirtyDaysAgo } },
-      _count: { id: true },
-      _sum: { tokensUsed: true },
-      _avg: { duration: true },
-    }),
-    prisma.aIAgentExecution.groupBy({
-      by: ['agentType'],
-      where: { userId: user.id, createdAt: { gte: thirtyDaysAgo } },
-      _count: { id: true },
-    }),
-    prisma.aIAgentExecution.findMany({
-      where: { userId: user.id },
-      take: 50,
-      orderBy: { createdAt: 'desc' },
+  const [aggregatesRaw, byAgentTypeRaw, recentExecutions] = await Promise.all([
+    db.select({
+      countId: count(),
+      sumTokensUsed: sum(aiAgentExecutions.tokensUsed),
+      avgDuration: avg(aiAgentExecutions.duration),
+    }).from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.userId, user.id)),
+    db.select({
+      agentType: aiAgentExecutions.agentType,
+      countId: count(),
+    }).from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.userId, user.id))
+      .groupBy(aiAgentExecutions.agentType),
+    db.query.aiAgentExecutions.findMany({
+      where: eq(aiAgentExecutions.userId, user.id),
+      limit: 50,
+      orderBy: desc(aiAgentExecutions.createdAt),
     }),
   ]);
 
+  const aggregates = aggregatesRaw[0];
+
   const stats = {
-    totalExecutions: aggregates._count.id,
-    totalTokensUsed: aggregates._sum.tokensUsed || 0,
-    avgDuration: aggregates._avg.duration || 0,
+    totalExecutions: aggregates.countId,
+    totalTokensUsed: Number(aggregates.sumTokensUsed) || 0,
+    avgDuration: Number(aggregates.avgDuration) || 0,
     byAgentType: Object.fromEntries(
-      byAgentTypeRaw.map(s => [s.agentType, s._count.id])
+      byAgentTypeRaw.map(s => [s.agentType, s.countId])
     ) as Record<string, number>,
   };
 

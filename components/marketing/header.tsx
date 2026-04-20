@@ -124,6 +124,7 @@ const mobileLinks: MobileLink[] = [
     groupName: "Solutions",
     links: [...useCases, ...contentLinks],
   },
+  { name: "Pricing", href: "/#pricing" },
   { name: "Help", href: "/help" },
   { name: "Blog", href: "/blog" },
   { name: "GitHub", href: siteConfig.links.github },
@@ -317,6 +318,11 @@ const NavMenu = () => {
         <NavigationMenuItem value="solutions">
           <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
             <Link href="#">Solutions</Link>
+          </NavigationMenuLink>
+        </NavigationMenuItem>
+        <NavigationMenuItem value="pricing">
+          <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
+            <Link href="/#pricing">Pricing</Link>
           </NavigationMenuLink>
         </NavigationMenuItem>
         <NavigationMenuItem value="help">

@@ -29,10 +29,10 @@ export async function generateMetadata({
   const { title, description } = category;
 
   return constructMetadata({
-    title: `${title} – HagenKit Help Center`,
+    title: `${title} – CPI Connect Help Center`,
     description:
       description ||
-      "Browse curated guides and how-tos from the HagenKit support team.",
+      "Browse curated guides and how-tos from the CPI Connect support team.",
     image: `/api/og/help?title=${encodeURIComponent(
       title
     )}&summary=${encodeURIComponent(description)}`,
@@ -65,12 +65,12 @@ export default async function HelpCategory({
 
   return (
     <>
-      <MaxWidthWrapper className="flex max-w-screen-lg flex-col py-10 mt-28">
+      <MaxWidthWrapper className="flex max-w-5xl flex-col py-10 mt-28">
         <SearchButton />
       </MaxWidthWrapper>
 
       <div className="min-h-[50vh] border border-gray-200 bg-white/50 shadow-[inset_10px_-50px_94px_0_rgb(199,199,199,0.2)] backdrop-blur-lg">
-        <MaxWidthWrapper className="flex max-w-screen-lg flex-col py-10">
+        <MaxWidthWrapper className="flex max-w-5xl flex-col py-10">
           <div className="flex items-center space-x-2">
             <Link
               href="/help"

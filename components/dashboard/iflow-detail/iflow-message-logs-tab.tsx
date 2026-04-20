@@ -346,9 +346,7 @@ export function IFlowMessageLogsTab({ iflow }: IFlowMessageLogsTabProps) {
                                   {/* AI Error Explainer */}
                                   <ErrorExplainer
                                     iflowId={iflow.id}
-                                    executionId={log.id}
-                                    errorMessage={log.errorMessage || undefined}
-                                    errorCategory={log.errorCategory || undefined}
+                                    messageId={log.id}
                                   />
                                 </div>
                               )}

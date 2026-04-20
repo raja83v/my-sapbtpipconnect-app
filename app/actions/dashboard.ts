@@ -1,9 +1,10 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, aiAgentExecutions, iFlows, iFlowExecutions } from "@/lib/db/schema";
+import { eq, and, count, sum, avg, desc, inArray, gte } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
-import { cache } from "react";
 
 export interface DashboardStats {
   totalTenants: number;
@@ -78,7 +79,7 @@ export interface DashboardData {
   executionTrend: { date: string; success: number; failed: number }[];
 }
 
-export const getDashboardData = cache(async (): Promise<ActionResult<DashboardData>> => {
+export async function getDashboardData(): Promise<ActionResult<DashboardData>> {
   try {
     const currentUser = await getCurrentUser();
 
@@ -87,9 +88,9 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
     }
 
     // Get user's accessible tenants via memberships
-    const memberships = await prisma.tenantMember.findMany({
-      where: { userId: currentUser.id },
-      include: { tenant: true },
+    const memberships = await db.query.tenantMembers.findMany({
+      where: eq(tenantMembers.userId, currentUser.id),
+      with: { tenant: true },
     });
 
     if (memberships.length === 0) {
@@ -111,19 +112,21 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
     const accessibleTenantIds = memberships.map((m) => m.tenantId);
 
     // Get AI agent usage stats
-    const aiStatsRaw = await prisma.aIAgentExecution.groupBy({
-      by: ["agentType"],
-      where: { userId: currentUser.id },
-      _count: { agentType: true },
-      _sum: { tokensUsed: true },
-    });
-    const totalAIExecutions = await prisma.aIAgentExecution.count({
-      where: { userId: currentUser.id },
-    });
-    const totalTokensUsed = await prisma.aIAgentExecution.aggregate({
-      where: { userId: currentUser.id },
-      _sum: { tokensUsed: true },
-    });
+    const aiStatsRaw = await db.select({
+      agentType: aiAgentExecutions.agentType,
+      countAgentType: count(),
+      sumTokensUsed: sum(aiAgentExecutions.tokensUsed),
+    }).from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.userId, currentUser.id))
+      .groupBy(aiAgentExecutions.agentType);
+
+    const [{ c: totalAIExecutions }] = await db.select({ c: count() })
+      .from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.userId, currentUser.id));
+
+    const [{ total: totalTokensUsedVal }] = await db.select({ total: sum(aiAgentExecutions.tokensUsed) })
+      .from(aiAgentExecutions)
+      .where(eq(aiAgentExecutions.userId, currentUser.id));
 
     // Process each tenant
     const tenantData: TenantSummary[] = [];
@@ -143,41 +146,44 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
       const tenant = membership.tenant;
 
       // Get iFlow status counts
-      const statusCounts = await prisma.iFlow.groupBy({
-        by: ["status"],
-        where: { tenantId: tenant.id },
-        _count: { status: true },
-      });
+      const statusCounts = await db.select({
+        status: iFlows.status,
+        statusCount: count(),
+      }).from(iFlows)
+        .where(eq(iFlows.tenantId, tenant.id))
+        .groupBy(iFlows.status);
 
-      const iflowTotal = statusCounts.reduce((sum, s) => sum + s._count.status, 0);
-      const started = statusCounts.find((s) => s.status === "STARTED")?._count.status ?? 0;
-      const stopped = statusCounts.find((s) => s.status === "STOPPED")?._count.status ?? 0;
-      const error = statusCounts.find((s) => s.status === "ERROR")?._count.status ?? 0;
+      const iflowTotal = statusCounts.reduce((s, r) => s + r.statusCount, 0);
+      const started = statusCounts.find((s) => s.status === "STARTED")?.statusCount ?? 0;
+      const stopped = statusCounts.find((s) => s.status === "STOPPED")?.statusCount ?? 0;
+      const error = statusCounts.find((s) => s.status === "ERROR")?.statusCount ?? 0;
 
       // Get execution stats for last 30 days
-      const tenantIFlowIds = await prisma.iFlow.findMany({
-        where: { tenantId: tenant.id },
-        select: { id: true },
-      });
+      const tenantIFlowIds = await db.select({ id: iFlows.id })
+        .from(iFlows)
+        .where(eq(iFlows.tenantId, tenant.id));
       const iFlowIds = tenantIFlowIds.map((i) => i.id);
 
       const execCounts = iFlowIds.length > 0
-        ? await prisma.iFlowExecution.groupBy({
-            by: ["status"],
-            where: { iFlowId: { in: iFlowIds }, startTime: { gte: thirtyDaysAgo } },
-            _count: { status: true },
-          })
+        ? await db.select({
+            status: iFlowExecutions.status,
+            statusCount: count(),
+          }).from(iFlowExecutions)
+            .where(and(
+              inArray(iFlowExecutions.iFlowId, iFlowIds),
+              gte(iFlowExecutions.startTime, thirtyDaysAgo),
+            ))
+            .groupBy(iFlowExecutions.status)
         : [];
 
-      const tenantTotalExecs = execCounts.reduce((sum, s) => sum + s._count.status, 0);
-      const tenantCompleted = execCounts.find((s) => s.status === "COMPLETED")?._count.status ?? 0;
-      const tenantFailed = execCounts.find((s) => s.status === "FAILED")?._count.status ?? 0;
+      const tenantTotalExecs = execCounts.reduce((s, r) => s + r.statusCount, 0);
+      const tenantCompleted = execCounts.find((s) => s.status === "COMPLETED")?.statusCount ?? 0;
+      const tenantFailed = execCounts.find((s) => s.status === "FAILED")?.statusCount ?? 0;
 
       // Get iFlows for status summary - prioritize STARTED
-      const iflows = await prisma.iFlow.findMany({
-        where: { tenantId: tenant.id },
-        take: 20,
-        orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+      const iflows = await db.query.iFlows.findMany({
+        where: eq(iFlows.tenantId, tenant.id),
+        limit: 20,
       });
 
       const sortedIFlows = [...iflows].sort((a, b) => {
@@ -224,19 +230,17 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
     });
 
     // Get recent executions across all accessible tenants
-    const allIFlowIds = await prisma.iFlow.findMany({
-      where: { tenantId: { in: accessibleTenantIds } },
-      select: { id: true, name: true, tenantId: true },
-    });
+    const allIFlowIds = await db.select({ id: iFlows.id, name: iFlows.name, tenantId: iFlows.tenantId })
+      .from(iFlows)
+      .where(inArray(iFlows.tenantId, accessibleTenantIds));
     const iFlowMap = new Map(allIFlowIds.map((i) => [i.id, i]));
     const tenantMap = new Map(memberships.map((m) => [m.tenantId, m.tenant.name]));
 
     const recentExecs = allIFlowIds.length > 0
-      ? await prisma.iFlowExecution.findMany({
-          where: { iFlowId: { in: allIFlowIds.map((i) => i.id) } },
-          take: 10,
-          orderBy: { startTime: "desc" },
-        })
+      ? await db.select().from(iFlowExecutions)
+          .where(inArray(iFlowExecutions.iFlowId, allIFlowIds.map((i) => i.id)))
+          .orderBy(desc(iFlowExecutions.startTime))
+          .limit(10)
       : [];
 
     const recentExecutions: RecentExecution[] = recentExecs.map((e) => {
@@ -259,8 +263,8 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
     // Format AI agent usage
     const aiAgentUsage: AIAgentUsage[] = aiStatsRaw.map((s) => ({
       agentType: s.agentType,
-      count: s._count.agentType,
-      tokensUsed: s._sum.tokensUsed ?? 0,
+      count: s.countAgentType,
+      tokensUsed: Number(s.sumTokensUsed) ?? 0,
     }));
 
     // Build execution trend (last 7 days)
@@ -283,6 +287,8 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
       metadata: { duration: e.duration, tenantName: e.tenantName },
     }));
 
+    // Fetch subscription info for cloud mode
+
     return {
       success: true,
       data: {
@@ -298,7 +304,7 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
           failedExecutions,
           successRate,
           totalAIExecutions,
-          totalTokensUsed: totalTokensUsed._sum.tokensUsed ?? 0,
+          totalTokensUsed: Number(totalTokensUsedVal) ?? 0,
         },
         tenants: tenantData,
         recentExecutions,
@@ -312,4 +318,4 @@ export const getDashboardData = cache(async (): Promise<ActionResult<DashboardDa
     console.error("Error fetching dashboard data:", error);
     return { success: false, error: "Failed to fetch dashboard data" };
   }
-});
+}

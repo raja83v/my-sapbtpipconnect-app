@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  IconCreditCard,
   IconDotsVertical,
   IconLogout,
   IconMoon,
@@ -27,6 +28,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/components/auth/auth-provider";
+import { useDeploymentMode } from "@/hooks/use-deployment-mode";
 import { useRouter } from "next/navigation";
 
 export function NavUser({
@@ -40,6 +42,7 @@ export function NavUser({
 }) {
   const { isMobile } = useSidebar();
   const { signOut } = useAuth();
+  const { isCloud } = useDeploymentMode();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
 
@@ -114,6 +117,14 @@ export function NavUser({
                 Settings
               </Link>
             </DropdownMenuItem>
+            {isCloud && (
+              <DropdownMenuItem asChild>
+                <Link href="/dashboard/settings?section=billing" className="cursor-pointer">
+                  <IconCreditCard className="mr-2 h-4 w-4" />
+                  Billing & Plans
+                </Link>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               className="cursor-pointer"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}

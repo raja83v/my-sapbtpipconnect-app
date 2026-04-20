@@ -37,7 +37,7 @@ export function AcceptInvitationClient({
 
         if (result.success && result.data) {
           setState("success");
-          setWorkspaceId(result.data.workspaceId);
+          setWorkspaceId(result.data.tenantId);
           toast.success("Invitation accepted successfully!");
 
           // Redirect to dashboard after 2 seconds with hard navigation

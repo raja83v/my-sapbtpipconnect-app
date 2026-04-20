@@ -15,6 +15,14 @@ export enum EmailTemplateId {
   // Authentication
   PASSWORD_RESET = "password-reset",
   MAGIC_LINK = "magic-link",
+
+  // Billing
+  BILLING_SUBSCRIPTION_ACTIVATED = "billing-subscription-activated",
+  BILLING_PAYMENT_FAILED = "billing-payment-failed",
+  BILLING_SUBSCRIPTION_CANCELED = "billing-subscription-canceled",
+  BILLING_INVOICE_PAID = "billing-invoice-paid",
+  BILLING_USAGE_WARNING = "billing-usage-warning",
+  BILLING_TRIAL_ENDING = "billing-trial-ending",
 }
 
 /**
@@ -49,6 +57,56 @@ export type EmailTemplateData = {
     firstName: string;
     magicLinkUrl: string;
     expiresInMinutes: number;
+  };
+
+  [EmailTemplateId.BILLING_SUBSCRIPTION_ACTIVATED]: {
+    firstName: string;
+    planName: string;
+    priceMonthly: string;
+    periodEnd: string;
+    dashboardUrl: string;
+    billingPortalUrl: string;
+  };
+
+  [EmailTemplateId.BILLING_PAYMENT_FAILED]: {
+    firstName: string;
+    planName: string;
+    amount: string;
+    retryDate: string;
+    billingPortalUrl: string;
+  };
+
+  [EmailTemplateId.BILLING_SUBSCRIPTION_CANCELED]: {
+    firstName: string;
+    planName: string;
+    accessUntil: string;
+    resubscribeUrl: string;
+  };
+
+  [EmailTemplateId.BILLING_INVOICE_PAID]: {
+    firstName: string;
+    invoiceNumber: string;
+    amount: string;
+    periodStart: string;
+    periodEnd: string;
+    invoiceUrl?: string;
+    billingPortalUrl: string;
+  };
+
+  [EmailTemplateId.BILLING_USAGE_WARNING]: {
+    firstName: string;
+    resource: string;
+    current: number;
+    limit: number;
+    percentage: number;
+    upgradeUrl: string;
+  };
+
+  [EmailTemplateId.BILLING_TRIAL_ENDING]: {
+    firstName: string;
+    daysLeft: number;
+    trialEndsDate: string;
+    upgradeUrl: string;
   };
 };
 

@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, users } from "@/lib/db/schema";
+import { eq, and, asc } from "drizzle-orm";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { TenantMemberWithUser } from "@/types/workspace";
@@ -19,10 +21,8 @@ async function checkTenantAdmin(
   userId: string,
   tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await prisma.tenantMember.findUnique({
-    where: {
-      userId_tenantId: { userId, tenantId },
-    },
+  const member = await db.query.tenantMembers.findFirst({
+    where: and(eq(tenantMembers.userId, userId), eq(tenantMembers.tenantId, tenantId)),
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -49,13 +49,8 @@ export async function getTenantMembers(
     }
 
     // Check if user is a member of the tenant
-    const isMember = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId,
-        },
-      },
+    const isMember = await db.query.tenantMembers.findFirst({
+      where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
     });
 
     if (!isMember) {
@@ -63,21 +58,21 @@ export async function getTenantMembers(
     }
 
     // Get all members with user info
-    const members = await prisma.tenantMember.findMany({
-      where: { tenantId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-            status: true,
-          },
-        },
+    const members = await db.select({
+      id: tenantMembers.id,
+      role: tenantMembers.role,
+      joinedAt: tenantMembers.joinedAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        image: users.image,
+        status: users.status,
       },
-      orderBy: { joinedAt: "asc" },
-    });
+    }).from(tenantMembers)
+      .innerJoin(users, eq(tenantMembers.userId, users.id))
+      .where(eq(tenantMembers.tenantId, tenantId))
+      .orderBy(asc(tenantMembers.joinedAt));
 
     const membersWithUser: TenantMemberWithUser[] = members.map((member) => ({
       id: member.id,
@@ -114,20 +109,23 @@ export async function updateMemberRole(
     const validatedData = updateMemberRoleSchema.parse(input);
 
     // Get member info
-    const member = await prisma.tenantMember.findUnique({
-      where: { id: validatedData.memberId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-            status: true,
-          },
-        },
+    const member = await db.select({
+      id: tenantMembers.id,
+      role: tenantMembers.role,
+      tenantId: tenantMembers.tenantId,
+      userId: tenantMembers.userId,
+      joinedAt: tenantMembers.joinedAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        image: users.image,
+        status: users.status,
       },
-    });
+    }).from(tenantMembers)
+      .innerJoin(users, eq(tenantMembers.userId, users.id))
+      .where(eq(tenantMembers.id, validatedData.memberId))
+      .then(rows => rows[0] ?? null);
 
     if (!member) {
       return { success: false, error: "Member not found" };
@@ -151,21 +149,25 @@ export async function updateMemberRole(
     }
 
     // Update role
-    const updatedMember = await prisma.tenantMember.update({
-      where: { id: validatedData.memberId },
-      data: { role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-            status: true,
-          },
-        },
+    await db.update(tenantMembers)
+      .set({ role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" })
+      .where(eq(tenantMembers.id, validatedData.memberId));
+
+    const updatedMember = await db.select({
+      id: tenantMembers.id,
+      role: tenantMembers.role,
+      joinedAt: tenantMembers.joinedAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        image: users.image,
+        status: users.status,
       },
-    });
+    }).from(tenantMembers)
+      .innerJoin(users, eq(tenantMembers.userId, users.id))
+      .where(eq(tenantMembers.id, validatedData.memberId))
+      .then(rows => rows[0]!);
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -205,8 +207,8 @@ export async function removeMember(
     const validatedData = removeMemberSchema.parse(input);
 
     // Get member info
-    const member = await prisma.tenantMember.findUnique({
-      where: { id: validatedData.memberId },
+    const member = await db.query.tenantMembers.findFirst({
+      where: eq(tenantMembers.id, validatedData.memberId),
     });
 
     if (!member) {
@@ -223,9 +225,7 @@ export async function removeMember(
     }
 
     // Remove member
-    await prisma.tenantMember.delete({
-      where: { id: validatedData.memberId },
-    });
+    await db.delete(tenantMembers).where(eq(tenantMembers.id, validatedData.memberId));
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -241,4 +241,8 @@ export async function removeMember(
 }
 
 // Legacy aliases - these map to the same underlying tenant operations
-export const getWorkspaceMembers = getTenantMembers;
+export async function getWorkspaceMembers(
+  ...args: Parameters<typeof getTenantMembers>
+) {
+  return getTenantMembers(...args);
+}

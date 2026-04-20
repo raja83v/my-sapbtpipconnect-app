@@ -1,5 +1,7 @@
 import { getCurrentUser } from "@/lib/auth-helpers";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { iFlowPipelines } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -14,10 +16,12 @@ export async function GET(
 
     const { id } = await params;
 
-    const pipeline = await prisma.iFlowPipeline.findUnique({
-      where: { id },
-      include: {
-        agentLogs: { orderBy: { startedAt: "asc" } },
+    const pipeline = await db.query.iFlowPipelines.findFirst({
+      where: eq(iFlowPipelines.id, id),
+      with: {
+        agentLogs: {
+          orderBy: (agentLogs, { asc }) => [asc(agentLogs.startedAt)],
+        },
       },
     });
 

@@ -97,7 +97,7 @@ export default function Home() {
                 </Button>
               </div>
               <span className="text-muted-foreground mt-4 block text-center text-sm">
-                Free forever &middot; Self-hosted &middot; Open source
+                Cloud hosted or self-hosted &middot; Always open source
               </span>
             </div>
           </div>
@@ -235,18 +235,18 @@ export default function Home() {
         </Container>
       </section>
 
-      {/* Why Open Source Section */}
-      <section id="open-source" className="py-12 sm:py-16 bg-muted/50">
+      {/* Why CPI Connect Section */}
+      <section id="why-cpi-connect" className="py-12 sm:py-16 bg-muted/50">
         <Container>
           <div className="mx-auto max-w-2xl text-center mb-12">
             <Badge className="mb-4" variant="outline">
-              Open Source
+              Why CPI Connect
             </Badge>
             <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-              Why Open Source?
+              Why CPI Connect?
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
-              CPI Connect is built in the open because great tools should be accessible to everyone
+              Open source at its core, available as a managed cloud service or self-hosted on your infrastructure
             </p>
           </div>
 
@@ -254,9 +254,9 @@ export default function Home() {
             <Card>
               <CardHeader>
                 <Heart className="h-10 w-10 text-indigo-500 mb-2" />
-                <CardTitle>Free Forever</CardTitle>
+                <CardTitle>Open Source & Transparent</CardTitle>
                 <CardDescription>
-                  No pricing tiers, no feature gates, no surprise bills. Every feature is available to every user, always.
+                  Every feature is available on every plan. No hidden paywalls, no feature gates. Self-hosted users get the full experience, free forever.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -264,9 +264,9 @@ export default function Home() {
             <Card>
               <CardHeader>
                 <Server className="h-10 w-10 text-indigo-500 mb-2" />
-                <CardTitle>Self-Hosted</CardTitle>
+                <CardTitle>Your Choice of Deployment</CardTitle>
                 <CardDescription>
-                  Run CPI Connect on your own infrastructure. Docker Compose, Kubernetes, or bare metal — you choose.
+                  Run it on our cloud for zero maintenance, or self-host with Docker Compose, Kubernetes, or bare metal — same codebase, your rules.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -276,7 +276,7 @@ export default function Home() {
                 <Lock className="h-10 w-10 text-indigo-500 mb-2" />
                 <CardTitle>Data Ownership</CardTitle>
                 <CardDescription>
-                  Your SAP credentials and integration data never leave your network. Full control, zero vendor lock-in.
+                  Your SAP credentials and integration data never leave your network when self-hosted. Full control, zero vendor lock-in.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -471,6 +471,14 @@ export default function Home() {
                 variant="outline"
                 className="px-8"
               >
+                <Link href="#pricing">View Pricing</Link>
+              </Button>
+              <Button
+                asChild
+                size="lg"
+                variant="ghost"
+                className="px-8"
+              >
                 <Link href={siteConfig.links.github} target="_blank" rel="noopener noreferrer">
                   <Github className="mr-2 h-4 w-4" />
                   View on GitHub
@@ -478,7 +486,7 @@ export default function Home() {
               </Button>
             </div>
             <p className="mt-6 text-sm text-muted-foreground">
-              Free forever &middot; Self-hosted &middot; Open source
+              Cloud hosted or self-hosted &middot; Always open source
             </p>
           </div>
         </Container>

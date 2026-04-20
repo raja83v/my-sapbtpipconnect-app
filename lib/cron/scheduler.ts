@@ -1,13 +1,12 @@
-import cron from "node-cron";
+import cron, { type ScheduledTask } from "node-cron";
 
-let scheduledTasks: cron.ScheduledTask[] = [];
+let scheduledTasks: ScheduledTask[] = [];
 
 /**
  * Start all cron jobs.
  * Called from instrumentation.ts on server boot.
  */
 export function startScheduler() {
-  console.log("[Cron] Starting scheduler...");
 
   // Sync all tenants every 5 minutes
   const syncTask = cron.schedule("*/5 * * * *", async () => {
@@ -31,17 +30,25 @@ export function startScheduler() {
   });
   scheduledTasks.push(cleanupTask);
 
-  console.log("[Cron] Scheduler started with 2 jobs");
+  // Send trial-ending reminder emails once per day at 09:00 UTC
+  const trialReminderTask = cron.schedule("0 9 * * *", async () => {
+    try {
+      const { checkExpiringTrials } = await import("@/lib/cron/jobs/trial-reminders");
+      await checkExpiringTrials();
+    } catch (error) {
+      console.error("[Cron] Trial reminders failed:", error);
+    }
+  });
+  scheduledTasks.push(trialReminderTask);
+
 }
 
 /**
  * Stop all cron jobs.
  */
 export function stopScheduler() {
-  console.log("[Cron] Stopping scheduler...");
   for (const task of scheduledTasks) {
     task.stop();
   }
   scheduledTasks = [];
-  console.log("[Cron] Scheduler stopped");
 }

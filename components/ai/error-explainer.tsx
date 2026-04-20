@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sparkles, X, Loader2 } from "lucide-react";
@@ -12,11 +12,32 @@ interface ErrorExplainerProps {
   iflowId: string;
 }
 
+const PROVIDER_LABELS: Record<string, string> = {
+  litellm: "LiteLLM",
+  openai: "OpenAI",
+  claude: "Claude",
+  gemini: "Google Gemini",
+};
+
 export function ErrorExplainer({ messageId, iflowId }: ErrorExplainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [diagnosis, setDiagnosis] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [modelLabel, setModelLabel] = useState("AI");
+
+  useEffect(() => {
+    fetch("/api/ai/config")
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data?.config) {
+          const providerName = PROVIDER_LABELS[data.config.provider] || data.config.provider;
+          const model = data.config.defaultModel || "";
+          setModelLabel(model ? `${providerName} (${model})` : providerName);
+        }
+      })
+      .catch(() => {/* keep default */});
+  }, []);
 
   const handleExplain = async () => {
     setIsOpen(true);
@@ -61,7 +82,7 @@ export function ErrorExplainer({ messageId, iflowId }: ErrorExplainerProps) {
                 AI Error Diagnosis
               </CardTitle>
               <CardDescription>
-                Google Gemini Flash analyzing your integration error
+                {modelLabel} analyzing your integration error
               </CardDescription>
             </div>
             <Button

@@ -8,11 +8,11 @@ import { Label } from "@/components/ui/label";
 import { completeOnboarding } from "@/app/actions/onboarding";
 import { toast } from "sonner";
 import {
-  IconInnerShadowTop,
   IconFolder,
   IconCheck,
   IconRocket,
 } from "@tabler/icons-react";
+import { Cloud } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import confetti from "canvas-confetti";
@@ -138,7 +138,7 @@ export function OnboardingFlow({ userName, userEmail }: OnboardingFlowProps) {
       <div className="relative hidden h-full flex-col bg-muted p-10 text-white dark:border-r lg:flex">
         <div className="absolute inset-0 bg-zinc-900" />
         <div className="relative z-20 flex items-center text-lg font-medium">
-          <IconInnerShadowTop className="mr-2 h-6 w-6" />
+          <Cloud className="mr-2 h-6 w-6" />
           {siteConfig.name}
         </div>
         <div className="relative z-20 mt-auto">
@@ -162,7 +162,7 @@ export function OnboardingFlow({ userName, userEmail }: OnboardingFlowProps) {
                 <div className="relative">
                   <Image
                     src="https://pbs.twimg.com/profile_images/1706595242009387008/_mNR89Xa_400x400.jpg"
-                    alt="Codehagen"
+                    alt="CPI Connect Team"
                     width={96}
                     height={96}
                     className="rounded-full border-4 border-primary/20 shadow-lg"
@@ -174,8 +174,8 @@ export function OnboardingFlow({ userName, userEmail }: OnboardingFlowProps) {
                     Nice to meet you! ✌️
                   </h1>
                   <p className="text-sm text-muted-foreground">
-                    I&apos;m {siteConfig.name}, the founder of {siteConfig.name}
-                    . <br /> To start, why don&apos;t you introduce yourself :)
+                    Welcome to {siteConfig.name}!
+                    <br /> To start, why don&apos;t you introduce yourself :)
                   </p>
                 </div>
               </div>
@@ -229,12 +229,12 @@ export function OnboardingFlow({ userName, userEmail }: OnboardingFlowProps) {
               <p className="px-8 text-center text-sm text-muted-foreground">
                 Need help? Message us{" "}
                 <a
-                  href="https://x.com/codehagen"
+                  href={siteConfig.links.twitter}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline underline-offset-4 hover:text-primary"
                 >
-                  x.com/codehagen
+                  {siteConfig.links.twitter.replace("https://", "")}
                 </a>
               </p>
             </>
@@ -502,12 +502,12 @@ export function OnboardingFlow({ userName, userEmail }: OnboardingFlowProps) {
               <p className="px-8 text-center text-sm text-muted-foreground">
                 Need help? Message us{" "}
                 <a
-                  href="https://x.com/codehagen"
+                  href={siteConfig.links.twitter}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline underline-offset-4 hover:text-primary"
                 >
-                  x.com/codehagen
+                  {siteConfig.links.twitter.replace("https://", "")}
                 </a>
               </p>
             </>

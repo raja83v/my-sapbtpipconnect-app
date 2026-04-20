@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { IFlowDescription, IFlowDesign, RFCAdapterConfig, IDocAdapterConfig, XIAdapterConfig } from "../types";
-import { generateIFlowDesign } from "@/app/actions/iflow-creator";
+import { IFlowDescription, IFlowDesign, RFCAdapterConfig, IDocAdapterConfig, XIAdapterConfig, CatalogSearchStatus } from "../types";
+import { generateIFlowDesign, searchCatalogForPatterns } from "@/app/actions/iflow-creator";
+import type { CatalogPatternReference } from "@/types/catalog";
 import {
     ArrowLeft,
     Loader2,
@@ -18,6 +19,9 @@ import {
     Shield,
     TrendingUp,
     RefreshCw,
+    Search,
+    BookOpen,
+    ChevronDown,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { RFCAdapterCard } from "../components/rfc-adapter-card";
@@ -30,6 +34,9 @@ interface AIDesignReviewStepProps {
     onChange: (design: IFlowDesign) => void;
     onNext: () => void;
     onBack: () => void;
+    tenantId?: string;
+    catalogPatterns?: CatalogPatternReference[];
+    onCatalogPatternsChange?: (patterns: CatalogPatternReference[], status: CatalogSearchStatus, warnings?: string[]) => void;
 }
 
 export function AIDesignReviewStep({
@@ -38,17 +45,54 @@ export function AIDesignReviewStep({
     onChange,
     onNext,
     onBack,
+    tenantId,
+    catalogPatterns: initialCatalogPatterns,
+    onCatalogPatternsChange,
 }: AIDesignReviewStepProps) {
     const [design, setDesign] = useState<IFlowDesign | null>(value || null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [catalogPatterns, setCatalogPatterns] = useState<CatalogPatternReference[]>(initialCatalogPatterns || []);
+    const [catalogStatus, setCatalogStatus] = useState<CatalogSearchStatus>(
+        initialCatalogPatterns && initialCatalogPatterns.length > 0 ? "found" : "idle"
+    );
+    const [catalogWarnings, setCatalogWarnings] = useState<string[]>([]);
+    const [progressPhase, setProgressPhase] = useState<"catalog" | "generating">("catalog");
 
     const handleGenerate = async () => {
         setLoading(true);
         setError(null);
 
+        let patterns = catalogPatterns;
+
+        // Phase 1: Search catalog for reference patterns (if tenant is available)
+        if (tenantId && catalogStatus === "idle") {
+            setProgressPhase("catalog");
+            setCatalogStatus("searching");
+            try {
+                const catalogResult = await searchCatalogForPatterns(tenantId, description);
+                if (catalogResult.success && catalogResult.data) {
+                    patterns = catalogResult.data.patterns;
+                    setCatalogPatterns(patterns);
+                    const newStatus = patterns.length > 0 ? "found" : "not-found";
+                    setCatalogStatus(newStatus);
+                    setCatalogWarnings(catalogResult.data.warnings);
+                    onCatalogPatternsChange?.(patterns, newStatus, catalogResult.data.warnings);
+                } else {
+                    setCatalogStatus("not-found");
+                    onCatalogPatternsChange?.([], "not-found");
+                }
+            } catch {
+                setCatalogStatus("error");
+                onCatalogPatternsChange?.([], "error");
+                // Non-blocking — proceed without catalog patterns
+            }
+        }
+
+        // Phase 2: Generate design with AI
+        setProgressPhase("generating");
         try {
-            const result = await generateIFlowDesign(description);
+            const result = await generateIFlowDesign(description, patterns.length > 0 ? patterns : undefined);
 
             if (result.success && result.data) {
                 setDesign(result.data);
@@ -81,11 +125,38 @@ export function AIDesignReviewStep({
             <div className="flex flex-col items-center justify-center py-16 space-y-4">
                 <Loader2 className="h-12 w-12 animate-spin text-primary" />
                 <div className="text-center space-y-2">
-                    <h3 className="text-lg font-semibold">Generating iFlow Design...</h3>
+                    <h3 className="text-lg font-semibold">
+                        {progressPhase === "catalog"
+                            ? "Searching SAP Catalog for Reference Patterns\u2026"
+                            : "Generating iFlow Design\u2026"}
+                    </h3>
                     <p className="text-sm text-muted-foreground max-w-md">
-                        Our AI is analyzing your requirements and designing a complete integration flow.
-                        This may take 10-30 seconds.
+                        {progressPhase === "catalog"
+                            ? "Looking for matching SAP standard integration packages to guide the design."
+                            : "Our AI is analyzing your requirements and designing a complete integration flow. This may take 10\u201330\u00a0seconds."}
                     </p>
+                    {/* Step indicator */}
+                    <div className="flex items-center justify-center gap-3 pt-2">
+                        <div className={`flex items-center gap-1.5 text-xs ${progressPhase === "catalog" ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                            {catalogStatus === "found" ? (
+                                <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                            ) : progressPhase === "catalog" ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                            )}
+                            Catalog Search
+                        </div>
+                        <div className="h-px w-6 bg-border" />
+                        <div className={`flex items-center gap-1.5 text-xs ${progressPhase === "generating" ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                            {progressPhase === "generating" ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <div className="h-3.5 w-3.5 rounded-full border border-muted-foreground/40" />
+                            )}
+                            AI Design
+                        </div>
+                    </div>
                 </div>
             </div>
         );
@@ -172,6 +243,60 @@ export function AIDesignReviewStep({
                     Regenerate
                 </Button>
             </div>
+
+            {/* Catalog Reference Patterns */}
+            {catalogPatterns.length > 0 && (
+                <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base flex items-center gap-2">
+                            <BookOpen className="h-4 w-4 text-blue-600" />
+                            Based on SAP Standard Patterns
+                        </CardTitle>
+                        <CardDescription>
+                            Design guided by {catalogPatterns.length} matching SAP catalog package{catalogPatterns.length > 1 ? "s" : ""}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                        {catalogPatterns.map((pattern, idx) => (
+                            <details key={idx} className="group">
+                                <summary className="flex items-center gap-2 cursor-pointer text-sm font-medium hover:text-primary">
+                                    <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                                    {pattern.packageName}
+                                    <Badge variant="outline" className="ml-auto text-xs">
+                                        {(pattern.relevanceScore * 100).toFixed(0)}% match
+                                    </Badge>
+                                </summary>
+                                <div className="mt-2 ml-5 text-xs text-muted-foreground space-y-1">
+                                    {pattern.packageDescription && <p>{pattern.packageDescription}</p>}
+                                    {pattern.adapters.length > 0 && (
+                                        <p>
+                                            <span className="font-medium text-foreground">Adapters: </span>
+                                            {pattern.adapters.map((a) => `${a.type} (${a.direction})`).join(", ")}
+                                        </p>
+                                    )}
+                                    {pattern.flowTopology.length > 0 && (
+                                        <p>
+                                            <span className="font-medium text-foreground">Flow: </span>
+                                            {pattern.flowTopology.join(", ")}
+                                        </p>
+                                    )}
+                                    {pattern.mappings.length > 0 && (
+                                        <p>
+                                            <span className="font-medium text-foreground">Mappings: </span>
+                                            {[...new Set(pattern.mappings)].join(", ")}
+                                        </p>
+                                    )}
+                                </div>
+                            </details>
+                        ))}
+                        {catalogWarnings.length > 0 && (
+                            <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                                {catalogWarnings[0]}
+                            </p>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Overview Card */}
             <Card>

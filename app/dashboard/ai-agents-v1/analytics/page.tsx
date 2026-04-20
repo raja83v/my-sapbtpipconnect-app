@@ -1,6 +1,8 @@
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { aiAgentExecutions } from "@/lib/db/schema";
+import { eq, desc } from "drizzle-orm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { agentConfigs } from "@/lib/ai/agent-types";
@@ -14,10 +16,10 @@ export default async function AgentAnalyticsPage() {
   }
 
   // Get comprehensive analytics
-  const executions = await prisma.aIAgentExecution.findMany({
-    where: { userId: user.id },
-    take: 1000,
-    orderBy: { createdAt: 'desc' },
+  const executions = await db.query.aiAgentExecutions.findMany({
+    where: eq(aiAgentExecutions.userId, user.id),
+    limit: 1000,
+    orderBy: desc(aiAgentExecutions.createdAt),
   });
 
   const totalExecutions = executions.length;
@@ -211,7 +213,7 @@ export default async function AgentAnalyticsPage() {
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground line-clamp-2">
-                        {execution.inputPrompt}
+                        {execution.input}
                       </p>
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
                         <span>{new Date(execution.createdAt).toLocaleString()}</span>

@@ -8,7 +8,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, iFlows, tenantMembers, aiAgentExecutions } from "@/lib/db/schema";
+import { eq, and, desc } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { runText } from "@/lib/ai/runtime/text";
 import { runWithTools } from "@/lib/ai/runtime/tools";
@@ -103,7 +105,7 @@ async function buildToolContext(
   const contextParts: string[] = [];
 
   // Get tenant information
-  const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+  const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
   if (tenant) {
     contextParts.push(`**Current Tenant:** ${tenant.name}`);
     contextParts.push(`**Status:** ${tenant.status}`);
@@ -112,7 +114,7 @@ async function buildToolContext(
 
   // Get specific iFlow if provided
   if (iflowId) {
-    const iflow = await prisma.iFlow.findUnique({ where: { id: iflowId } });
+    const iflow = await db.query.iFlows.findFirst({ where: eq(iFlows.id, iflowId) });
     if (iflow) {
       contextParts.push(`**Selected iFlow:** ${iflow.name} (${iflow.iFlowId})`);
       contextParts.push(`**Status:** ${iflow.status}`);
@@ -405,8 +407,11 @@ export async function executeAgentWithTools(
     } = params;
 
     // Validate tenant access
-    const membership = await prisma.tenantMember.findUnique({
-      where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId)
+      ),
     });
 
     if (!membership) {
@@ -414,7 +419,7 @@ export async function executeAgentWithTools(
     }
 
     // Get tenant
-    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+    const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
@@ -428,16 +433,14 @@ export async function executeAgentWithTools(
       : getBaseSystemPrompt(agentType);
 
     // Create execution record
-    const execution = await prisma.aIAgentExecution.create({
-      data: {
-        userId: currentUser.id,
-        agentType: agentType,
-        input: prompt,
-        tenantId: tenantId,
-        iFlowId: iflowId,
-        status: "RUNNING",
-      },
-    });
+    const [execution] = await db.insert(aiAgentExecutions).values({
+      userId: currentUser.id,
+      agentType: agentType,
+      input: prompt,
+      tenantId: tenantId,
+      iFlowId: iflowId,
+      status: "RUNNING",
+    }).returning();
     const executionId = execution.id;
 
     try {
@@ -504,16 +507,15 @@ export async function executeAgentWithTools(
         ?? Math.ceil((systemPrompt.length + fullPrompt.length + response.length) / 4);
 
       // Update execution record
-      await prisma.aIAgentExecution.update({
-        where: { id: executionId },
-        data: {
+      await db.update(aiAgentExecutions)
+        .set({
           status: "COMPLETED",
           output: response,
           tokensUsed: tokensUsed as number,
           duration,
           success: true,
-        },
-      });
+        })
+        .where(eq(aiAgentExecutions.id, executionId));
 
       revalidatePath("/dashboard/ai-agents");
 
@@ -529,14 +531,13 @@ export async function executeAgentWithTools(
       };
     } catch (aiError) {
       // Update execution record with error
-      await prisma.aIAgentExecution.update({
-        where: { id: executionId },
-        data: {
+      await db.update(aiAgentExecutions)
+        .set({
           status: "FAILED",
           errorMessage: aiError instanceof Error ? aiError.message : "AI generation failed",
           duration: Date.now() - startTime,
-        },
-      });
+        })
+        .where(eq(aiAgentExecutions.id, executionId));
 
       throw aiError;
     }
@@ -558,14 +559,6 @@ export async function executeAgentWithTools(
  */
 async function createSAPClientForTenant(tenant: any) {
   try {
-    console.log("[createSAPClientForTenant] Creating client for tenant:", {
-      name: tenant.name,
-      authType: tenant.authType,
-      hasClientId: !!tenant.clientId,
-      hasClientSecret: !!tenant.clientSecret,
-      hasTokenUrl: !!tenant.tokenUrl,
-      hasAuthenticationUrl: !!tenant.authenticationUrl,
-    });
 
     const credentials: any = {
       tenantUrl: tenant.tenantUrl,
@@ -579,13 +572,6 @@ async function createSAPClientForTenant(tenant: any) {
       // Use authenticationUrl if tokenUrl is not available (tokenUrl is deprecated)
       credentials.tokenUrl = tenant.tokenUrl || tenant.authenticationUrl;
 
-      console.log("[createSAPClientForTenant] OAuth credentials prepared:", {
-        hasClientId: !!credentials.clientId,
-        hasClientSecret: !!credentials.clientSecret,
-        clientSecretFormat: credentials.clientSecret?.includes(':') ? 'encrypted (iv:ciphertext)' : 'plain text',
-        hasTokenUrl: !!credentials.tokenUrl,
-        tokenUrl: credentials.tokenUrl,
-      });
     } else if (tenant.authType === "BASIC_AUTH") {
       credentials.username = tenant.username;
       // Pass the password as-is - the SAP client will handle decryption
@@ -648,8 +634,11 @@ export async function sendChatMessageWithTools(params: {
     } = params;
 
     // Validate tenant access
-    const membership = await prisma.tenantMember.findUnique({
-      where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId)
+      ),
     });
 
     if (!membership) {
@@ -657,7 +646,7 @@ export async function sendChatMessageWithTools(params: {
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+    const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
 
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
@@ -815,19 +804,17 @@ ${message}`;
 
     // Track execution
     try {
-      await prisma.aIAgentExecution.create({
-        data: {
-          userId: currentUser.id,
-          agentType: "GENERAL_ASSISTANT",
-          tenantId: tenantId || undefined,
-          iFlowId: iflowId || undefined,
-          input: message,
-          output: response,
-          tokensUsed: tokensUsed as number,
-          duration,
-          success: true,
-          status: "COMPLETED",
-        },
+      await db.insert(aiAgentExecutions).values({
+        userId: currentUser.id,
+        agentType: "GENERAL_ASSISTANT",
+        tenantId: tenantId || undefined,
+        iFlowId: iflowId || undefined,
+        input: message,
+        output: response,
+        tokensUsed: tokensUsed as number,
+        duration,
+        success: true,
+        status: "COMPLETED",
       });
     } catch (trackError) {
       console.error("Failed to track execution:", trackError);
@@ -1151,18 +1138,15 @@ function createChatTools(sapClient: SAPCPIClient, _userId: string, _tenantId: st
     }),
     execute: async (params: { daysBack?: number; limit?: number }) => {
       const toolStart = Date.now();
-      console.log("[get_top_executed_iflows] Starting with params:", params);
       try {
         const fromDate = new Date();
         fromDate.setDate(fromDate.getDate() - (params.daysBack || 7));
-        console.log("[get_top_executed_iflows] Fetching logs from:", fromDate.toISOString());
 
         // Fetch message logs to aggregate by iFlow
         const logs = await sapClient.getAllMessageProcessingLogs({
           fromDate,
           top: 1000, // Get a good sample size
         });
-        console.log("[get_top_executed_iflows] Fetched logs count:", logs.results.length);
 
         // Aggregate execution counts by iFlow name
         const iflowCounts: Record<string, {
@@ -1201,7 +1185,6 @@ function createChatTools(sapClient: SAPCPIClient, _userId: string, _tenantId: st
           .sort((a, b) => b.total - a.total)
           .slice(0, params.limit || 10);
 
-        console.log("[get_top_executed_iflows] Top iFlows found:", topIFlows.length);
 
         return {
           success: true,

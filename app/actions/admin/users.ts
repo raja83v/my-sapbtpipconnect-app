@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "../user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users, tenantMembers } from "@/lib/db/schema";
+import { eq, and, or, count, desc, asc, ilike, inArray } from "drizzle-orm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   createUserSchema,
@@ -53,52 +55,66 @@ export async function getUsers(params?: {
     const skip = (page - 1) * pageSize;
 
     // Build where clause
-    const where: any = {};
+    const conditions: any[] = [];
 
     if (params?.search) {
-      where.OR = [
-        { email: { contains: params.search, mode: "insensitive" } },
-        { name: { contains: params.search, mode: "insensitive" } },
-      ];
+      conditions.push(
+        or(
+          ilike(users.email, `%${params.search}%`),
+          ilike(users.name, `%${params.search}%`)
+        )
+      );
     }
 
     if (params?.role) {
-      where.role = params.role;
+      conditions.push(eq(users.role, params.role as any));
     }
 
     if (params?.status) {
-      where.status = params.status;
+      conditions.push(eq(users.status, params.status as any));
     }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Build orderBy
-    const orderBy: any = {};
-    if (params?.sortBy) {
-      orderBy[params.sortBy] = params.sortOrder || "asc";
-    } else {
-      orderBy.createdAt = "desc";
-    }
+    const sortMap: Record<string, any> = {
+      email: users.email,
+      name: users.name,
+      role: users.role,
+      status: users.status,
+      createdAt: users.createdAt,
+    };
+    const sortCol = sortMap[params?.sortBy || "createdAt"] || users.createdAt;
+    const orderByClause = params?.sortOrder === "asc" ? asc(sortCol) : desc(sortCol);
 
-    const [users, total] = await Promise.all([
-      prisma.user.findMany({
-        where,
-        skip,
-        take: pageSize,
-        orderBy,
-        include: {
-          _count: {
-            select: { tenants: true },
-          },
-        },
-      }),
-      prisma.user.count({ where }),
+    const [usersList, [{ c: total }]] = await Promise.all([
+      db
+        .select()
+        .from(users)
+        .where(whereClause)
+        .orderBy(orderByClause)
+        .limit(pageSize)
+        .offset(skip),
+      db.select({ c: count() }).from(users).where(whereClause),
     ]);
+
+    // Get tenant counts for these users
+    const userIds = usersList.map(u => u.id);
+    const tenantCounts = userIds.length > 0
+      ? await db
+          .select({ userId: tenantMembers.userId, c: count() })
+          .from(tenantMembers)
+          .where(inArray(tenantMembers.userId, userIds))
+          .groupBy(tenantMembers.userId)
+      : [];
+    const tenantCountMap = new Map(tenantCounts.map(tc => [tc.userId, Number(tc.c)]));
 
     const pageCount = Math.ceil(total / pageSize);
 
     return {
       success: true,
       data: {
-        users: users.map((user) => ({
+        users: usersList.map((user) => ({
           id: user.id,
           email: user.email,
           name: user.name,
@@ -111,7 +127,7 @@ export async function getUsers(params?: {
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
           _count: {
-            tenants: user._count.tenants,
+            tenants: tenantCountMap.get(user.id) ?? 0,
           },
         })),
         total,
@@ -130,13 +146,13 @@ export async function getUserById(id: string): Promise<ActionResult<any>> {
   if (!authCheck.success) return { success: false, error: authCheck.error };
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id },
-      include: {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, id),
+      with: {
         tenants: {
-          include: {
+          with: {
             tenant: {
-              select: { id: true, name: true, slug: true },
+              columns: { id: true, name: true, slug: true },
             },
           },
         },
@@ -184,8 +200,8 @@ export async function createUser(input: CreateUserInput): Promise<ActionResult<a
     const validatedData = createUserSchema.parse(input);
 
     // Check if user with email already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email: validatedData.email },
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, validatedData.email),
     });
 
     if (existingUser) {
@@ -205,17 +221,15 @@ export async function createUser(input: CreateUserInput): Promise<ActionResult<a
       return { success: false, error: supabaseError.message };
     }
 
-    const user = await prisma.user.create({
-      data: {
-        email: validatedData.email,
-        name: validatedData.name || undefined,
-        supabaseId: supabaseUser.user.id,
-        role: (validatedData.role?.toLowerCase() ?? "user") as "user" | "admin",
-        status: (validatedData.status ?? "ACTIVE") as "ACTIVE" | "SUSPENDED" | "DELETED",
-        phone: validatedData.phone || undefined,
-        image: validatedData.image || undefined,
-      },
-    });
+    const [user] = await db.insert(users).values({
+      email: validatedData.email,
+      name: validatedData.name || undefined,
+      supabaseId: supabaseUser.user.id,
+      role: (validatedData.role?.toLowerCase() ?? "user") as "user" | "admin",
+      status: (validatedData.status ?? "ACTIVE") as "ACTIVE" | "SUSPENDED" | "DELETED",
+      phone: validatedData.phone || undefined,
+      image: validatedData.image || undefined,
+    }).returning();
 
     revalidatePath("/admin/users");
 
@@ -253,8 +267,8 @@ export async function updateUser(input: UpdateUserInput): Promise<ActionResult<a
     const validatedData = updateUserSchema.parse(input);
 
     // Check if user exists
-    const existingUser = await prisma.user.findUnique({
-      where: { id: validatedData.id },
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.id, validatedData.id),
     });
 
     if (!existingUser) {
@@ -263,8 +277,8 @@ export async function updateUser(input: UpdateUserInput): Promise<ActionResult<a
 
     // If email is being updated, check for conflicts
     if (validatedData.email && validatedData.email !== existingUser.email) {
-      const emailConflict = await prisma.user.findUnique({
-        where: { email: validatedData.email },
+      const emailConflict = await db.query.users.findFirst({
+        where: eq(users.email, validatedData.email),
       });
 
       if (emailConflict) {
@@ -281,10 +295,10 @@ export async function updateUser(input: UpdateUserInput): Promise<ActionResult<a
     if (validatedData.phone !== undefined) updateData.phone = validatedData.phone || null;
     if (validatedData.image !== undefined) updateData.image = validatedData.image || null;
 
-    const user = await prisma.user.update({
-      where: { id: validatedData.id },
-      data: updateData,
-    });
+    const [user] = await db.update(users)
+      .set(updateData)
+      .where(eq(users.id, validatedData.id))
+      .returning();
 
     revalidatePath("/admin/users");
     revalidatePath(`/admin/users/${validatedData.id}`);
@@ -323,8 +337,8 @@ export async function deleteUser(input: DeleteUserInput): Promise<ActionResult> 
     const validatedData = deleteUserSchema.parse(input);
 
     // Check if user exists
-    const existingUser = await prisma.user.findUnique({
-      where: { id: validatedData.id },
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.id, validatedData.id),
     });
 
     if (!existingUser) {
@@ -339,9 +353,7 @@ export async function deleteUser(input: DeleteUserInput): Promise<ActionResult> 
     }
 
     // Delete user (cascade will handle related records)
-    await prisma.user.delete({
-      where: { id: validatedData.id },
-    });
+    await db.delete(users).where(eq(users.id, validatedData.id));
 
     revalidatePath("/admin/users");
 

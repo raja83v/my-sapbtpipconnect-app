@@ -1,0 +1,57 @@
+# LiteLLM Proxy Configuration
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+#
+# Add your LLM provider API keys below. LiteLLM acts as an OpenAI-compatible
+# proxy so CPI Connect can talk to any supported model.
+
+model_list:
+  # ── OpenAI ────────────────────────────────────────────────────────
+  # Uncomment and set OPENAI_API_KEY in your .env
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+
+  # - model_name: gpt-4o-mini
+  #   litellm_params:
+  #     model: openai/gpt-4o-mini
+  #     api_key: os.environ/OPENAI_API_KEY
+
+  # ── Anthropic ─────────────────────────────────────────────────────
+  # Uncomment and set ANTHROPIC_API_KEY in your .env
+  # - model_name: claude-sonnet-4-20250514
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-4-20250514
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── Google Gemini ─────────────────────────────────────────────────
+  # Uncomment and set GOOGLE_API_KEY in your .env
+  # - model_name: gemini-2.0-flash
+  #   litellm_params:
+  #     model: gemini/gemini-2.0-flash
+  #     api_key: os.environ/GOOGLE_API_KEY
+
+  # ── Ollama (local, no API key needed) ─────────────────────────────
+  # Requires Ollama running on the host or as a separate container.
+  # Default: host.docker.internal points to the Docker host.
+  # - model_name: llama3
+  #   litellm_params:
+  #     model: ollama/llama3
+  #     api_base: http://host.docker.internal:11434
+
+  # ── Azure OpenAI ──────────────────────────────────────────────────
+  # - model_name: azure-gpt-4o
+  #   litellm_params:
+  #     model: azure/gpt-4o
+  #     api_base: os.environ/AZURE_API_BASE
+  #     api_key: os.environ/AZURE_API_KEY
+  #     api_version: "2024-02-01"
+
+  # ── Placeholder (remove once you add a real model above) ──────────
+  - model_name: default
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

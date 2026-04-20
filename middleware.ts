@@ -18,6 +18,7 @@ const PUBLIC_ROUTES = [
 // Route prefixes that don't require authentication
 const PUBLIC_PREFIXES = [
   "/api/auth/",
+  "/api/health",
   "/auth/callback",
   "/blog/",
   "/help/",
@@ -49,6 +50,14 @@ function isPublicRoute(pathname: string): boolean {
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // In self-hosted mode, redirect landing page to sign-in
+  if (
+    pathname === "/" &&
+    process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== "cloud"
+  ) {
+    return NextResponse.redirect(new URL("/sign-in", request.url));
+  }
 
   // Allow public routes
   if (isPublicRoute(pathname)) {

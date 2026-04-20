@@ -2,10 +2,10 @@
 
 import { getCurrentUser as getAuthUser } from "@/lib/auth-helpers";
 import type { CurrentUser } from "@/types/user";
-import { prisma } from "@/lib/db";
-import { cache } from "react";
-
-export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+export async function getCurrentUser(): Promise<CurrentUser> {
   try {
     const authUser = await getAuthUser();
 
@@ -14,8 +14,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
     }
 
     // Fetch full user data from database
-    const user = await prisma.user.findUnique({
-      where: { id: authUser.id },
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, authUser.id),
     });
 
     if (!user) return null;
@@ -38,4 +38,4 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser> => {
     console.error("Error fetching current user:", error);
     return null;
   }
-});
+}

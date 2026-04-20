@@ -1,6 +1,8 @@
 import { getCurrentUser } from "@/app/actions/user";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { aiAgentExecutions } from "@/lib/db/schema";
+import { eq, count, sum, avg, desc, gte } from "drizzle-orm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,31 +34,34 @@ export default async function AnalyticsPage() {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const [aggregates, byAgentTypeRaw, recentExecutions] = await Promise.all([
-        prisma.aIAgentExecution.aggregate({
-            where: { userId: user.id, createdAt: { gte: thirtyDaysAgo } },
-            _count: { id: true },
-            _sum: { tokensUsed: true },
-            _avg: { duration: true },
-        }),
-        prisma.aIAgentExecution.groupBy({
-            by: ['agentType'],
-            where: { userId: user.id, createdAt: { gte: thirtyDaysAgo } },
-            _count: { id: true },
-        }),
-        prisma.aIAgentExecution.findMany({
-            where: { userId: user.id },
-            take: 50,
-            orderBy: { createdAt: 'desc' },
+    const [aggregatesRaw, byAgentTypeRaw, recentExecutions] = await Promise.all([
+        db.select({
+            countId: count(),
+            sumTokensUsed: sum(aiAgentExecutions.tokensUsed),
+            avgDuration: avg(aiAgentExecutions.duration),
+        }).from(aiAgentExecutions)
+          .where(eq(aiAgentExecutions.userId, user.id)),
+        db.select({
+            agentType: aiAgentExecutions.agentType,
+            countId: count(),
+        }).from(aiAgentExecutions)
+          .where(eq(aiAgentExecutions.userId, user.id))
+          .groupBy(aiAgentExecutions.agentType),
+        db.query.aiAgentExecutions.findMany({
+            where: eq(aiAgentExecutions.userId, user.id),
+            limit: 50,
+            orderBy: desc(aiAgentExecutions.createdAt),
         }),
     ]);
 
+    const aggregates = aggregatesRaw[0];
+
     const stats = {
-        totalExecutions: aggregates._count.id,
-        totalTokensUsed: aggregates._sum.tokensUsed || 0,
-        avgDuration: aggregates._avg.duration || 0,
+        totalExecutions: aggregates.countId,
+        totalTokensUsed: Number(aggregates.sumTokensUsed) || 0,
+        avgDuration: Number(aggregates.avgDuration) || 0,
         byAgentType: Object.fromEntries(
-            byAgentTypeRaw.map(s => [s.agentType, s._count.id])
+            byAgentTypeRaw.map(s => [s.agentType, s.countId])
         ) as Record<string, number>,
     };
 
@@ -71,7 +76,7 @@ export default async function AnalyticsPage() {
             {/* Header */}
             <div>
                 <h1 className="text-4xl font-bold tracking-tight flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20">
+                    <div className="p-2 rounded-xl bg-linear-to-br from-indigo-500/20 to-purple-500/20">
                         <BarChart3 className="h-8 w-8 text-indigo-500" />
                     </div>
                     AI Agents Analytics
@@ -156,7 +161,7 @@ export default async function AnalyticsPage() {
                                     const agent = agentConfigsV2[agentType as keyof typeof agentConfigsV2];
                                     if (!agent) return null;
 
-                                    const Icon = agent.icon;
+                                    const Icon = agent.icon.component;
                                     const percentage = stats.totalExecutions > 0
                                         ? Math.round((count / stats.totalExecutions) * 100)
                                         : 0;
@@ -210,7 +215,7 @@ export default async function AnalyticsPage() {
                                         const agent = agentConfigsV2[execution.agentType as keyof typeof agentConfigsV2];
                                         if (!agent) return null;
 
-                                        const Icon = agent.icon;
+                                        const Icon = agent.icon.component;
                                         const date = new Date(execution.createdAt);
                                         const statusColor = execution.status === "COMPLETED"
                                             ? "text-green-500"
@@ -223,7 +228,7 @@ export default async function AnalyticsPage() {
                                                 key={execution.id}
                                                 className="flex items-start gap-4 p-4 rounded-lg border hover:bg-muted/50 transition-colors"
                                             >
-                                                <div className={`p-2 rounded-lg bg-${agent.color}-500/10 flex-shrink-0`}>
+                                                <div className={`p-2 rounded-lg bg-${agent.color}-500/10 shrink-0`}>
                                                     <Icon className={`h-5 w-5 text-${agent.color}-500`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">

@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users, tenantMembers, cpiTenants, iFlows, iFlowExecutions } from "@/lib/db/schema";
+import { eq, and, or, ilike, inArray, count, desc } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { runText } from "@/lib/ai/runtime/text";
 import { ERROR_DIAGNOSIS_SYSTEM_PROMPT } from "@/lib/ai/prompts";
@@ -30,21 +32,24 @@ export async function getIFlowByAnyId(iflowId: string, userId: string) {
 
   // First try to find by database ID
   try {
-    const iflow = await prisma.iFlow.findUnique({ where: { id: trimmedId } });
+    const iflow = await db.query.iFlows.findFirst({ where: eq(iFlows.id, trimmedId) });
     if (iflow) return iflow;
   } catch {
     // Not a valid DB ID format, try by SAP CPI iFlow ID
   }
 
   // Search by SAP CPI iFlow ID across user's accessible tenants
-  const memberships = await prisma.tenantMember.findMany({
-    where: { userId },
-    select: { tenantId: true },
+  const memberships = await db.query.tenantMembers.findMany({
+    where: eq(tenantMembers.userId, userId),
+    columns: { tenantId: true },
   });
 
   for (const { tenantId } of memberships) {
-    const foundIFlow = await prisma.iFlow.findUnique({
-      where: { tenantId_iFlowId: { tenantId, iFlowId: trimmedId } },
+    const foundIFlow = await db.query.iFlows.findFirst({
+      where: and(
+        eq(iFlows.tenantId, tenantId),
+        eq(iFlows.iFlowId, trimmedId),
+      ),
     });
 
     if (foundIFlow) {
@@ -155,9 +160,9 @@ export async function getIFlows(
     } = params;
 
     // Get user's accessible tenant IDs
-    const memberships = await prisma.tenantMember.findMany({
-      where: { userId: currentUser.id },
-      select: { tenantId: true },
+    const memberships = await db.query.tenantMembers.findMany({
+      where: eq(tenantMembers.userId, currentUser.id),
+      columns: { tenantId: true },
     });
 
     const accessibleTenantIds = memberships.map(m => m.tenantId);
@@ -183,9 +188,9 @@ export async function getIFlows(
       targetTenantIds = [tenantId];
     } else if (!showAllTenants) {
       // Use user's default tenant if available, otherwise use first accessible tenant
-      const user = await prisma.user.findUnique({
-        where: { id: currentUser.id },
-        select: { defaultTenantId: true },
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, currentUser.id),
+        columns: { defaultTenantId: true },
       });
       const defaultTenantId = user?.defaultTenantId;
 
@@ -201,40 +206,40 @@ export async function getIFlows(
       targetTenantIds = accessibleTenantIds;
     }
 
-    // Build Prisma where clause
-    const where: any = {
-      tenantId: { in: targetTenantIds },
-    };
+    // Build Drizzle where clause
+    const conditions = [inArray(iFlows.tenantId, targetTenantIds)];
 
     if (status) {
-      where.status = status;
+      conditions.push(eq(iFlows.status, status as any));
     }
 
     if (search) {
-      where.AND = [
-        {
-          OR: [
-            { name: { contains: search, mode: "insensitive" } },
-            { iFlowId: { contains: search, mode: "insensitive" } },
-            { packageName: { contains: search, mode: "insensitive" } },
-          ],
-        },
-      ];
+      conditions.push(
+        or(
+          ilike(iFlows.name, `%${search}%`),
+          ilike(iFlows.iFlowId, `%${search}%`),
+          ilike(iFlows.packageName, `%${search}%`),
+        )!
+      );
     }
 
+    const whereClause = and(...conditions);
+
     // Count + fetch with pagination
-    const [total, iflows] = await Promise.all([
-      prisma.iFlow.count({ where }),
-      prisma.iFlow.findMany({
-        where,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: { tenant: { select: { name: true } } },
-        orderBy: { createdAt: "desc" },
+    const [totalResult, iflowsList] = await Promise.all([
+      db.select({ c: count() }).from(iFlows).where(whereClause).then(r => r[0].c),
+      db.query.iFlows.findMany({
+        where: whereClause,
+        offset: (page - 1) * pageSize,
+        limit: pageSize,
+        with: { tenant: { columns: { name: true } } },
+        orderBy: (iFlows, { desc }) => [desc(iFlows.createdAt)],
       }),
     ]);
 
-    const iflowsData: IFlowData[] = iflows.map((iflow) => ({
+    const total = totalResult;
+
+    const iflowsData: IFlowData[] = iflowsList.map((iflow) => ({
       id: iflow.id,
       iFlowId: iflow.iFlowId,
       name: iflow.name,
@@ -279,9 +284,9 @@ export async function getUserTenantsForFilter(): Promise<
       return { success: false, error: "Not authenticated" };
     }
 
-    const memberships = await prisma.tenantMember.findMany({
-      where: { userId: currentUser.id },
-      include: { tenant: { select: { id: true, name: true } } },
+    const memberships = await db.query.tenantMembers.findMany({
+      where: eq(tenantMembers.userId, currentUser.id),
+      with: { tenant: { columns: { id: true, name: true } } },
     });
 
     const tenants = memberships.map((m) => ({
@@ -315,18 +320,16 @@ export async function getIFlowDetails(iflowId: string): Promise<ActionResult<IFl
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: iflow.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, iflow.tenantId),
     });
 
     // Check if user has access to this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: iflow.tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, iflow.tenantId),
+      ),
     });
 
     if (!membership) {
@@ -411,8 +414,8 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: iflow.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, iflow.tenantId),
     });
 
     if (!tenant) {
@@ -420,13 +423,11 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
     }
 
     // Check if user has access to this tenant
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: iflow.tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, iflow.tenantId),
+      ),
     });
 
     if (!membership) {
@@ -502,10 +503,10 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
     // Fetch execution stats from database
     let stats: IFlowStats | null = null;
     try {
-      const executions = await prisma.iFlowExecution.findMany({
-        where: { iFlowId: iflow.id },
-        orderBy: { startTime: "desc" },
-        take: 1000,
+      const executions = await db.query.iFlowExecutions.findMany({
+        where: eq(iFlowExecutions.iFlowId, iflow.id),
+        orderBy: (iFlowExecutions, { desc }) => [desc(iFlowExecutions.startTime)],
+        limit: 1000,
       });
 
       if (executions && executions.length > 0) {
@@ -625,20 +626,18 @@ export async function getIFlowResourceContent(
       return { success: false, error: "iFlow not found" };
     }
 
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: iflow.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, iflow.tenantId),
     });
     if (!tenant) {
       return { success: false, error: "Tenant not found" };
     }
 
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: iflow.tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, iflow.tenantId),
+      ),
     });
     if (!membership) {
       return { success: false, error: "You don't have access to this iFlow" };
@@ -797,8 +796,8 @@ export async function getMessageLogs(
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: iflow.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, iflow.tenantId),
     });
 
     if (!tenant) {
@@ -806,13 +805,11 @@ export async function getMessageLogs(
     }
 
     // Check access
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: iflow.tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, iflow.tenantId),
+      ),
     });
 
     if (!membership) {
@@ -938,8 +935,8 @@ export async function toggleIFlowDeployment(
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: iflow.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, iflow.tenantId),
     });
 
     if (!tenant) {
@@ -947,13 +944,11 @@ export async function toggleIFlowDeployment(
     }
 
     // Check access (only ADMIN and OWNER can deploy/undeploy)
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: iflow.tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, iflow.tenantId),
+      ),
     });
 
     if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
@@ -989,13 +984,10 @@ export async function toggleIFlowDeployment(
 
     // Update status in database
     const newStatus = action === "deploy" ? "STARTING" : "STOPPING";
-    await prisma.iFlow.update({
-      where: { id: iflow.id },
-      data: {
-        status: newStatus as any,
-        ...(action === "deploy" && { lastDeployedAt: new Date() }),
-      },
-    });
+    await db.update(iFlows).set({
+      status: newStatus as any,
+      ...(action === "deploy" && { lastDeployedAt: new Date() }),
+    }).where(eq(iFlows.id, iflow.id));
 
     revalidatePath(`/dashboard/iflows/${iflowId}`);
     revalidatePath("/dashboard/iflows");
@@ -1036,8 +1028,8 @@ export async function diagnoseExecutionError(
     }
 
     // Get tenant details
-    const tenant = await prisma.cpiTenant.findUnique({
-      where: { id: iflow.tenantId },
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, iflow.tenantId),
     });
 
     if (!tenant) {
@@ -1045,13 +1037,11 @@ export async function diagnoseExecutionError(
     }
 
     // Check tenant access
-    const membership = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: iflow.tenantId,
-        },
-      },
+    const membership = await db.query.tenantMembers.findFirst({
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, iflow.tenantId),
+      ),
     });
 
     if (!membership) {
@@ -1059,8 +1049,8 @@ export async function diagnoseExecutionError(
     }
 
     // First try to get execution from database
-    const execution = await prisma.iFlowExecution.findUnique({
-      where: { messageId },
+    const execution = await db.query.iFlowExecutions.findFirst({
+      where: eq(iFlowExecutions.messageId, messageId),
     });
 
     let executionData: any;

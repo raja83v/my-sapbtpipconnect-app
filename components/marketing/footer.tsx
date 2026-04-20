@@ -10,12 +10,12 @@ const links = [
         href: "#features",
       },
       {
-        title: "Documentation",
-        href: "/help",
+        title: "Pricing",
+        href: "/#pricing",
       },
       {
-        title: "Partnerships",
-        href: "#",
+        title: "Documentation",
+        href: "/help",
       },
     ],
   },

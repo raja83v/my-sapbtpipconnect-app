@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+.next/
+out/
+dist/
+
+# Version control
+.git/
+.gitignore
+
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Supabase local dev
+supabase/
+
+# Documentation & plans
+Plan/
+*.md
+!LICENSE.md
+!README.md
+
+# Docker files (not needed inside the image)
+docker-compose*.yml
+Dockerfile
+
+# CI/CD
+.github/
+
+# Misc
+coverage/
+*.log
+npm-debug.log*

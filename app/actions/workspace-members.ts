@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { tenantMembers, users } from "@/lib/db/schema";
+import { eq, and, asc, count } from "drizzle-orm";
 import { getCurrentUser } from "./user";
 import type { ActionResult } from "@/types/actions";
 import type { WorkspaceMemberWithUser } from "@/types/workspace";
@@ -19,10 +21,8 @@ async function checkWorkspaceAdmin(
   userId: string,
   tenantId: string
 ): Promise<ActionResult<boolean>> {
-  const member = await prisma.tenantMember.findUnique({
-    where: {
-      userId_tenantId: { userId, tenantId },
-    },
+  const member = await db.query.tenantMembers.findFirst({
+    where: and(eq(tenantMembers.userId, userId), eq(tenantMembers.tenantId, tenantId)),
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -49,13 +49,8 @@ export async function getWorkspaceMembers(
     }
 
     // Check if user is a member of the tenant
-    const isMember = await prisma.tenantMember.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: currentUser.id,
-          tenantId: workspaceId,
-        },
-      },
+    const isMember = await db.query.tenantMembers.findFirst({
+      where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, workspaceId)),
     });
 
     if (!isMember) {
@@ -63,21 +58,21 @@ export async function getWorkspaceMembers(
     }
 
     // Get all members with user info
-    const members = await prisma.tenantMember.findMany({
-      where: { tenantId: workspaceId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-            status: true,
-          },
-        },
+    const members = await db.select({
+      id: tenantMembers.id,
+      role: tenantMembers.role,
+      joinedAt: tenantMembers.joinedAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        image: users.image,
+        status: users.status,
       },
-      orderBy: { joinedAt: "asc" },
-    });
+    }).from(tenantMembers)
+      .innerJoin(users, eq(tenantMembers.userId, users.id))
+      .where(eq(tenantMembers.tenantId, workspaceId))
+      .orderBy(asc(tenantMembers.joinedAt));
 
     const membersWithUser: WorkspaceMemberWithUser[] = members.map((member) => ({
       id: member.id,
@@ -114,20 +109,23 @@ export async function updateMemberRole(
     const validatedData = updateMemberRoleSchema.parse(input);
 
     // Get member info
-    const member = await prisma.tenantMember.findUnique({
-      where: { id: validatedData.memberId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-            status: true,
-          },
-        },
+    const member = await db.select({
+      id: tenantMembers.id,
+      role: tenantMembers.role,
+      tenantId: tenantMembers.tenantId,
+      userId: tenantMembers.userId,
+      joinedAt: tenantMembers.joinedAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        image: users.image,
+        status: users.status,
       },
-    });
+    }).from(tenantMembers)
+      .innerJoin(users, eq(tenantMembers.userId, users.id))
+      .where(eq(tenantMembers.id, validatedData.memberId))
+      .then(rows => rows[0] ?? null);
 
     if (!member) {
       return { success: false, error: "Member not found" };
@@ -152,12 +150,9 @@ export async function updateMemberRole(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER" && validatedData.role !== "OWNER") {
-      const ownerCount = await prisma.tenantMember.count({
-        where: {
-          tenantId: member.tenantId,
-          role: "OWNER",
-        },
-      });
+      const [{ c: ownerCount }] = await db.select({ c: count() }).from(tenantMembers).where(
+        and(eq(tenantMembers.tenantId, member.tenantId), eq(tenantMembers.role, "OWNER"))
+      );
 
       if (ownerCount <= 1) {
         return {
@@ -168,21 +163,25 @@ export async function updateMemberRole(
     }
 
     // Update role
-    const updatedMember = await prisma.tenantMember.update({
-      where: { id: validatedData.memberId },
-      data: { role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-            status: true,
-          },
-        },
+    await db.update(tenantMembers)
+      .set({ role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" })
+      .where(eq(tenantMembers.id, validatedData.memberId));
+
+    const updatedMember = await db.select({
+      id: tenantMembers.id,
+      role: tenantMembers.role,
+      joinedAt: tenantMembers.joinedAt,
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        image: users.image,
+        status: users.status,
       },
-    });
+    }).from(tenantMembers)
+      .innerJoin(users, eq(tenantMembers.userId, users.id))
+      .where(eq(tenantMembers.id, validatedData.memberId))
+      .then(rows => rows[0]!);
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -222,8 +221,8 @@ export async function removeMember(
     const validatedData = removeMemberSchema.parse(input);
 
     // Get member info
-    const member = await prisma.tenantMember.findUnique({
-      where: { id: validatedData.memberId },
+    const member = await db.query.tenantMembers.findFirst({
+      where: eq(tenantMembers.id, validatedData.memberId),
     });
 
     if (!member) {
@@ -249,12 +248,9 @@ export async function removeMember(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER") {
-      const ownerCount = await prisma.tenantMember.count({
-        where: {
-          tenantId: member.tenantId,
-          role: "OWNER",
-        },
-      });
+      const [{ c: ownerCount }] = await db.select({ c: count() }).from(tenantMembers).where(
+        and(eq(tenantMembers.tenantId, member.tenantId), eq(tenantMembers.role, "OWNER"))
+      );
 
       if (ownerCount <= 1) {
         return {
@@ -265,9 +261,7 @@ export async function removeMember(
     }
 
     // Remove member
-    await prisma.tenantMember.delete({
-      where: { id: validatedData.memberId },
-    });
+    await db.delete(tenantMembers).where(eq(tenantMembers.id, validatedData.memberId));
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");

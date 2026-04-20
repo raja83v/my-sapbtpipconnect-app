@@ -1,11 +1,11 @@
-import { allLegalPosts } from "content-collections";
+import { allLegalPosts, LegalPost } from "content-collections";
 
 import { formatDate } from "@/lib/utils";
 
 import MaxWidthWrapper from "./max-width-wrapper";
 import { MDX } from "./mdx";
 
-export default function LegalPage({ post }: { post: Record<string, unknown> }) {
+export default function LegalPage({ post }: { post: LegalPost }) {
   if (!post) {
     return (
       <div className="text-muted-foreground">Juridisk innlegg ikke funnet</div>
@@ -19,7 +19,7 @@ export default function LegalPage({ post }: { post: Record<string, unknown> }) {
           {post.title}
         </h1>
       </div>
-      <MaxWidthWrapper className="flex max-w-screen-md flex-col items-center p-10 sm:pt-20">
+      <MaxWidthWrapper className="flex max-w-3xl flex-col items-center p-10 sm:pt-20">
         <MDX code={post.mdx} />
         <div className="mt-10 w-full border-t border-border pt-10 text-center">
           <p className="text-muted-foreground">

@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { users, tenantMembers, cpiTenants, iFlows, iFlowExecutions } from "@/lib/db/schema";
+import { eq, and, asc } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { getCachedToken, cacheToken } from "@/lib/token-cache";
 import { decrypt } from "@/lib/encryption";
@@ -183,17 +185,17 @@ async function resolveTenantId(userId: string, providedTenantId?: string): Promi
     if (providedTenantId) return providedTenantId;
 
     // Use user's default tenant
-    const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { defaultTenantId: true },
+    const user = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { defaultTenantId: true },
     });
     if (user?.defaultTenantId) return user.defaultTenantId;
 
     // Fallback to first accessible tenant
-    const firstMembership = await prisma.tenantMember.findFirst({
-        where: { userId },
-        select: { tenantId: true },
-        orderBy: { joinedAt: "asc" },
+    const firstMembership = await db.query.tenantMembers.findFirst({
+        where: eq(tenantMembers.userId, userId),
+        columns: { tenantId: true },
+        orderBy: (tenantMembers, { asc }) => [asc(tenantMembers.joinedAt)],
     });
     return firstMembership?.tenantId;
 }
@@ -234,8 +236,8 @@ export async function getAllMessageLogs(
         }
 
         // Get tenant details
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -243,13 +245,11 @@ export async function getAllMessageLogs(
         }
 
         // Check access
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: currentUser.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId),
+            ),
         });
 
         if (!membership) {
@@ -398,8 +398,8 @@ export async function getMessageLogDetail(
         }
 
         // Get tenant
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -407,13 +407,11 @@ export async function getMessageLogDetail(
         }
 
         // Check access
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: currentUser.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId),
+            ),
         });
 
         if (!membership) {
@@ -514,8 +512,8 @@ export async function getIFlowsForFilter(
         // If a package is specified, fetch iFlows from SAP CPI for that package
         if (packageId) {
             // Get tenant details
-            const tenant = await prisma.cpiTenant.findUnique({
-                where: { id: resolvedTenantId },
+            const tenant = await db.query.cpiTenants.findFirst({
+                where: eq(cpiTenants.id, resolvedTenantId),
             });
 
             if (!tenant) {
@@ -523,13 +521,11 @@ export async function getIFlowsForFilter(
             }
 
             // Check access
-            const membership = await prisma.tenantMember.findUnique({
-                where: {
-                    userId_tenantId: {
-                        userId: currentUser.id,
-                        tenantId: resolvedTenantId,
-                    },
-                },
+            const membership = await db.query.tenantMembers.findFirst({
+                where: and(
+                    eq(tenantMembers.userId, currentUser.id),
+                    eq(tenantMembers.tenantId, resolvedTenantId),
+                ),
             });
 
             if (!membership) {
@@ -583,18 +579,18 @@ export async function getIFlowsForFilter(
         }
 
         // Otherwise, get all iFlows from database
-        const iflows = await prisma.iFlow.findMany({
-            where: { tenantId: resolvedTenantId },
-            select: {
+        const iflowsList = await db.query.iFlows.findMany({
+            where: eq(iFlows.tenantId, resolvedTenantId),
+            columns: {
                 id: true,
                 iFlowId: true,
                 name: true,
                 packageName: true,
             },
-            orderBy: { name: "asc" },
+            orderBy: (iFlows, { asc }) => [asc(iFlows.name)],
         });
 
-        const result = iflows.map((iflow) => ({
+        const result = iflowsList.map((iflow) => ({
             id: iflow.id,
             iFlowId: iflow.iFlowId,
             name: iflow.name,
@@ -622,8 +618,8 @@ export async function getPackagesForFilter(
         }
 
         // Get tenant details
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -631,13 +627,11 @@ export async function getPackagesForFilter(
         }
 
         // Check access
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: currentUser.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId),
+            ),
         });
 
         if (!membership) {
@@ -706,37 +700,33 @@ async function cacheFailedMessages(
 
         try {
             // Find the iFlow in database
-            const iflow = await prisma.iFlow.findUnique({
-                where: {
-                    tenantId_iFlowId: {
-                        tenantId,
-                        iFlowId: log.iFlowId,
-                    },
-                },
+            const iflow = await db.query.iFlows.findFirst({
+                where: and(
+                    eq(iFlows.tenantId, tenantId),
+                    eq(iFlows.iFlowId, log.iFlowId),
+                ),
             });
 
             if (!iflow) continue;
 
             // Check if already cached (upsert by messageId)
-            const existing = await prisma.iFlowExecution.findUnique({
-                where: { messageId: log.messageGuid },
+            const existing = await db.query.iFlowExecutions.findFirst({
+                where: eq(iFlowExecutions.messageId, log.messageGuid),
             });
 
             if (existing) continue;
 
             // Cache the failed execution
-            await prisma.iFlowExecution.create({
-                data: {
-                    messageId: log.messageGuid,
-                    status: "FAILED",
-                    startTime: new Date(log.logStart),
-                    endTime: log.logEnd ? new Date(log.logEnd) : undefined,
-                    duration: log.duration || undefined,
-                    sender: log.sender || undefined,
-                    receiver: log.receiver || undefined,
-                    errorMessage: `Status: ${log.status}. Use AI Error Explainer for detailed analysis.`,
-                    iFlowId: iflow.id,
-                },
+            await db.insert(iFlowExecutions).values({
+                messageId: log.messageGuid,
+                status: "FAILED",
+                startTime: new Date(log.logStart),
+                endTime: log.logEnd ? new Date(log.logEnd) : undefined,
+                duration: log.duration || undefined,
+                sender: log.sender || undefined,
+                receiver: log.receiver || undefined,
+                errorMessage: `Status: ${log.status}. Use AI Error Explainer for detailed analysis.`,
+                iFlowId: iflow.id,
             });
         } catch (err) {
             // Silently fail - this is a best-effort cache
@@ -768,8 +758,8 @@ export async function downloadMessageAttachment(
         }
 
         // Get tenant
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -777,13 +767,11 @@ export async function downloadMessageAttachment(
         }
 
         // Check access
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: currentUser.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId),
+            ),
         });
 
         if (!membership) {
@@ -860,8 +848,8 @@ export async function diagnoseMessageLogError(
         }
 
         // Get tenant
-        const tenant = await prisma.cpiTenant.findUnique({
-            where: { id: tenantId },
+        const tenant = await db.query.cpiTenants.findFirst({
+            where: eq(cpiTenants.id, tenantId),
         });
 
         if (!tenant) {
@@ -869,13 +857,11 @@ export async function diagnoseMessageLogError(
         }
 
         // Check access
-        const membership = await prisma.tenantMember.findUnique({
-            where: {
-                userId_tenantId: {
-                    userId: currentUser.id,
-                    tenantId,
-                },
-            },
+        const membership = await db.query.tenantMembers.findFirst({
+            where: and(
+                eq(tenantMembers.userId, currentUser.id),
+                eq(tenantMembers.tenantId, tenantId),
+            ),
         });
 
         if (!membership) {
@@ -885,13 +871,11 @@ export async function diagnoseMessageLogError(
         // Try to find the iFlow in database by artifact ID (optional)
         let iflow = null;
         if (iFlowArtifactId) {
-            iflow = await prisma.iFlow.findUnique({
-                where: {
-                    tenantId_iFlowId: {
-                        tenantId,
-                        iFlowId: iFlowArtifactId,
-                    },
-                },
+            iflow = await db.query.iFlows.findFirst({
+                where: and(
+                    eq(iFlows.tenantId, tenantId),
+                    eq(iFlows.iFlowId, iFlowArtifactId),
+                ),
             });
         }
 

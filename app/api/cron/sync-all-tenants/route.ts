@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants } from "@/lib/db/schema";
 import { syncTenantInternal } from "@/app/actions/tenant";
 
 /**
@@ -23,15 +24,11 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        console.log("[Cron] Starting sync for all tenants...");
 
         // Get all tenants
-        const tenants = await prisma.cpiTenant.findMany({
-            take: 100,
-        });
+        const tenants = await db.select().from(cpiTenants).limit(100);
 
         if (!tenants || tenants.length === 0) {
-            console.log("[Cron] No tenants found");
             return NextResponse.json({
                 success: true,
                 message: "No tenants to sync",
@@ -40,7 +37,6 @@ export async function GET(request: NextRequest) {
             });
         }
 
-        console.log(`[Cron] Found ${tenants.length} tenants`);
 
         let successCount = 0;
         let errorCount = 0;
@@ -50,24 +46,20 @@ export async function GET(request: NextRequest) {
         for (const tenant of tenants) {
             // Skip if not connected or not OAuth
             if (!tenant.isConnected || tenant.authType !== "OAUTH") {
-                console.log(`[Cron] Skipping ${tenant.name} - not connected or not OAuth`);
                 continue;
             }
 
             // Skip if missing credentials
             if (!tenant.clientId || !tenant.clientSecret || !tenant.authenticationUrl) {
-                console.log(`[Cron] Skipping ${tenant.name} - missing credentials`);
                 continue;
             }
 
             try {
-                console.log(`[Cron] Syncing ${tenant.name}...`);
 
                 const result = await syncTenantInternal(tenant.id);
 
                 if (result.success && result.data) {
                     successCount++;
-                    console.log(`[Cron] ✓ Synced ${tenant.name}: ${result.data.iflows} iFlows, ${result.data.executions} executions`);
                     results.push({
                         tenant: tenant.name,
                         success: true,
@@ -94,7 +86,6 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        console.log(`[Cron] Sync complete: ${successCount} succeeded, ${errorCount} failed`);
 
         return NextResponse.json({
             success: true,

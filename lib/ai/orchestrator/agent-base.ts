@@ -28,14 +28,10 @@ export abstract class BaseAgent<TInput, TOutput> {
     const startTime = Date.now();
 
     try {
-      console.log(`[Pipeline:${context.pipelineId}] ${this.name} agent starting...`);
 
       const result = await this.run(input, context);
 
       const duration = Date.now() - startTime;
-      console.log(
-        `[Pipeline:${context.pipelineId}] ${this.name} agent completed in ${duration}ms (${result.tokensUsed} tokens)`
-      );
 
       return {
         success: true,

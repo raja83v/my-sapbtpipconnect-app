@@ -1,7 +1,9 @@
 "use server";
 
 import { getCurrentUser } from "./user";
-import { prisma } from "@/lib/db";
+import { db } from "@/lib/db";
+import { cpiTenants, iFlows, iFlowExecutions, tenantMembers, aiAgentExecutions } from "@/lib/db/schema";
+import { eq, and, gte, desc, count, inArray } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { runText } from "@/lib/ai/runtime/text";
 import * as prompts from "@/lib/ai/prompts";
@@ -55,15 +57,21 @@ async function buildAgentContext(
 
   // Get tenant information if provided
   if (tenantId) {
-    const tenant = await prisma.cpiTenant.findUnique({ where: { id: tenantId } });
+    const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, tenantId) });
 
     if (tenant) {
       // Get iFlow stats
-      const iflowStats = { total: await prisma.iFlow.count({ where: { tenantId } }) };
+      const [{ c: iflowTotal }] = await db.select({ c: count() }).from(iFlows).where(eq(iFlows.tenantId, tenantId));
+      const iflowStats = { total: iflowTotal };
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const executions = await prisma.iFlowExecution.findMany({
-        where: { iFlow: { tenantId }, startTime: { gte: thirtyDaysAgo } },
-      });
+      const tenantIFlowIds = db.select({ id: iFlows.id }).from(iFlows).where(eq(iFlows.tenantId, tenantId));
+      const executions = await db
+        .select()
+        .from(iFlowExecutions)
+        .where(and(
+          inArray(iFlowExecutions.iFlowId, tenantIFlowIds),
+          gte(iFlowExecutions.startTime, thirtyDaysAgo)
+        ));
       const execStats = {
         total: executions.length,
         completed: executions.filter(e => e.status === "COMPLETED").length,
@@ -95,11 +103,11 @@ async function buildAgentContext(
     const iflow = await getIFlowByAnyId(iflowId, userId);
 
     if (iflow) {
-      const tenant = await prisma.cpiTenant.findUnique({ where: { id: iflow.tenantId } });
-      const executions = await prisma.iFlowExecution.findMany({
-        where: { iFlowId: iflow.id },
-        take: 50,
-        orderBy: { startTime: "desc" },
+      const tenant = await db.query.cpiTenants.findFirst({ where: eq(cpiTenants.id, iflow.tenantId) });
+      const executions = await db.query.iFlowExecutions.findMany({
+        where: eq(iFlowExecutions.iFlowId, iflow.id),
+        limit: 50,
+        orderBy: desc(iFlowExecutions.startTime),
       });
 
       contextParts.push(`**iFlow Details:**`);
@@ -162,8 +170,11 @@ export async function executeAgent(
 
     // Validate tenant access if tenantId is provided
     if (tenantId) {
-      const membership = await prisma.tenantMember.findUnique({
-        where: { userId_tenantId: { userId: currentUser.id, tenantId } },
+      const membership = await db.query.tenantMembers.findFirst({
+        where: and(
+          eq(tenantMembers.userId, currentUser.id),
+          eq(tenantMembers.tenantId, tenantId)
+        ),
       });
 
       if (!membership) {
@@ -186,16 +197,14 @@ User Request:
 ${prompt}`;
 
     // Create execution record
-    const execution = await prisma.aIAgentExecution.create({
-      data: {
-        userId: currentUser.id,
-        agentType: agentType,
-        input: prompt,
-        tenantId: tenantId,
-        iFlowId: iflowId,
-        status: "RUNNING",
-      },
-    });
+    const [execution] = await db.insert(aiAgentExecutions).values({
+      userId: currentUser.id,
+      agentType: agentType,
+      input: prompt,
+      tenantId: tenantId,
+      iFlowId: iflowId,
+      status: "RUNNING",
+    }).returning();
     const executionId = execution.id;
 
     try {
@@ -215,16 +224,15 @@ ${prompt}`;
         Math.ceil((fullPrompt.length + response.length) / 4);
 
       // Update execution record
-      await prisma.aIAgentExecution.update({
-        where: { id: executionId },
-        data: {
+      await db.update(aiAgentExecutions)
+        .set({
           status: "COMPLETED",
           output: response,
           tokensUsed,
           duration,
           success: true,
-        },
-      });
+        })
+        .where(eq(aiAgentExecutions.id, executionId));
 
       revalidatePath("/dashboard/ai-agents");
 
@@ -239,14 +247,13 @@ ${prompt}`;
       };
     } catch (aiError) {
       // Update execution record with error
-      await prisma.aIAgentExecution.update({
-        where: { id: executionId },
-        data: {
+      await db.update(aiAgentExecutions)
+        .set({
           status: "FAILED",
           errorMessage: aiError instanceof Error ? aiError.message : "AI generation failed",
           duration: Date.now() - startTime,
-        },
-      });
+        })
+        .where(eq(aiAgentExecutions.id, executionId));
 
       throw aiError;
     }
@@ -273,13 +280,13 @@ export async function getAgentHistory(
       return { success: false, error: "Not authenticated" };
     }
 
-    const executions = await prisma.aIAgentExecution.findMany({
-      where: {
-        userId: currentUser.id,
-        ...(agentType ? { agentType } : {}),
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit,
+    const conditions = [eq(aiAgentExecutions.userId, currentUser.id)];
+    if (agentType) conditions.push(eq(aiAgentExecutions.agentType, agentType));
+
+    const executions = await db.query.aiAgentExecutions.findMany({
+      where: and(...conditions),
+      orderBy: desc(aiAgentExecutions.createdAt),
+      limit,
     });
 
     return { success: true, data: executions };
@@ -307,9 +314,9 @@ export async function getAgentAnalytics(): Promise<
       return { success: false, error: "Not authenticated" };
     }
 
-    const allExecutions = await prisma.aIAgentExecution.findMany({
-      where: { userId: currentUser.id },
-      orderBy: { createdAt: "desc" },
+    const allExecutions = await db.query.aiAgentExecutions.findMany({
+      where: eq(aiAgentExecutions.userId, currentUser.id),
+      orderBy: desc(aiAgentExecutions.createdAt),
     });
 
     const totalExecutions = allExecutions.length;
@@ -354,11 +361,11 @@ export async function getConversationById(
       return { success: false, error: "Not authenticated" };
     }
 
-    const execution = await prisma.aIAgentExecution.findFirst({
-      where: {
-        id: executionId,
-        userId: currentUser.id,
-      },
+    const execution = await db.query.aiAgentExecutions.findFirst({
+      where: and(
+        eq(aiAgentExecutions.id, executionId),
+        eq(aiAgentExecutions.userId, currentUser.id)
+      ),
     });
 
     if (!execution) {

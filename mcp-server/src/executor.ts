@@ -35,6 +35,7 @@ import {
   handleGetIFlowPerformance,
   handleDownloadIFlow,
   handleAnalyzeIFlow,
+  handleSearchSAPCatalog,
   SAPCPIClientInterface as IFlowClient,
 } from "./handlers/iflow";
 
@@ -198,6 +199,8 @@ async function executeToolHandler(
       return handleDownloadIFlow(client, args as any, context);
     case "analyze_iflow":
       return handleAnalyzeIFlow(client, args as any, context);
+    case "search_sap_catalog":
+      return handleSearchSAPCatalog(client as any, args as any, context);
 
     // Package tools
     case "list_packages":

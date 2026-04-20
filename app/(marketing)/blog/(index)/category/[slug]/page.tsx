@@ -23,10 +23,10 @@ export async function generateMetadata({
   const { title, description } = category;
 
   return constructMetadata({
-    title: `${title} – HagenKit Blog`,
+    title: `${title} – CPI Connect Blog`,
     description:
       description ||
-      "Explore curated stories, walkthroughs, and best practices from the HagenKit blog.",
+      "Explore curated stories, walkthroughs, and best practices from the CPI Connect blog.",
     image: `/api/og/help?title=${encodeURIComponent(
       title
     )}&summary=${encodeURIComponent(description)}`,

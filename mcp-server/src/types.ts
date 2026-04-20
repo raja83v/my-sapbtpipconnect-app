@@ -217,6 +217,13 @@ export const GetTopErrorsInputSchema = z.object({
   limit: z.number().min(1).max(20).default(10),
 });
 
+// Catalog schemas
+export const SearchSAPCatalogInputSchema = z.object({
+  query: z.string().describe("Keywords to search for in the SAP content catalog (e.g., 'S/4HANA', 'SuccessFactors', 'Ariba')"),
+  supportedPlatform: z.string().optional().describe("Filter by platform (e.g., 'SAP HANA Cloud Integration')"),
+  top: z.number().min(1).max(20).default(10).describe("Maximum number of packages to return"),
+});
+
 // ============================================================================
 // Tool Response Types
 // ============================================================================

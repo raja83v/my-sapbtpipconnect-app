@@ -287,6 +287,7 @@ function SortableRoot<T>(props: SortableRootProps<T>) {
     <SortableRootContext.Provider
       value={contextValue as SortableRootContextValue<unknown>}
     >
+      {/* @ts-expect-error - DndContext props spread from sortable config */}
       <DndContext
         collisionDetection={collisionDetection ?? config.collisionDetection}
         modifiers={modifiers ?? config.modifiers}
