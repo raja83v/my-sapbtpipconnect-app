@@ -1,0 +1,106 @@
+---
+title: "Self-Hosting CPI Connect: From Zero to Dashboard in Ten Minutes"
+publishedAt: 2026-04-15
+summary: A concise walkthrough for standing up CPI Connect on your own infrastructure with Docker Compose, embedded Postgres, and a corporate-friendly TLS setup.
+image: /hero.png
+author: codehagen
+categories:
+  - engineering
+related:
+  - welcome-to-cpi-connect
+  - ai-agents-for-sap-cpi
+seoTitle: "Self-Hosting CPI Connect: Docker Compose Setup for SAP CPI Monitoring"
+seoDescription: "Step-by-step guide to running CPI Connect on your own infrastructure: Docker Compose, embedded Postgres, encryption keys, corporate TLS, and the first admin user."
+seoKeywords:
+  - self host sap cpi
+  - cpi connect docker
+  - sap cpi monitoring on prem
+  - open source iflow monitor
+slug: self-hosting-cpi-connect
+---
+
+Running CPI Connect on your own infrastructure is a deliberate two-command affair. The repo ships with a Docker Compose file, an entrypoint that handles migrations, and an embedded Postgres image — so most teams are looking at a real dashboard inside ten minutes.
+
+## Prerequisites
+
+- Docker 24+ and Docker Compose v2.
+- A box with **2 vCPU / 4 GB RAM** as a comfortable floor. The app itself is light; Postgres and the AI gateway are the workloads to size for.
+- Network egress to your SAP CPI tenant (`*.hana.ondemand.com`) and, optionally, to whichever AI provider you intend to use.
+
+## One-command start
+
+```bash
+git clone https://github.com/raja83v/my-sapbtpipconnect-app.git
+cd my-sapbtpipconnect-app
+docker compose up -d
+```
+
+That is it. The compose file:
+
+1. Pulls a Postgres image and persists it under `.data/db/`.
+2. Builds the Next.js app and runs the entrypoint, which applies any outstanding Drizzle migrations.
+3. Exposes the app at [http://localhost:3000](http://localhost:3000).
+
+## First-run configuration
+
+Before clicking around, copy `.env.example` to `.env` and set at least:
+
+```dotenv
+# Required
+DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+ENCRYPTION_KEY=<32-byte base64; node -e "console.log(require('crypto').randomBytes(32).toString('base64'))">
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Optional — leave unset for self-hosted; set to "cloud" only on a public marketing instance
+# NEXT_PUBLIC_DEPLOYMENT_MODE=cloud
+
+# Optional — AI providers
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+The `ENCRYPTION_KEY` is what wraps your stored CPI credentials; rotating it later requires re-encrypting existing tenant rows, so generate it once and back it up alongside your database.
+
+<Note variant="info">
+  Self-hosted installs land on `/sign-in` directly. The marketing landing page is reserved for the public open-source site and is gated behind <code>NEXT_PUBLIC_DEPLOYMENT_MODE=cloud</code>.
+</Note>
+
+## Connect your first tenant
+
+The first user to register becomes **admin** automatically. From the dashboard:
+
+1. Open **Settings → Tenants → Add Tenant**.
+2. Provide the tenant's TMN URL, OAuth client id / secret, and (optionally) the runtime client certificate.
+3. CPI Connect runs a connectivity probe and starts the first sync in the background.
+
+Within a minute or two you will see iFlows, packages, and recent message logs populated under **Dashboard**.
+
+## Corporate proxies & TLS
+
+If your environment routes outbound traffic through an SSL-terminating proxy, drop the proxy's CA bundle into `lib/corporate-tls.ts`'s configured path and set:
+
+```dotenv
+NODE_EXTRA_CA_CERTS=/etc/ssl/certs/corporate.pem
+HTTPS_PROXY=http://proxy.corp:8080
+HTTP_PROXY=http://proxy.corp:8080
+```
+
+The same vars are honoured by the AI gateway.
+
+## Updating
+
+```bash
+git pull
+docker compose pull
+docker compose up -d --build
+```
+
+The entrypoint runs pending Drizzle migrations on boot. Database schema changes are versioned under `drizzle/` and replayed deterministically.
+
+## Where to go next
+
+- Add additional users from **Settings → Members** (invite-only by default).
+- Connect the **MCP server** to your editor's AI assistant.
+- Try the **Documentation Generator** on a non-trivial iFlow and check the produced `.docx`.
+
+Hit a snag? [Open an issue](https://github.com/raja83v/my-sapbtpipconnect-app/issues) — reproductions with `docker compose logs` attached get fastest turnaround.

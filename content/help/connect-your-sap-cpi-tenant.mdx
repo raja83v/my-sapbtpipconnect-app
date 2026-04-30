@@ -1,0 +1,88 @@
+---
+title: Connect Your First SAP CPI Tenant
+updatedAt: 2026-04-30
+summary: Wire CPI Connect to a SAP Cloud Platform Integration tenant — OAuth client, runtime certificate, and the first sync.
+author: codehagen
+categories:
+  - getting-started
+related:
+  - what-is-cpi-connect
+  - using-the-mcp-server
+slug: connect-your-sap-cpi-tenant
+---
+
+CPI Connect talks to SAP CPI through the standard OData management APIs and the runtime endpoints. To connect a tenant you need three things: the **TMN URL**, an **OAuth client**, and (optionally) a **runtime client certificate** for endpoint testing.
+
+This guide walks through getting all three and registering them inside CPI Connect.
+
+<Note variant="info">
+  The OAuth client only needs access to the APIs you intend to use. For most
+  teams that is the integration content APIs and the message processing logs.
+</Note>
+
+## Step 1 — Find your TMN URL
+
+In the SAP CPI Web UI, open the **Monitoring** tile and look at the browser address bar. The TMN URL is the host portion, e.g.:
+
+```
+https://<tenant>.integrationsuite.cfapps.eu10-002.hana.ondemand.com
+```
+
+Copy that full origin. You will paste it into CPI Connect verbatim.
+
+## Step 2 — Create an OAuth client
+
+In your **BTP cockpit**, open the subaccount that hosts your CPI tenant and:
+
+1. Navigate to **Instances and Subscriptions**.
+2. Open the **Process Integration Runtime** instance and create a new **Service Key**.
+3. Pick the role collection that matches the access you want CPI Connect to have. For full read access plus iFlow editing, the standard `WorkspacePackagesEdit` + `MessageMonitor` + `IntegrationFlowEdit` cover it.
+4. Save the service key — you will need `clientid`, `clientsecret`, `tokenurl`, and `url`.
+
+## Step 3 — (Optional) Runtime client certificate
+
+If you plan to **invoke iFlow endpoints from the Test tab** or run end-to-end test runs, CPI Connect needs to authenticate against the runtime as a client. Generate a runtime certificate for the worker tenant in the same BTP cockpit and download the PEM.
+
+You can skip this step if you only need monitoring and AI features.
+
+## Step 4 — Register the tenant
+
+From the dashboard, open **Settings → Tenants → Add Tenant** and fill in:
+
+| Field | Value |
+|---|---|
+| Display name | Anything memorable, e.g. `acme-prod` |
+| TMN URL | The origin from Step 1 |
+| Token URL | `tokenurl` from the service key |
+| Client ID | `clientid` from the service key |
+| Client Secret | `clientsecret` from the service key |
+| API URL | `url` from the service key |
+| Runtime certificate | (Optional) PEM from Step 3 |
+
+When you press **Save**, CPI Connect runs a connectivity probe:
+
+- Acquires an access token.
+- Lists packages and iFlows.
+- Probes the message log endpoint.
+
+A green checkmark means you are good. The first background sync starts immediately.
+
+## Step 5 — Verify the sync
+
+Within a minute or two you should see:
+
+- Packages and iFlows on **Dashboard**.
+- Recent message logs under **Monitoring**.
+- The **iFlow detail** page populated for any iFlow you click into.
+
+If something is empty, open **Settings → Tenants → Logs** for that tenant — the sync writes detailed diagnostics there.
+
+## Common issues
+
+- **403 on token endpoint** — the OAuth client is missing the role collection. Re-issue the service key with the right roles.
+- **Empty iFlow list** — your service key is scoped to a different package or the OAuth client only has runtime permissions. Add the design-time role collections.
+- **TLS errors** — if you sit behind a corporate proxy, set `NODE_EXTRA_CA_CERTS` and `HTTPS_PROXY` for the app container.
+
+## Next step
+
+Once a tenant is connected, [the MCP server](/help/using-the-mcp-server) automatically surfaces it to your editor's AI assistant, so you can read iFlows and trace failures from inside your IDE.

@@ -1,0 +1,77 @@
+---
+title: "Meet the AI Agents That Diagnose, Tune, and Document Your iFlows"
+publishedAt: 2026-04-22
+summary: A tour of the specialised agents inside CPI Connect — error diagnosis, performance tuning, schema mapping, documentation, and iFlow generation — all grounded in your live SAP CPI metadata.
+image: /hero.png
+author: codehagen
+categories:
+  - engineering
+related:
+  - welcome-to-cpi-connect
+  - self-hosting-cpi-connect
+seoTitle: "AI Agents for SAP CPI: How CPI Connect Designs, Debugs, and Documents iFlows"
+seoDescription: "How CPI Connect's planner, specialist, and patch agents work together to diagnose iFlow failures, generate BPMN2, and produce production-grade documentation."
+seoKeywords:
+  - sap cpi ai agent
+  - iflow generator
+  - sap cpi error diagnosis
+  - mcp server sap
+  - ai integration suite
+slug: ai-agents-for-sap-cpi
+---
+
+A standard "ask the LLM about my logs" workflow falls apart on SAP CPI in about thirty seconds. Without the iFlow XML, the runtime configuration, the message processing log, and the tenant capabilities, any answer is a polite hallucination.
+
+CPI Connect ships a small fleet of agents that close that gap. Each one is grounded in real CPI artefacts pulled live from your tenant via OData and the runtime APIs.
+
+## The agents, briefly
+
+| Agent | What it does | Grounded in |
+|---|---|---|
+| **Error Explainer** | Plain-English root cause for failed messages | MPL trace + iFlow XML + adapter config |
+| **Execution Diagnoser** | Cross-message pattern analysis (timeouts, retries, throttling) | Last *N* runs of the iFlow |
+| **iFlow Architect** | Generates a complete iFlow design (steps, channels, mappings) from a natural-language brief | Tenant adapter capabilities |
+| **Patch Agent** | Surgical edits to existing iFlows without regenerating from scratch | Current `.iflw` BPMN2 |
+| **Documentation Generator** | 13-section `.docx` with TOC, headers/footers, Mermaid diagrams | iFlow metadata + parsed XML |
+| **Schema Mapper** | Suggests message mappings between two payloads | Source / target XSD or JSON schemas |
+| **iFlow Chat** | RAG-style Q&A over a single iFlow | Parsed XML + recent runs |
+
+## How a request flows through CPI Connect
+
+The orchestrator runs three roles, each as its own prompt:
+
+1. **Planner** — decomposes the user request into ordered steps and picks the right specialist for each one.
+2. **Specialist** — does the actual work: parse XML, call the CPI runtime, generate BPMN2, write Markdown.
+3. **Patch / Reviewer** — validates the output against the tenant's adapter list and proposes targeted fixes instead of regenerating everything.
+
+```text
+User → Planner → [Specialist · Specialist · …] → Patch → Result
+                       ↑                ↑
+              Live tenant data     Live tenant data
+```
+
+We chose this layout over a single huge prompt for two reasons:
+
+- **Failures are bounded.** When a specialist returns garbage, the patch agent catches it — the orchestrator does not have to re-roll the whole answer.
+- **Cost is predictable.** Most requests touch only one specialist, so we are not paying a 200k-token reasoning model for "what does this MPL line mean?".
+
+## Where MCP fits in
+
+For developers who already live in Cursor, Claude, or VS Code Copilot, CPI Connect exposes the same capabilities as a local **MCP server**. Your editor's assistant can now:
+
+- list iFlows in a tenant,
+- pull the last failed message,
+- fetch the parsed XML of a specific iFlow,
+- and ask CPI Connect to diagnose or document it.
+
+It is the same backend as the web UI — just bound to a different transport. You can keep using the dashboard for ops and let the AI do the heavy reading in your editor.
+
+<Note variant="info">
+  The MCP server runs in-process with the app. Nothing leaves your network unless you configure an external AI provider — and even then, only the prompts you build do.
+</Note>
+
+## Try it
+
+Spin up CPI Connect locally, connect a tenant, and from the dashboard pick any failed message → **Explain with AI**. Or open the iFlow detail page and click **Generate Documentation**. The same actions are available over MCP if you have an assistant configured.
+
+[Self-host CPI Connect →](https://github.com/raja83v/my-sapbtpipconnect-app#quick-start)

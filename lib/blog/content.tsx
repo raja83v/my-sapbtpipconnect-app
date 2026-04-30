@@ -14,44 +14,44 @@ export const BLOG_CATEGORIES = [
     title: "Company",
     slug: "company",
     description:
-      "Stay current on company updates, milestones, culture insights, and announcements about our journey and vision.",
+      "Project announcements, roadmap updates, and milestones for the open-source CPI Connect community.",
   },
   {
     title: "Marketing",
     slug: "marketing",
     description:
-      "Explore marketing strategies, growth tactics, and insights on building and scaling successful campaigns.",
+      "How teams adopt and roll out CPI Connect across their SAP integration landscape.",
   },
   {
     title: "Newsroom",
     slug: "newsroom",
     description:
-      "Latest news, press releases, and important announcements from our team and industry.",
+      "Releases, security advisories, and notable mentions of CPI Connect in the SAP community.",
   },
   {
     title: "Partners",
     slug: "partners",
     description:
-      "Discover partnership opportunities, collaborations, and success stories from our partner ecosystem.",
+      "Integrations, plugins, and community projects built around CPI Connect.",
   },
   {
     title: "Engineering",
     slug: "engineering",
     description:
-      "Deep dives into technical innovations, architecture decisions, and engineering best practices.",
+      "Deep dives into the AI agents, MCP server, BPMN2 generator, and the rest of the CPI Connect stack.",
   },
   {
     title: "Press",
     slug: "press",
     description:
-      "Media coverage, press mentions, and official statements for journalists and media professionals.",
+      "Talks, podcasts, and articles featuring CPI Connect.",
   },
 ];
 
 export const POPULAR_ARTICLES = [
   "what-is-cpi-connect",
-  "organize-with-labels",
-  "azure-saml-sso",
+  "connect-your-sap-cpi-tenant",
+  "using-the-mcp-server",
 ];
 
 export const HELP_CATEGORIES: {
@@ -77,35 +77,35 @@ export const HELP_CATEGORIES: {
     title: "Getting Started",
     slug: "getting-started",
     description:
-      "Launch quickly with setup checklists, workspace walkthroughs, and best practices for connecting your first CPI Connect projects and inviting collaborators.",
+      "Self-host CPI Connect, register your first SAP CPI tenant, generate API tokens, and bring your team into the dashboard.",
     icon: <IconChartBar className="h-6 w-6 text-gray-500" />,
   },
   {
-    title: "Key Concepts",
+    title: "Concepts & Terminology",
     slug: "terms",
     description:
-      "Build fluency with CPI Connect terminology, core objects, and workspace roles so every teammate knows how launches, automations, and permissions connect.",
+      "Brush up on iFlows, message processing logs, OData management APIs, the APIM add-on, and the CPI artefacts CPI Connect works with.",
     icon: <IconBook2 className="h-6 w-6 text-gray-500" />,
   },
   {
-    title: "Agency Playbooks",
+    title: "Operations Playbooks",
     slug: "for-investors",
     description:
-      "Detailed playbooks for agencies orchestrating multiple CPI Connect clients, with templates, automation tips, and workflow handoffs that scale.",
+      "Patterns for running CPI in production: alert routing, on-call workflows, retention policies, and dev/qa/prod tenant comparison.",
     icon: <IconFileAnalytics className="h-6 w-6 text-gray-500" />,
   },
   {
-    title: "AI Insights",
+    title: "AI & MCP",
     slug: "analysis",
     description:
-      "Dive into CPI Connect AI workflows, enrichment techniques, and automation explainers to understand how data powers each step of your launch process.",
+      "How the planner / specialist / patch agents work, configuring AI providers, and using the MCP server from Claude, Cursor, and VS Code.",
     icon: <IconChartPie className="h-6 w-6 text-gray-500" />,
   },
   {
-    title: "Optimization Guides",
+    title: "Tuning & Diagnostics",
     slug: "valuation",
     description:
-      "Optimize live CPI Connect sites with guidance on performance tuning, design refinements, copy testing, and analytics workflows that keep launches improving.",
+      "Diagnose iFlow failures, profile slow integrations, optimize message mappings, and keep your CPI tenants healthy.",
     icon: <IconScale className="h-6 w-6 text-gray-500" />,
   },
 ];

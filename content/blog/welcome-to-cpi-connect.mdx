@@ -1,0 +1,64 @@
+---
+title: "Welcome to CPI Connect — Open-Source SAP CPI Monitoring"
+publishedAt: 2026-04-30
+summary: An open-source, self-hosted observability and AI co-pilot platform for SAP Cloud Platform Integration. Monitor iFlows, debug failures, and ship integrations faster — without vendor lock-in.
+image: /hero.png
+author: codehagen
+categories:
+  - company
+related:
+  - ai-agents-for-sap-cpi
+  - self-hosting-cpi-connect
+seoTitle: "CPI Connect — Open-Source Monitoring & AI Co-pilot for SAP CPI"
+seoDescription: "CPI Connect is an AGPL-3.0 platform for SAP Cloud Platform Integration that combines real-time monitoring, AI-assisted iFlow design, and an MCP server you can self-host."
+seoKeywords:
+  - sap cpi monitoring
+  - sap integration suite
+  - open source cpi
+  - iflow observability
+  - sap cpi ai
+slug: welcome-to-cpi-connect
+---
+
+We started **CPI Connect** because every team running SAP Cloud Platform Integration kept hitting the same wall: rich integrations, but sparse tooling around them. The standard Web UI is fine for one-off checks, vendor APMs are pricey and miss CPI-specific signals, and any custom dashboard quickly turns into yet-another-thing to maintain.
+
+CPI Connect is our take on a better default — a single, self-hosted app that gives operations and integration developers **end-to-end visibility into iFlows, payloads, and runtime health**, plus a set of AI agents that actually understand CPI artefacts.
+
+It is **AGPL-3.0 open source**. There is no SaaS upsell, no usage-based pricing, no telemetry. You clone the repo, run `pnpm dev` or `docker compose up`, and own the whole stack.
+
+## What you get out of the box
+
+- **Real-time iFlow monitoring** — message logs, execution traces, payload viewers, and per-tenant dashboards refreshed against the SAP CPI OData APIs.
+- **APIM diagnostics** — first-class support for the API Management add-on: traffic, error breakdowns, and message-level inspection.
+- **iFlow Studio** — a visual editor that round-trips with SAP-compatible BPMN2 / `.iflw` packages.
+- **Documentation Generator** — produces a 13-section `.docx` (cover page, TOC with dot-leaders, headers/footers, code blocks, Mermaid diagrams) from any iFlow.
+- **MCP server** — a Model Context Protocol bridge so Claude, Copilot, Cursor, and any other MCP-aware assistant can read live CPI data over a typed tool surface.
+- **AI agent suite** — error diagnosis, performance tuning, schema mapping, and iFlow generation, all grounded in your tenant's metadata.
+
+<Note variant="info">
+  CPI Connect is *opinionated* about staying on your network. Your CPI credentials, payloads, and AI conversations never leave the box you self-host on.
+</Note>
+
+## Why open source
+
+SAP integrations are mission-critical and often touch sensitive data. A monitoring tool that ships your payloads to a vendor cloud is a non-starter for most regulated teams.
+
+By keeping CPI Connect open source under AGPL-3.0:
+
+1. **Auditability** — every line that touches your tenant credentials or payloads is on GitHub.
+2. **Data sovereignty** — Postgres, the app, the AI gateway, and the MCP server all run in your VPC.
+3. **No artificial limits** — number of tenants, message logs, users, AI generations — all uncapped.
+4. **Community-driven roadmap** — feature requests are issues; PRs get reviewed.
+
+## What's next
+
+This blog will cover the things we wish someone had written when we started building integrations on SAP CPI:
+
+- **AI agents** — how the planner / specialist / patch architecture works, and why we kept it out of LangChain.
+- **Self-hosting** — Docker Compose, embedded Postgres, corporate TLS, and offline AI gateways.
+- **iFlow patterns** — what we've learned operating dozens of production iFlows.
+- **MCP recipes** — small, useful workflows you can run from your editor today.
+
+If you've felt the same pain we did, [star the repo](https://github.com/raja83v/my-sapbtpipconnect-app), spin it up locally, and tell us what's missing — we read every issue.
+
+[Get started with CPI Connect →](https://github.com/raja83v/my-sapbtpipconnect-app#quick-start)

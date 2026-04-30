@@ -1,0 +1,63 @@
+---
+title: What is CPI Connect?
+updatedAt: 2026-04-30
+summary: An overview of CPI Connect — what it does, who it is for, and how it differs from the SAP standard tools and commercial APMs.
+author: codehagen
+categories:
+  - overview
+  - getting-started
+related:
+  - connect-your-sap-cpi-tenant
+  - using-the-mcp-server
+slug: what-is-cpi-connect
+---
+
+CPI Connect is an **open-source observability and AI co-pilot platform for SAP Cloud Platform Integration**. You self-host it next to your CPI tenants and get one place to monitor iFlows, debug failures, design new integrations, and document the ones already in production.
+
+It is licensed under **AGPL-3.0** and there is no SaaS edition. Everything ships in the repo.
+
+<Note variant="info">
+  CPI Connect never sends your CPI credentials, payloads, or AI conversations
+  to a third-party service unless you explicitly configure an external AI
+  provider.
+</Note>
+
+## What can I do with CPI Connect?
+
+- **Monitor iFlows in real time** — execution counts, failure rates, latency, and the last *N* messages with full payload inspection.
+- **Diagnose failures with AI** — point an LLM at a failed Message Processing Log and get a grounded root-cause explanation, not a hallucination.
+- **Generate iFlows from a brief** — describe what you need (sender system, target, mapping, error handling) and the planner / specialist agents emit a working `.iflw`.
+- **Edit iFlows in the Studio** — visual editor that round-trips with SAP-compatible BPMN2.
+- **Document iFlows automatically** — produce a 13-section `.docx` (with TOC, tables, code blocks, Mermaid diagrams) per iFlow.
+- **Inspect API Management** — proxies, traffic, error breakdowns, and message-level details for the APIM add-on.
+- **Use it from your editor** — the bundled MCP server exposes the same capabilities to any MCP-aware AI assistant (Claude, Cursor, Copilot, …).
+
+## Who uses CPI Connect?
+
+CPI Connect is built for the people who actually run SAP CPI in production:
+
+- **Integration developers** who want fast feedback when a payload breaks at 3 a.m.
+- **Operations / SRE** teams that need a single dashboard for dozens of iFlows without standing up Splunk-class tooling.
+- **Architects** evaluating an iFlow design before it ships.
+- **Consultants** who need to onboard onto a customer's CPI tenant and ramp up quickly.
+
+## How is this different from the SAP Web UI?
+
+The SAP Web UI is excellent for one-off operations. It is not designed for:
+
+- **Aggregation across iFlows or time windows** — error trends, throughput, SLA breaches.
+- **AI-assisted debugging** — the SAP UI shows the MPL; CPI Connect *interprets* it.
+- **Cross-tenant comparison** — dev / qa / prod side-by-side.
+- **Headless / programmatic access** for editor-based AI assistants.
+
+You keep the SAP Web UI for what it is good at; CPI Connect fills in the rest.
+
+## What it is not
+
+- **Not a hosted service.** There is no `app.cpiconnect.com` to sign up for. The public site at [btpiconnect.com](https://btpiconnect.com) is marketing-only.
+- **Not a CPI replacement.** It reads from and edits artefacts in your existing tenant; it does not run integrations itself.
+- **Not a generic observability platform.** It is specifically aware of iFlows, message logs, OData, IDoc, SOAP, and the rest of the SAP integration vocabulary.
+
+## Next step
+
+Head to **[Connect your first SAP CPI tenant](/help/connect-your-sap-cpi-tenant)** to wire CPI Connect to a real CPI environment, or read about the [MCP server](/help/using-the-mcp-server) if you want AI access from your editor first.

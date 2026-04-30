@@ -1,0 +1,108 @@
+---
+title: Using the MCP Server with AI Assistants
+updatedAt: 2026-04-30
+summary: Configure Claude Desktop, Cursor, or VS Code Copilot to talk to your CPI Connect MCP server and read live SAP CPI data from the editor.
+author: codehagen
+categories:
+  - analysis
+related:
+  - what-is-cpi-connect
+  - connect-your-sap-cpi-tenant
+slug: using-the-mcp-server
+excludeHeadingsFromSearch: true
+---
+
+CPI Connect bundles a **Model Context Protocol (MCP) server** so any MCP-aware AI assistant can read your SAP CPI tenant the same way the dashboard does. Once it is wired up, your editor's AI can list iFlows, fetch the last failed message, parse the BPMN2, and ask CPI Connect to diagnose or document an integration — all without leaving your IDE.
+
+<Note variant="success">
+  The MCP server runs in-process with the CPI Connect app. No additional
+  container, no separate auth — just a different transport for the same
+  capabilities.
+</Note>
+
+## What the server exposes
+
+The current tool surface includes:
+
+- `cpi.list_tenants` — registered tenants you have access to.
+- `cpi.list_iflows` — iFlows in a tenant, optionally filtered by package.
+- `cpi.get_iflow` — parsed BPMN2 and metadata for a single iFlow.
+- `cpi.list_messages` — recent message logs with status filters.
+- `cpi.get_message` — full payload, MPL trace, and headers for one message.
+- `cpi.diagnose_message` — runs the Error Explainer agent on a failed message.
+- `cpi.generate_documentation` — produces the same `.docx` the UI does.
+- `apim.list_proxies`, `apim.get_message` — APIM-add-on equivalents.
+
+The full registry lives in [`mcp-server/src/tools/registry.ts`](https://github.com/raja83v/my-sapbtpipconnect-app/blob/main/mcp-server/src/tools/registry.ts).
+
+## Step 1 — Generate an API token
+
+From the dashboard:
+
+1. Open **Settings → Account → API Tokens**.
+2. **Create token**, scope it to the tenants you want exposed over MCP, and copy the value once.
+
+This token authenticates your editor against the MCP server. Treat it like any other secret.
+
+## Step 2 — Configure your assistant
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cpi-connect": {
+      "command": "npx",
+      "args": ["-y", "@cpi-connect/mcp-client", "--url", "http://localhost:3000/api/mcp"],
+      "env": {
+        "CPI_CONNECT_TOKEN": "<paste-your-token>"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The hammer icon should now show CPI Connect's tools.
+
+### Cursor / VS Code (with MCP support)
+
+Add to your settings:
+
+```json
+{
+  "mcp.servers": {
+    "cpi-connect": {
+      "url": "http://localhost:3000/api/mcp",
+      "headers": {
+        "Authorization": "Bearer <paste-your-token>"
+      }
+    }
+  }
+}
+```
+
+## Step 3 — Try it
+
+Open a chat in your assistant and try:
+
+> *List the iFlows in the `acme-prod` tenant that failed in the last hour, then explain the most recent failure.*
+
+Behind the scenes the assistant calls `cpi.list_messages` with a status filter, picks the latest failure, calls `cpi.diagnose_message`, and feeds the response back to you — grounded in your actual MPL trace, not a guess.
+
+## Security model
+
+- The MCP server reuses the CPI Connect API auth layer. Tokens are scoped per-user and per-tenant.
+- Tokens are stored hashed; revoke them at any time from **Settings → Account → API Tokens**.
+- The MCP server never relays the OAuth client secrets stored against your tenants — it only exposes the read/write operations the dashboard exposes.
+
+## Common issues
+
+- **Tools not visible** — the assistant likely failed to start the server. Check `docker compose logs app` for `[mcp]` lines.
+- **`401 unauthorized`** — token revoked or scoped to a different tenant; re-create from the dashboard.
+- **`404` on tools** — the MCP route is mounted at `/api/mcp`. If you put the app behind a sub-path (`NEXT_PUBLIC_APP_URL=https://example.com/cpi`), update the assistant's URL to match.
+
+## Next step
+
+Pair the MCP server with the [iFlow Studio](/dashboard) for round-trip editing: ask the assistant to draft an iFlow, then open it in the Studio for visual review before pushing to the tenant.
