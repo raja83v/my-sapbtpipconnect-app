@@ -13,9 +13,11 @@ import {
   Shield, 
   Zap,
   TrendingUp,
-  Users,
-  Building2,
   Github,
+  Check,
+  Bot,
+  FileText,
+  Workflow,
   Heart,
   Server,
   Lock,
@@ -308,141 +310,113 @@ export default function Home() {
         </Container>
       </section>
 
-      {/* Testimonials Section */}
-      <section id="testimonials" className="py-12 sm:py-16">
+      {/* What's Inside Section */}
+      <section id="modules" className="py-12 sm:py-16">
         <Container>
           <div className="mx-auto max-w-2xl text-center mb-12">
             <Badge className="mb-4" variant="outline">
-              Community Stories
+              What&rsquo;s Inside
             </Badge>
             <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-              Trusted by SAP integration teams worldwide
+              One app, six modules for the full CPI lifecycle
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
-              See how CPI Connect helps organizations monitor and optimize their SAP integrations
+              Every capability ships in the open-source repo. No add-ons, no upsells — clone it and you have everything below.
             </p>
           </div>
 
-          <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Reduced MTTR by 75%</CardTitle>
-                    <CardDescription className="mt-2">
-                      &ldquo;CPI Connect transformed our integration monitoring. We now identify and resolve issues in minutes instead of hours. The payload visibility feature alone has saved us countless debugging hours.&rdquo;
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <Building2 className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Michael Torres</p>
-                    <p className="text-xs text-muted-foreground">Integration Lead, Global Manufacturing Corp</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {[
+              {
+                icon: Activity,
+                title: "Monitoring & MPL",
+                description:
+                  "Live message processing logs across every tenant with payload viewer, error categorisation, and one-click resends.",
+                bullets: ["Multi-tenant MPL stream", "Formatted XML / JSON payloads", "Bulk resend & retry"],
+              },
+              {
+                icon: Workflow,
+                title: "iFlow Studio",
+                description:
+                  "Design, test, and ship integration flows from the browser \u2014 with an AI co-pilot that drafts BPMN from a prompt.",
+                bullets: ["AI-generated iFlow scaffolds", "In-browser test runs", "Runtime credential vault"],
+              },
+              {
+                icon: Bot,
+                title: "AI Agents",
+                description:
+                  "A multi-agent pipeline that reasons over your CPI landscape \u2014 explains errors, drafts fixes, and answers tenant questions.",
+                bullets: ["Error root-cause analysis", "Conversational tenant Q&A", "Bring your own LLM (LiteLLM / Google)"],
+              },
+              {
+                icon: FileText,
+                title: "Documentation Generator",
+                description:
+                  "Turn any iFlow into reviewer-ready Word docs with diagrams, mappings, and step-by-step descriptions.",
+                bullets: ["BPMN to narrative prose", "DOCX export", "Editable templates"],
+              },
+              {
+                icon: TrendingUp,
+                title: "Cost Analyzer",
+                description:
+                  "Spot expensive iFlows, idle tenants, and oversized payloads before they show up on the SAP invoice.",
+                bullets: ["Per-iFlow cost attribution", "Anomaly detection", "Trend dashboards"],
+              },
+              {
+                icon: Server,
+                title: "MCP Server",
+                description:
+                  "A built-in Model Context Protocol server so Claude, Cursor, or VS Code Copilot can query your CPI data directly.",
+                bullets: ["MPL & iFlow tools", "OAuth-scoped access", "Drop into any MCP client"],
+              },
+            ].map((mod) => {
+              const Icon = mod.icon;
+              return (
+                <Card key={mod.title} className="border-foreground/10">
+                  <CardHeader>
+                    <div className="bg-indigo-50 dark:bg-indigo-950/40 mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg">
+                      <Icon className="h-5 w-5 text-indigo-600 dark:text-indigo-400" strokeWidth={1.75} />
+                    </div>
+                    <CardTitle className="text-lg">{mod.title}</CardTitle>
+                    <CardDescription className="mt-2">{mod.description}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="space-y-2">
+                      {mod.bullets.map((bullet) => (
+                        <li key={bullet} className="flex items-start gap-2 text-sm text-muted-foreground">
+                          <Check className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" strokeWidth={2.5} />
+                          <span>{bullet}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
 
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Proactive Problem Detection</CardTitle>
-                    <CardDescription className="mt-2">
-                      &ldquo;The real-time alerts and analytics give us complete visibility into our SAP landscape. We catch issues before they impact business operations. It&apos;s like having a 24/7 integration expert on our team.&rdquo;
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <Users className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Sarah Chen</p>
-                    <p className="text-xs text-muted-foreground">SAP Architect, Financial Services Inc</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Simplified Multi-Tenant Management</CardTitle>
-                    <CardDescription className="mt-2">
-                      &ldquo;Managing 8 different CPI tenants was a nightmare until we found CPI Connect. The unified dashboard and global search make it effortless to monitor all our integrations from one place.&rdquo;
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <Building2 className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">James Anderson</p>
-                    <p className="text-xs text-muted-foreground">Head of IT Operations, Retail Enterprise</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Enhanced Team Collaboration</CardTitle>
-                    <CardDescription className="mt-2">
-                      &ldquo;The audit trail and notification features have streamlined our team collaboration. Everyone knows what&apos;s happening with our integrations, and we can track every change made to our CPI environment.&rdquo;
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <Users className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Priya Sharma</p>
-                    <p className="text-xs text-muted-foreground">Integration Manager, Healthcare Systems</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Clear ROI in First Month</CardTitle>
-                    <CardDescription className="mt-2">
-                      &ldquo;The cost savings from reduced downtime and faster issue resolution paid for CPI Connect in the first month. The error categorization feature is brilliant for root cause analysis.&rdquo;
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <Building2 className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">David Mueller</p>
-                    <p className="text-xs text-muted-foreground">CIO, Logistics Solutions GmbH</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">Seamless Integration</CardTitle>
-                    <CardDescription className="mt-2">
-                      &ldquo;Setup was incredibly smooth with OAuth integration. Within hours, we had full visibility into our CPI landscape. The formatted payload views make debugging so much easier than working in raw XML.&rdquo;
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <Users className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Emma Williams</p>
-                    <p className="text-xs text-muted-foreground">Senior Developer, Tech Innovations Ltd</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
+          <div className="mt-12 flex flex-col items-center gap-4 text-center">
+            <p className="text-sm text-muted-foreground">Built on a modern, open stack</p>
+            <ul className="flex flex-wrap items-center justify-center gap-2">
+              {[
+                "Next.js 16",
+                "React 19",
+                "TypeScript",
+                "PostgreSQL",
+                "Drizzle ORM",
+                "Better-Auth",
+                "Vercel AI SDK",
+                "shadcn/ui",
+                "Tailwind CSS",
+              ].map((tech) => (
+                <li
+                  key={tech}
+                  className="border-foreground/10 bg-background/60 rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground"
+                >
+                  {tech}
+                </li>
+              ))}
+            </ul>
           </div>
         </Container>
       </section>
