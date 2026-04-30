@@ -42,6 +42,12 @@ CPI Connect gives you **full visibility** into your SAP CPI landscape — iFlows
 
 ### April 2026
 
+- **Auth Stack — Supabase → Better-Auth + Embedded PostgreSQL**
+  - Replaced Supabase Auth (GoTrue) with [Better-Auth](https://better-auth.com/) using its Drizzle adapter — email/password, sessions, and the admin plugin run directly inside the Next.js app.
+  - Replaced the Supabase-managed Postgres with [`embedded-postgres`](https://www.npmjs.com/package/embedded-postgres). On `pnpm dev` / `pnpm start`, [instrumentation.ts](instrumentation.ts) auto-spawns a local PostgreSQL 18 cluster under `.data/db/` on port `5435` and runs Drizzle migrations — **no Docker, no Supabase CLI, no separate services required for local dev**.
+  - Set `DATABASE_URL` if you want to point at an external Postgres (e.g. inside Docker Compose); otherwise the embedded cluster is used automatically.
+  - All Supabase client code, `supabase/` config, and `@supabase/*` packages have been removed.
+
 - **Open-Source Auth Boundary (Cloud vs Self-Hosted)**
   - The hosted domain ([btpiconnect.com](https://btpiconnect.com)) now runs in **cloud (marketing-only) mode** — there is no sign-up, sign-in, or app surface. It exists purely to showcase the open-source project.
   - **Self-hosted installs go straight to `/sign-in`** instead of the marketing landing page. The first visitor on a fresh install is bounced through `/sign-up` / setup automatically.
@@ -69,7 +75,7 @@ CPI Connect gives you **full visibility** into your SAP CPI landscape — iFlows
 
 ## Quick Start
 
-> **Prerequisites:** [Node.js 20+](https://nodejs.org/), [pnpm](https://pnpm.io/), [Docker](https://www.docker.com/products/docker-desktop/)
+> **Prerequisites:** [Node.js 20+](https://nodejs.org/), [pnpm](https://pnpm.io/). Docker is optional — only needed for the full self-hosted stack.
 
 ### 1. Clone &amp; Install
 
@@ -79,78 +85,46 @@ cd my-sapbtpipconnect-app
 pnpm install
 ```
 
-### 2. Start Supabase (local Docker)
-
-CPI Connect uses [Supabase](https://supabase.com/) for authentication. The easiest way to run it locally is with the Supabase CLI:
-
-```bash
-# Install Supabase CLI (if you haven't already)
-npx supabase init     # only needed once — creates supabase/ config folder
-npx supabase start    # starts all Supabase Docker containers
-```
-
-This spins up the following containers on your machine:
-
-| Container | Port | Purpose |
-|-----------|------|---------|
-| **Kong** (API Gateway) | `54321` | Main API entry-point (`NEXT_PUBLIC_SUPABASE_URL`) |
-| **GoTrue** (Auth) | `9999` (internal) | Email/password sign-up, JWT session management |
-| **PostgreSQL 17** | `54322` | Primary database (shared by Supabase Auth + your app) |
-| **PostgREST** | internal | Auto-generated REST API from Postgres schema |
-| **Supabase Studio** | `54323` | Browser-based admin UI (tables, auth users, SQL editor) |
-| **Realtime** | internal | WebSocket-based change subscriptions |
-| **Storage API** | internal | File/object storage (S3-compatible) |
-| **Edge Runtime** | internal | Deno-based serverless functions |
-| **Inbucket / Mailpit** | `54324` | Local email inbox — captures all emails sent during dev |
-| **pg_meta** | internal | Postgres metadata API for Studio |
-| **Logflare / Vector** | internal | Log aggregation and analytics |
-
-After `supabase start` completes, it prints your local keys:
-
-```
-API URL:   http://127.0.0.1:54321
-anon key:  eyJhbGci...
-service_role key: eyJhbGci...
-```
-
-### 3. Configure Environment
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in the keys from the previous step:
+For local development you only need two values:
 
 ```dotenv
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key from supabase start>
-SUPABASE_SERVICE_ROLE_KEY=<service_role key from supabase start>
-
-# Database — points at the same Postgres Supabase spun up
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
-
 # Encryption key for SAP CPI credentials (generate one with):
 #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ENCRYPTION_KEY=<your-base64-key>
+
+# Better-Auth signing secret (any high-entropy string):
+#   openssl rand -hex 32
+BETTER_AUTH_SECRET=<your-secret>
+
+# Optional — leave unset to use the auto-managed embedded Postgres on port 5435.
+# Set this only if you want to point at an external PostgreSQL instance.
+# DATABASE_URL=postgresql://user:pass@host:5432/dbname
 
 # App URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-See [.env.example](.env.example) for the full list of optional variables (AI provider, cron secret, etc.).
+See [.env.example](.env.example) for the full list of optional variables (AI provider, cron secret, SMTP, corporate-network TLS fix, etc.).
 
-### 4. Run Database Migrations
-
-```bash
-npx drizzle-kit migrate
-```
-
-### 5. Start the Dev Server
+### 3. Start the Dev Server
 
 ```bash
 pnpm dev
 ```
+
+On first launch [instrumentation.ts](instrumentation.ts) automatically:
+
+1. Spawns an [`embedded-postgres`](https://www.npmjs.com/package/embedded-postgres) cluster under `.data/db/` (port `5435` by default — auto-shifts if busy).
+2. Runs all Drizzle migrations from [drizzle/](drizzle/).
+3. Starts the cron scheduler.
+
+No Docker, no Supabase CLI, no `psql` setup — the database is fully self-contained inside the project folder. Override `EMBEDDED_PG_PORT` or `APP_DATA_DIR` to relocate it.
 
 Open [http://localhost:3000](http://localhost:3000). The first user to register automatically becomes **admin**.
 
@@ -171,19 +145,19 @@ In **cloud** mode the marketing header replaces "Login / Get Started" with "Star
 
 | Command | Description |
 |---------|-------------|
-| `pnpm dev` | Start dev server with Turbopack |
+| `pnpm dev` | Start dev server with Turbopack (auto-starts embedded Postgres) |
 | `pnpm build` | Production build |
-| `pnpm start` | Start production server |
+| `pnpm start` | Start production server (auto-starts embedded Postgres) |
 | `pnpm lint` | Run ESLint |
-| `npx drizzle-kit migrate` | Apply Drizzle migrations |
-| `npx drizzle-kit studio` | Open Drizzle Studio (DB admin UI) |
-| `npx drizzle-kit push` | Push schema changes to database |
+| `npx drizzle-kit generate` | Generate a new migration from schema changes |
+| `npx drizzle-kit migrate` | Apply pending Drizzle migrations manually |
+| `npx drizzle-kit studio` | Open Drizzle Studio — point it at `postgresql://app:app@127.0.0.1:5435/app` |
 
 ---
 
 ## Self-Hosting Guide
 
-CPI Connect can be deployed on any machine that runs Docker. The full stack includes Supabase (auth + database), LiteLLM (AI proxy), and the application — all in one command.
+CPI Connect can be deployed on any machine that runs Docker. The full stack is just three services — PostgreSQL, LiteLLM (AI proxy), and the Next.js application — all in one command.
 
 > **Detailed instructions:** See [SELF_HOSTING.md](SELF_HOSTING.md) for the complete guide, including LiteLLM model configuration, backup/restore, and troubleshooting.
 
@@ -226,13 +200,11 @@ docker compose -f docker-compose.selfhost.yml up -d
 
 | Service | Port | Description |
 |---------|------|-------------|
-| CPI Connect | `3000` | Application |
-| Supabase API | `8000` | Auth & REST gateway |
-| LiteLLM | `4000` | AI model proxy (100+ providers) |
-| Supabase Studio | `3100` | Database admin UI |
-| PostgreSQL | `5433` | Direct DB access |
+| CPI Connect | `3000` | Next.js application (Better-Auth runs in-process) |
+| LiteLLM | `4000` | AI model proxy (100+ providers, optional) |
+| PostgreSQL | `5432` | Database — managed by Docker Compose; data persisted in the `postgres_data` volume |
 
-All ports are configurable via `.env`.
+All ports are configurable via `.env`. When running `pnpm dev` outside Docker, you can skip Compose entirely — the embedded Postgres on port `5435` is used instead.
 
 ### Updating
 
@@ -252,22 +224,28 @@ For local development, see the [Quick Start](#quick-start) section above.
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `invalid JWT: unable to parse or verify signature` | Anon/service role key doesn't match the JWT secret in GoTrue | Run `npx supabase status` or check Kong config to get the correct keys |
-| `User already registered` | User exists in Supabase `auth.users` but not in Prisma `User` table | The app auto-recovers from this; or delete the user from Supabase Studio → Authentication |
-| Port 54321 already in use | Another Supabase instance is running | `npx supabase stop` the other project, or change ports in `supabase/config.toml` |
-| `SUPABASE_SERVICE_ROLE_KEY` is empty | Key not set in `.env` | Copy from `npx supabase status` output |
-| Database connection refused on 54322 | Supabase Postgres not running | `docker ps` to check; `npx supabase start` to restart |
-| Source map parse errors in console | Known issue with `@supabase/ssr` package | Harmless warning; suppressed via `serverExternalPackages` in `next.config.ts` |
+| `EADDRINUSE: address already in use 127.0.0.1:5435` | A previous `pnpm dev` process didn't release the embedded Postgres port | Startup auto-shifts to the next free port; or kill the stale Node process and delete `.data/db/postmaster.pid` |
+| Embedded Postgres won't start on Windows | Antivirus blocking `initdb` / `postgres.exe` from `node_modules/@embedded-postgres/win32-x64` | Allow the binary in your AV, or set `DATABASE_URL` to use an external Postgres |
+| `relation "user" does not exist` after pulling new code | New Drizzle migrations haven't run | They run automatically on `pnpm dev`; or trigger manually with `npx drizzle-kit migrate` |
+| Want to wipe local data and start fresh | n/a | Stop the dev server and delete the `.data/db/` directory — the next `pnpm dev` will re-create the cluster and re-run all migrations |
+| `BETTER_AUTH_SECRET` warnings in console | Secret missing in `.env` | Generate with `openssl rand -hex 32` and add to `.env` |
+| AI / SAP requests fail with `self-signed certificate in certificate chain` | Corporate SSL inspection proxy | Set `CORPORATE_NETWORK=true` and `NODE_EXTRA_CA_CERTS=<path>` — see the *Corporate Network* section of [.env.example](.env.example) |
 
 ### Backing Up
 
+**Docker Compose deployments**
+
 ```bash
 # Dump the database
-docker exec -t cpiconnect-db pg_dumpall -c -U postgres > backup_$(date +%F).sql
+docker compose exec -T db pg_dump -U cpiconnect cpiconnect > backup_$(date +%F).sql
 
 # Restore
-cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
+cat backup_2026-02-23.sql | docker compose exec -T db psql -U cpiconnect cpiconnect
 ```
+
+**Embedded Postgres (local dev)**
+
+All application data lives under `.data/db/`. To back up, simply stop the dev server and copy/archive that directory. To restore, drop the archive back in place before starting `pnpm dev` again.
 
 ---
 
@@ -282,22 +260,24 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
                ┌──────────────┼──────────────┐
                ▼              ▼              ▼
 ┌────────────────────┐ ┌────────────┐ ┌────────────────┐
-│  Supabase Auth     │ │  Drizzle   │ │  AI Runtime    │
-│  (GoTrue JWT)      │ │  ORM       │ │  (LLMLite /    │
-│                    │ │            │ │   Google AI)   │
-└────────────────────┘ └─────┬──────┘ └────────────────┘
-                             │
-                             ▼
-              ┌──────────────────────────────┐
-              │  PostgreSQL 17               │
-              │  (Supabase-managed)          │
-              └──────────────────────────────┘
-                             │
-                             ▼
-              ┌──────────────────────────────┐
-              │  SAP CPI (OData APIs)        │
-              │  OAuth 2.0 / Basic / Service │
-              └──────────────────────────────┘
+│  Better-Auth       │ │  Drizzle   │ │  AI Runtime    │
+│  (in-process,      │ │  ORM       │ │  (LLMLite /    │
+│   Drizzle adapter) │ │            │ │   Google AI)   │
+└─────────┬──────────┘ └─────┬──────┘ └────────────────┘
+          │                  │
+          └────────┬─────────┘
+                   ▼
+   ┌──────────────────────────────────────┐
+   │  PostgreSQL 18                       │
+   │  Embedded (`.data/db/`, port 5435)   │
+   │  — or external via DATABASE_URL —    │
+   └──────────────────────────────────────┘
+                   │
+                   ▼
+   ┌──────────────────────────────────────┐
+   │  SAP CPI (OData APIs)                │
+   │  OAuth 2.0 / Basic / Service Key     │
+   └──────────────────────────────────────┘
 ```
 
 ### Tech Stack
@@ -305,8 +285,8 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
 | Layer | Technology |
 |-------|-----------|
 | Framework | Next.js 16, React 19, Turbopack |
-| Auth | Supabase Auth (GoTrue) with email/password |
-| Database | PostgreSQL 17 via **Drizzle ORM** |
+| Auth | **Better-Auth** with email/password + admin plugin (Drizzle adapter) |
+| Database | PostgreSQL 18 via **Drizzle ORM** — embedded by default (`embedded-postgres`), or external via `DATABASE_URL` |
 | UI | Shadcn UI, Tailwind CSS 4, Radix primitives |
 | Charts | Recharts |
 | Icons | Lucide React, Tabler Icons |
@@ -327,7 +307,7 @@ cat backup_2026-02-23.sql | docker exec -i cpiconnect-db psql -U postgres
 | `app/(admin)` | Admin panel — users, workspaces, analytics |
 | `app/(onboarding)` | First-time user onboarding |
 | `app/dashboard` | Main authenticated dashboard |
-| `app/api/auth` | Auth API routes (Supabase-backed) |
+| `app/api/auth` | Better-Auth API routes (`/api/auth/[...all]`) |
 | `app/api/mcp` | MCP server tool execution endpoint |
 
 ---
@@ -399,8 +379,8 @@ CPI Connect uses **Drizzle ORM** with PostgreSQL. Core models:
 
 | Model | Description |
 |-------|-------------|
-| `User` | User accounts with Supabase auth integration |
-| `Session` | User sessions with tenant context |
+| `User` | User accounts (managed by Better-Auth) |
+| `Session` / `Account` / `Verification` | Better-Auth session, OAuth account, and email-verification tables |
 | `CpiTenant` | SAP CPI tenant configurations (encrypted credentials) |
 | `IFlow` | Integration flows synced from SAP CPI |
 | `IFlowExecution` | Execution history and message logs |
@@ -435,21 +415,21 @@ Schema is defined in `lib/db/schema.ts` and managed via `drizzle-kit`.
 ├── components/
 │   ├── ui/                # Shadcn UI library (50+ components)
 │   ├── ai/                # AI agent UI
-│   ├── auth/              # Auth forms (Supabase)
+│   ├── auth/              # Auth forms (Better-Auth client)
 │   ├── dashboard/         # Dashboard components
 │   ├── marketing/         # Marketing page components
 │   └── settings/          # Settings components
 ├── lib/
-│   ├── supabase/          # Supabase client utilities (client, server, admin, middleware)
+│   ├── auth/              # Better-Auth server config and client utilities
 │   ├── ai/                # AI agent types, prompts, tools, runtime
 │   ├── sap-cpi/           # SAP CPI client and BPMN2 parser
-│   ├── db/                # Drizzle ORM schema, client, and query helpers
+│   ├── db/                # Drizzle ORM schema, client, embedded-postgres bootstrap, migrations
 │   ├── docx-export.ts     # Professional .docx generation (tables, TOC, headers)
 │   └── validations/       # Zod schemas
 ├── mcp-server/            # MCP server implementation
 ├── drizzle/               # Drizzle migrations
 ├── content/               # MDX content (blog, help, legal)
-├── docker/                # Docker support files (entrypoint, LiteLLM config, Supabase init)
+├── docker/                # Docker support files (entrypoint, LiteLLM config)
 ├── emails/                # React Email templates
 ├── scripts/               # Seed and utility scripts
 ├── types/                 # TypeScript type definitions
@@ -463,12 +443,12 @@ Schema is defined in `lib/db/schema.ts` and managed via `drizzle-kit`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase API URL (e.g., `http://127.0.0.1:54321`) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anonymous (public) key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-only, bypasses RLS) |
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `ENCRYPTION_KEY` | Yes | 32-byte AES-256 key (base64) for SAP credential encryption |
-| `NEXT_PUBLIC_APP_URL` | Yes | Public app URL |
+| `BETTER_AUTH_SECRET` | Yes | High-entropy signing secret for Better-Auth sessions (`openssl rand -hex 32`). Falls back to `ENCRYPTION_KEY` only as a dev convenience |
+| `NEXT_PUBLIC_APP_URL` | Yes | Public app URL (used as Better-Auth `baseURL`) |
+| `DATABASE_URL` | No | External PostgreSQL connection string. **If unset, an embedded Postgres cluster is started automatically** under `.data/db/` on port `5435` |
+| `EMBEDDED_PG_PORT` | No | Override the default port (`5435`) for the embedded Postgres cluster |
+| `APP_DATA_DIR` | No | Override the data directory for the embedded Postgres cluster (default: `<repo>/.data`) |
 | `NEXT_PUBLIC_DEPLOYMENT_MODE` | No | `self-hosted` (default) or `cloud` |
 | `AI_PROVIDER` | No | `llmlite` (default) or `google` |
 | `LITELLM_MASTER_KEY` | No | LiteLLM proxy master key |
@@ -476,6 +456,8 @@ Schema is defined in `lib/db/schema.ts` and managed via `drizzle-kit`.
 | `LLMLITE_BASE_URL` | No | LLMLite-compatible endpoint URL |
 | `LLMLITE_API_KEY` | No | LLMLite API key |
 | `CRON_SECRET` | No | Secret to protect cron trigger endpoints |
+| `CORPORATE_NETWORK` | No | Set to `true` to enable the corporate-proxy TLS workaround in [lib/corporate-tls.ts](lib/corporate-tls.ts) |
+| `NODE_EXTRA_CA_CERTS` | No | Path to a corporate CA bundle (used with `CORPORATE_NETWORK=true`) |
 
 ---
 
