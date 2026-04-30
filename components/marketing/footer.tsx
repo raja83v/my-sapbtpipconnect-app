@@ -6,10 +6,6 @@ const links = [
     group: "Product",
     items: [
       {
-        title: "Pricing",
-        href: "/#pricing",
-      },
-      {
         title: "Documentation",
         href: "/help",
       },

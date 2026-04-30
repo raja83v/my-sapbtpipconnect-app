@@ -466,14 +466,6 @@ export default function Home() {
                 variant="outline"
                 className="px-8"
               >
-                <Link href="#pricing">View Pricing</Link>
-              </Button>
-              <Button
-                asChild
-                size="lg"
-                variant="ghost"
-                className="px-8"
-              >
                 <Link href={siteConfig.links.github} target="_blank" rel="noopener noreferrer">
                   <Github className="mr-2 h-4 w-4" />
                   View on GitHub

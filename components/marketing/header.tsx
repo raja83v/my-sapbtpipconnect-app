@@ -117,7 +117,6 @@ const contentLinks: FeatureLink[] = [
 ];
 
 const mobileLinks: MobileLink[] = [
-  { name: "Pricing", href: "/#pricing" },
   { name: "Help", href: "/help" },
   { name: "Blog", href: "/blog" },
   { name: "GitHub", href: siteConfig.links.github },
@@ -364,11 +363,6 @@ const NavMenu = () => {
   return (
     <NavigationMenu className="**:data-[slot=navigation-menu-viewport]:bg-[color-mix(in_oklch,var(--color-muted)_25%,var(--color-background))] **:data-[slot=navigation-menu-viewport]:shadow-lg **:data-[slot=navigation-menu-viewport]:rounded-2xl **:data-[slot=navigation-menu-viewport]:top-4 [--color-muted:color-mix(in_oklch,var(--color-foreground)_5%,transparent)] [--viewport-outer-px:2rem] max-lg:hidden">
       <NavigationMenuList className="gap-3">
-        <NavigationMenuItem value="pricing">
-          <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
-            <Link href="/#pricing">Pricing</Link>
-          </NavigationMenuLink>
-        </NavigationMenuItem>
         <NavigationMenuItem value="help">
           <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
             <Link href="/help">Help</Link>
