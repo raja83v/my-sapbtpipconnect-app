@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { count, eq } from "drizzle-orm";
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { count } from "drizzle-orm";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 
 /**
  * First-run admin setup endpoint.
@@ -11,8 +10,9 @@ import { createClient } from "@/lib/supabase/server";
  */
 export async function POST(request: NextRequest) {
   try {
-    // Check if any users exist
-    const [{ total: userCount }] = await db.select({ total: count() }).from(users);
+    const [{ total: userCount }] = await db
+      .select({ total: count() })
+      .from(users);
     if (userCount > 0) {
       return NextResponse.json(
         { error: "Setup has already been completed" },
@@ -36,42 +36,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create user in Supabase via admin client
-    const supabaseAdmin = createAdminClient();
-    const { data: supabaseData, error: supabaseError } =
-      await supabaseAdmin.auth.admin.createUser({
-        email: email.toLowerCase().trim(),
-        password,
-        email_confirm: true,
-        user_metadata: { full_name: name?.trim() || "Admin" },
-      });
+    const normalizedEmail = email.toLowerCase().trim();
+    const displayName = name?.trim() || "Admin";
 
-    if (supabaseError || !supabaseData.user) {
+    // Sign up via BetterAuth (creates user + account + session)
+    const result = await auth.api.signUpEmail({
+      body: {
+        email: normalizedEmail,
+        password,
+        name: displayName,
+      },
+      returnHeaders: true,
+    });
+
+    if (!result?.response?.user?.id) {
       return NextResponse.json(
-        { error: supabaseError?.message || "Failed to create Supabase user" },
+        { error: "Failed to create admin user" },
         { status: 500 }
       );
     }
 
-    // Create admin user
-    const [admin] = await db.insert(users).values({
-      email: email.toLowerCase().trim(),
-      name: name?.trim() || "Admin",
-      supabaseId: supabaseData.user.id,
-      role: "admin",
-      status: "ACTIVE",
-      emailVerified: true,
-      onboardingCompleted: false,
-    }).returning();
+    const adminId = result.response.user.id;
 
-    // Sign in the newly created admin
-    const supabase = await createClient();
-    await supabase.auth.signInWithPassword({
-      email: email.toLowerCase().trim(),
-      password,
-    });
+    // Promote to admin and mark email as verified
+    const [admin] = await db
+      .update(users)
+      .set({ role: "admin", emailVerified: true })
+      .where(eq(users.id, adminId))
+      .returning();
 
-    return NextResponse.json({
+    // Forward Set-Cookie headers from BetterAuth so the user is signed in
+    const setCookies = result.headers?.getSetCookie?.() ?? [];
+    const response = NextResponse.json({
       success: true,
       user: {
         id: admin.id,
@@ -80,27 +76,29 @@ export async function POST(request: NextRequest) {
         role: admin.role,
       },
     });
+    for (const cookie of setCookies) {
+      response.headers.append("Set-Cookie", cookie);
+    }
+    return response;
   } catch (error) {
     console.error("Setup error:", error);
-    return NextResponse.json(
-      { error: "An error occurred during setup" },
-      { status: 500 }
-    );
+    const message =
+      error instanceof Error ? error.message : "An error occurred during setup";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
 /**
- * Check if setup is needed (no users exist)
+ * Check if setup is needed (no users exist).
  */
 export async function GET() {
   try {
-    const [{ total: userCount }] = await db.select({ total: count() }).from(users);
+    const [{ total: userCount }] = await db
+      .select({ total: count() })
+      .from(users);
     return NextResponse.json({ setupRequired: userCount === 0 });
   } catch (error) {
     console.error("Setup check error:", error);
-    return NextResponse.json(
-      { error: "An error occurred" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "An error occurred" }, { status: 500 });
   }
 }

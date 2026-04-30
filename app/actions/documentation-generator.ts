@@ -19,6 +19,10 @@ import type {
     MermaidDiagram,
 } from "@/types/documentation-generator";
 import { getDocumentTypeTitle, AVAILABLE_SECTIONS } from "@/types/documentation-generator";
+import {
+    getGeneratedDocumentById,
+    listGeneratedDocumentsForUser,
+} from "@/lib/ai/doc-generator/persist";
 
 // Re-export types for consumers
 export type {
@@ -33,6 +37,46 @@ export type {
 // ============================================================================
 // Server Actions
 // ============================================================================
+
+/**
+ * Get a persisted generated document by id (must belong to current user).
+ */
+export async function getGeneratedDocument(
+    id: string,
+): Promise<ActionResult<GeneratedDocument & { id: string; durationMs: number }>> {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) return { success: false, error: "Not authenticated" };
+    const doc = await getGeneratedDocumentById(id, currentUser.id);
+    if (!doc) return { success: false, error: "Document not found" };
+    return { success: true, data: doc };
+}
+
+/**
+ * List recent generated documents for the current user.
+ */
+export async function listGeneratedDocuments(params: {
+    tenantId?: string;
+    iflowId?: string;
+    limit?: number;
+}): Promise<ActionResult<Array<{
+    id: string;
+    title: string;
+    iFlowName: string | null;
+    documentationType: string;
+    tokensUsed: number;
+    durationMs: number;
+    createdAt: Date;
+}>>> {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) return { success: false, error: "Not authenticated" };
+    const rows = await listGeneratedDocumentsForUser({
+        userId: currentUser.id,
+        tenantId: params.tenantId,
+        iFlowId: params.iflowId,
+        limit: params.limit,
+    });
+    return { success: true, data: rows };
+}
 
 /**
  * Get iFlows for Documentation Generator - fetches directly from SAP CPI API

@@ -26,6 +26,7 @@ import {
   TabStopType,
   TabStopPosition,
   LevelFormat,
+  ImageRun,
   convertInchesToTwip,
   type ITableCellOptions,
   type ISectionOptions,
@@ -35,10 +36,40 @@ import type { GeneratedDocument, MermaidDiagram } from "@/types/documentation-ge
 import { getDocumentTypeTitle } from "@/types/documentation-generator";
 
 // ============================================================================
+// Cover diagram image (rasterized client-side)
+// ============================================================================
+
+export interface CoverDiagramImage {
+  /** Raw PNG bytes (from canvas.toBlob → arrayBuffer). */
+  data: Uint8Array;
+  /** Display width in pixels (will be embedded at this size). */
+  widthPx: number;
+  /** Display height in pixels. */
+  heightPx: number;
+}
+
+/**
+ * Pre-rendered Mermaid diagrams keyed by the *exact* mermaid source
+ * (trimmed). Used to replace ```mermaid code blocks in section markdown
+ * and the standalone diagrams page with proper PNG images.
+ */
+export type DiagramImageMap = Map<string, CoverDiagramImage>;
+
+function normaliseMermaid(code: string): string {
+  return code.trim().replace(/\r\n/g, "\n");
+}
+
+// ============================================================================
 // Main Export Function
 // ============================================================================
 
-export async function generateDocx(generatedDoc: GeneratedDocument): Promise<Blob> {
+export async function generateDocx(
+  generatedDoc: GeneratedDocument,
+  options: {
+    coverDiagram?: CoverDiagramImage;
+    diagramImages?: DiagramImageMap;
+  } = {},
+): Promise<Blob> {
   const doc = new Document({
     creator: "SAP CPI Connect — Documentation Generator",
     title: generatedDoc.title,
@@ -81,8 +112,11 @@ export async function generateDocx(generatedDoc: GeneratedDocument): Promise<Blo
     },
     sections: [
       buildCoverPage(generatedDoc),
+      ...(options.coverDiagram
+        ? [buildArchitecturePage(generatedDoc, options.coverDiagram)]
+        : []),
       buildTocSection(generatedDoc),
-      buildBodySection(generatedDoc),
+      buildBodySection(generatedDoc, options.diagramImages),
     ],
   });
 
@@ -189,6 +223,75 @@ function buildMetadataTable(doc: GeneratedDocument): Table {
 }
 
 // ============================================================================
+// Architecture Overview Page (Mermaid PNG embedded via ImageRun)
+// ============================================================================
+
+function buildArchitecturePage(
+  doc: GeneratedDocument,
+  cover: CoverDiagramImage,
+): ISectionOptions {
+  // Cap to a sensible page width: ~6.0 inches at 96dpi = 576px
+  const maxWidth = 576;
+  const ratio = cover.widthPx > 0 ? cover.heightPx / cover.widthPx : 0.6;
+  const width = Math.min(cover.widthPx, maxWidth);
+  const height = Math.max(60, Math.round(width * ratio));
+
+  return {
+    properties: {
+      page: {
+        margin: {
+          top: convertInchesToTwip(1),
+          bottom: convertInchesToTwip(1),
+          left: convertInchesToTwip(1),
+          right: convertInchesToTwip(1),
+        },
+      },
+    },
+    children: [
+      new Paragraph({
+        heading: HeadingLevel.HEADING_1,
+        children: [new TextRun({ text: "Architecture Overview" })],
+      }),
+      new Paragraph({
+        spacing: { after: 200 },
+        children: [
+          new TextRun({
+            text: `End-to-end view of the ${doc.iflowName} integration flow.`,
+            italics: true,
+            size: 22,
+            color: "595959",
+          }),
+        ],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 100, after: 100 },
+        children: [
+          new ImageRun({
+            type: "png",
+            data: cover.data,
+            transformation: { width, height },
+          }),
+        ],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 80 },
+        children: [
+          new TextRun({
+            text: "Figure 1 — Integration architecture",
+            italics: true,
+            size: 18,
+            color: "808080",
+          }),
+        ],
+      }),
+      new Paragraph({ children: [new PageBreak()] }),
+    ],
+  };
+}
+
+// ============================================================================
 // Table of Contents (Manual — renders immediately, no field update needed)
 // ============================================================================
 
@@ -245,7 +348,10 @@ function buildTocSection(doc: GeneratedDocument): ISectionOptions {
 // Body Section — Main Document Content
 // ============================================================================
 
-function buildBodySection(doc: GeneratedDocument): ISectionOptions {
+function buildBodySection(
+  doc: GeneratedDocument,
+  diagramImages?: DiagramImageMap,
+): ISectionOptions {
   const children: FileChild[] = [];
 
   doc.sections.forEach((section, sectionIdx) => {
@@ -260,7 +366,7 @@ function buildBodySection(doc: GeneratedDocument): ISectionOptions {
       })
     );
 
-    const elements = markdownToDocxElements(section.content);
+    const elements = markdownToDocxElements(section.content, diagramImages);
     children.push(...elements);
   });
 
@@ -274,7 +380,7 @@ function buildBodySection(doc: GeneratedDocument): ISectionOptions {
     );
 
     for (const diagram of doc.diagrams) {
-      children.push(...renderDiagram(diagram));
+      children.push(...renderDiagram(diagram, diagramImages));
     }
   }
 
@@ -315,7 +421,10 @@ function buildBodySection(doc: GeneratedDocument): ISectionOptions {
 // Markdown → DOCX Elements (returns Paragraph | Table mixed)
 // ============================================================================
 
-function markdownToDocxElements(markdown: string): FileChild[] {
+function markdownToDocxElements(
+  markdown: string,
+  diagramImages?: DiagramImageMap,
+): FileChild[] {
   const elements: FileChild[] = [];
   const lines = markdown.split("\n");
   let i = 0;
@@ -335,6 +444,17 @@ function markdownToDocxElements(markdown: string): FileChild[] {
         i++;
       }
       i++;
+
+      // Mermaid: try to embed a rasterized PNG instead of code text
+      if (lang.toLowerCase() === "mermaid") {
+        const code = codeLines.join("\n");
+        const img = diagramImages?.get(normaliseMermaid(code));
+        if (img) {
+          elements.push(...buildEmbeddedDiagram(img));
+          continue;
+        }
+        // Fall back to text rendering when no image is available.
+      }
 
       if (lang) {
         elements.push(
@@ -556,7 +676,10 @@ function parseInlineFormatting(text: string): TextRun[] {
 // Diagram Rendering
 // ============================================================================
 
-function renderDiagram(diagram: MermaidDiagram): FileChild[] {
+function renderDiagram(
+  diagram: MermaidDiagram,
+  diagramImages?: DiagramImageMap,
+): FileChild[] {
   const elements: FileChild[] = [
     new Paragraph({
       heading: HeadingLevel.HEADING_2,
@@ -566,13 +689,24 @@ function renderDiagram(diagram: MermaidDiagram): FileChild[] {
       spacing: { after: 80 },
       children: [new TextRun({ text: `Diagram Type: ${diagram.type}`, italics: true, color: "808080", size: 20 })],
     }),
+  ];
+
+  // Prefer an embedded PNG when available
+  const img = diagramImages?.get(normaliseMermaid(diagram.mermaidCode));
+  if (img) {
+    elements.push(...buildEmbeddedDiagram(img));
+    elements.push(new Paragraph({ spacing: { after: 240 }, children: [] }));
+    return elements;
+  }
+
+  elements.push(
     new Paragraph({
       shading: { type: ShadingType.SOLID, color: "E8EDF3", fill: "E8EDF3" },
       border: { left: { style: BorderStyle.SINGLE, size: 6, color: "2E75B6" } },
       spacing: { before: 100, after: 60 },
       children: [new TextRun({ text: "  Mermaid Diagram — paste into mermaid.live or any Mermaid-compatible renderer", bold: true, size: 18, color: "2E75B6" })],
     }),
-  ];
+  );
 
   for (const line of diagram.mermaidCode.split("\n")) {
     elements.push(
@@ -587,6 +721,30 @@ function renderDiagram(diagram: MermaidDiagram): FileChild[] {
 
   elements.push(new Paragraph({ spacing: { after: 240 }, children: [] }));
   return elements;
+}
+
+// Shared helper: embed a rasterized Mermaid diagram image, scaled to fit
+// the page text width (~6 inches at standard margins).
+function buildEmbeddedDiagram(img: CoverDiagramImage): FileChild[] {
+  const maxWidthPx = 576; // ~6in @ 96dpi
+  const aspect = img.heightPx > 0 && img.widthPx > 0
+    ? img.heightPx / img.widthPx
+    : 0.6;
+  const width = Math.min(img.widthPx || maxWidthPx, maxWidthPx);
+  const height = Math.round(width * aspect);
+  return [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 120, after: 120 },
+      children: [
+        new ImageRun({
+          type: "png",
+          data: img.data,
+          transformation: { width, height },
+        }),
+      ],
+    }),
+  ];
 }
 
 // ============================================================================

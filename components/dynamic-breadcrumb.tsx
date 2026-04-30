@@ -28,6 +28,7 @@ const SEGMENT_NAME_MAP: Record<string, string> = {
   "sign-in": "Sign In",
   "sign-up": "Sign Up",
   iflows: "iFlows",
+  apis: "APIs",
 }
 
 const formatSegment = (segment: string) => {
@@ -46,20 +47,33 @@ const formatSegment = (segment: string) => {
 export function DynamicBreadcrumb() {
   const pathname = usePathname()
   const [iflowName, setIFlowName] = useState<string | null>(null)
+  // For API Product detail pages, decode the name from the URL (no extra fetch needed)
+  const [apiProductName, setApiProductName] = useState<string | null>(null)
 
   // Check if we're on an iFlow detail page and fetch the name
   useEffect(() => {
-    const match = pathname?.match(/^\/dashboard\/iflows\/([^/]+)$/)
-    if (match) {
-      const iflowId = match[1]
+    const iflowMatch = pathname?.match(/^\/dashboard\/iflows\/([^/]+)$/)
+    if (iflowMatch) {
+      const iflowId = iflowMatch[1]
       getIFlowDetails(iflowId).then((result) => {
         if (result.success && result.data) {
           setIFlowName(result.data.name)
         }
       })
-    } else {
-      setIFlowName(null)
+      setApiProductName(null)
+      return
     }
+
+    // Check if we're on an API Product detail page — decode name from URL
+    const apiMatch = pathname?.match(/^\/dashboard\/apis\/([^/]+)$/)
+    if (apiMatch) {
+      setApiProductName(decodeURIComponent(apiMatch[1]))
+      setIFlowName(null)
+      return
+    }
+
+    setIFlowName(null)
+    setApiProductName(null)
   }, [pathname])
 
   const breadcrumbs = useMemo((): BreadcrumbEntry[] => {
@@ -77,14 +91,25 @@ export function DynamicBreadcrumb() {
       const href = `/${pathSegments.slice(0, index + 1).join("/")}`
       let label = formatSegment(segment)
       const isLast = index === pathSegments.length - 1
-      
-      // Special handling for iFlow detail pages - show iFlow name instead of ID
-      const isIFlowDetailPage = pathSegments[0] === "dashboard" && 
-                                pathSegments[1] === "iflows" && 
-                                index === 2
-      
+
+      // Special handling for iFlow detail pages — show iFlow name instead of ID
+      const isIFlowDetailPage =
+        pathSegments[0] === "dashboard" &&
+        pathSegments[1] === "iflows" &&
+        index === 2
+
       if (isIFlowDetailPage) {
-        label = iflowName || "Loading..."
+        label = iflowName || "Loading…"
+      }
+
+      // Special handling for API Product detail pages — show decoded product name
+      const isAPIProductDetailPage =
+        pathSegments[0] === "dashboard" &&
+        pathSegments[1] === "apis" &&
+        index === 2
+
+      if (isAPIProductDetailPage) {
+        label = apiProductName || decodeURIComponent(segment)
       }
 
       return {
@@ -93,7 +118,7 @@ export function DynamicBreadcrumb() {
         isLoading: isIFlowDetailPage && !iflowName,
       }
     })
-  }, [pathname, iflowName])
+  }, [pathname, iflowName, apiProductName])
 
   if (breadcrumbs.length === 0) {
     return null

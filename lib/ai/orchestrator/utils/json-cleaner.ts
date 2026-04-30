@@ -258,3 +258,81 @@ export function tryFixAtPosition(json: string, pos: number): string {
 
   return json;
 }
+
+/**
+ * Minimal extractor: strip markdown fences, leading/trailing prose, and
+ * trim to the balanced root object/array. Performs NO regex transforms on
+ * string contents — preserves the model's original escaping.
+ */
+export function extractRootJson(rawText: string): string {
+  let json = rawText.trim();
+
+  const codeBlockMatch = json.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (codeBlockMatch) json = codeBlockMatch[1].trim();
+
+  if (!json.startsWith('{') && !json.startsWith('[')) {
+    const start = json.search(/[{[]/);
+    if (start !== -1) json = json.substring(start);
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let endIdx = -1;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (escapeNext) { escapeNext = false; continue; }
+    if (ch === '\\' && inString) { escapeNext = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (!inString) {
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') {
+        depth--;
+        if (depth === 0) { endIdx = i; break; }
+      }
+    }
+  }
+  if (endIdx !== -1) json = json.substring(0, endIdx + 1);
+  return json;
+}
+
+/**
+ * Robust deterministic parse cascade for AI JSON output.
+ *
+ * Order (each step short-circuits on success):
+ *   1. Extract root + parse                          (preserves valid output)
+ *   2. State-machine quote fixer + parse             (deterministic recovery)
+ *   3. cleanAIJson full pipeline + parse             (legacy aggressive cleaner)
+ *   4. cleanAIJson + state-machine fixer + parse     (last resort)
+ *
+ * Throws an Error with `attempts` array containing each step's failure for diagnostics.
+ */
+export function parseAIJson<T = unknown>(rawText: string): T {
+  const attempts: { step: string; error: string }[] = [];
+  const root = extractRootJson(rawText);
+
+  const tries: Array<{ step: string; produce: () => string }> = [
+    { step: 'raw-extract', produce: () => root },
+    { step: 'state-machine', produce: () => fixUnescapedQuotesStateMachine(root) },
+    { step: 'clean-pipeline', produce: () => cleanAIJson(rawText) },
+    { step: 'clean+state-machine', produce: () => fixUnescapedQuotesStateMachine(cleanAIJson(rawText)) },
+  ];
+
+  for (const t of tries) {
+    let candidate = '';
+    try {
+      candidate = t.produce();
+      return JSON.parse(candidate) as T;
+    } catch (err) {
+      attempts.push({ step: t.step, error: (err as Error).message });
+    }
+  }
+
+  const detail = attempts.map((a) => `  - ${a.step}: ${a.error}`).join('\n');
+  const preview = root.slice(0, 800);
+  const err = new Error(
+    `parseAIJson failed after ${attempts.length} strategies:\n${detail}\n---\nPreview:\n${preview}`,
+  );
+  (err as Error & { attempts: typeof attempts }).attempts = attempts;
+  throw err;
+}

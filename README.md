@@ -42,6 +42,12 @@ CPI Connect gives you **full visibility** into your SAP CPI landscape — iFlows
 
 ### April 2026
 
+- **Open-Source Auth Boundary (Cloud vs Self-Hosted)**
+  - The hosted domain ([btpiconnect.com](https://btpiconnect.com)) now runs in **cloud (marketing-only) mode** — there is no sign-up, sign-in, or app surface. It exists purely to showcase the open-source project.
+  - **Self-hosted installs go straight to `/sign-in`** instead of the marketing landing page. The first visitor on a fresh install is bounced through `/sign-up` / setup automatically.
+  - Auth and app routes (`/sign-in`, `/sign-up`, `/forgot-password`, `/reset-password`, `/setup`, `/dashboard`, `/admin`, `/api/auth/*`) are blocked at the proxy layer when `NEXT_PUBLIC_DEPLOYMENT_MODE=cloud`.
+  - Marketing header and CTAs swap "Login / Get Started" for "Star on GitHub / Self-Host Guide" in cloud mode so there is no dead-end auth UI.
+
 - **Documentation Generator — Major Overhaul**
   - Section selection is now fully respected — select exactly which of 13 sections to include and only those appear in the output
   - 8-step resilient JSON parsing with regex-based content extraction and nuclear-parse recovery
@@ -55,12 +61,7 @@ CPI Connect gives you **full visibility** into your SAP CPI landscape — iFlows
   - Migrated from Prisma 6 to Drizzle ORM for better performance and type safety
   - Schema defined in `lib/db/schema.ts`; migrations managed with `drizzle-kit`
 
-- **Billing & Subscription Management**
-  - Stripe integration for subscription plans and invoice management
-  - Admin subscription overview with usage tracking
-
 - **Self-Hosting Improvements**
-  - Dedicated `docker-compose.selfhost.yml` with full stack (app + Supabase + LiteLLM)
   - GitHub Actions CI/CD workflows
   - Automated entrypoint with migration support
 
@@ -152,6 +153,19 @@ pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The first user to register automatically becomes **admin**.
+
+> **Heads-up — landing page behavior:** Self-hosted installs (the default) redirect `/` straight to `/sign-in`. The marketing landing page is only rendered when `NEXT_PUBLIC_DEPLOYMENT_MODE=cloud` is set, which is reserved for the public open-source site at [btpiconnect.com](https://btpiconnect.com).
+
+### Deployment Modes
+
+CPI Connect ships with two deployment modes controlled by `NEXT_PUBLIC_DEPLOYMENT_MODE`:
+
+| Mode | Env Value | Landing `/` | Auth (`/sign-in`, `/sign-up`, …) | Use Case |
+|------|-----------|-------------|----------------------------------|----------|
+| **Self-Hosted** *(default)* | unset / `self-hosted` | Redirects to `/sign-in` | Available — first user becomes admin | Your own server / Docker |
+| **Cloud** | `cloud` | Marketing landing page | Disabled — proxy redirects to `/`, API returns 404 | Public open-source site (btpiconnect.com) |
+
+In **cloud** mode the marketing header replaces "Login / Get Started" with "Star on GitHub / Self-Host Guide", so visitors on the public site can only learn about the project and grab the source — they cannot create accounts. To run the app, clone it and follow the Quick Start above.
 
 ### Available Commands
 

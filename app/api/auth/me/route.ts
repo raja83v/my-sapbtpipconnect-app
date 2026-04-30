@@ -1,22 +1,20 @@
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
+import { eq } from "drizzle-orm";
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-import { createClient } from "@/lib/supabase/server";
 
 export async function GET() {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user: supabaseUser },
-    } = await supabase.auth.getUser();
+    const session = await auth.api.getSession({ headers: await headers() });
 
-    if (!supabaseUser?.email) {
+    if (!session?.user?.email) {
       return NextResponse.json({ user: null }, { status: 401 });
     }
 
     const user = await db.query.users.findFirst({
-      where: eq(users.email, supabaseUser.email),
+      where: eq(users.email, session.user.email),
       columns: {
         id: true,
         email: true,
@@ -33,18 +31,7 @@ export async function GET() {
       return NextResponse.json({ user: null }, { status: 401 });
     }
 
-    return NextResponse.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        status: user.status,
-        image: user.image,
-        onboardingCompleted: user.onboardingCompleted,
-        defaultTenantId: user.defaultTenantId,
-      },
-    });
+    return NextResponse.json({ user });
   } catch (error) {
     console.error("Auth check error:", error);
     return NextResponse.json(

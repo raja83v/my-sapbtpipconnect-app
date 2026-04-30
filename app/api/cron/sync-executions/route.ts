@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 import { cpiTenants } from "@/lib/db/schema";
 import { eq, and, or, isNull, lt, isNotNull, asc } from "drizzle-orm";
@@ -31,40 +32,59 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    // Verify authorization
+    // Verify authorization using a timing-safe comparison to prevent timing attacks.
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
 
-    const isAuthorized = cronSecret
-      ? authHeader === `Bearer ${cronSecret}`
-      : process.env.NODE_ENV === "development";
+    // In development with no CRON_SECRET set, allow unrestricted access.
+    // In all other cases (including when CRON_SECRET is set in dev), validate.
+    const requiresAuth = cronSecret || process.env.NODE_ENV === "production";
+    if (requiresAuth) {
+      const provided = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : "";
+      const expected = cronSecret || "";
 
-    if (!isAuthorized) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+      const maxLen = Math.max(Buffer.byteLength(provided), Buffer.byteLength(expected));
+      const a = Buffer.alloc(maxLen);
+      const b = Buffer.alloc(maxLen);
+      Buffer.from(provided).copy(a);
+      Buffer.from(expected).copy(b);
+
+      const isAuthorized = !!cronSecret && timingSafeEqual(a, b);
+      if (!isAuthorized) {
+        return NextResponse.json(
+          { error: "Unauthorized" },
+          { status: 401 }
+        );
+      }
     }
 
     const startTime = Date.now();
 
     // Get active tenants that need syncing
-    const minSyncTime = new Date(Date.now() - CONFIG.minSyncIntervalMinutes * 60 * 1000);
+    const minSyncTime = new Date(
+      Date.now() - CONFIG.minSyncIntervalMinutes * 60 * 1000,
+    );
 
-    const tenantsToSync = await db.select().from(cpiTenants).where(
-      and(
-        eq(cpiTenants.isConnected, true),
-        eq(cpiTenants.authType, "OAUTH"),
-        isNotNull(cpiTenants.clientId),
-        isNotNull(cpiTenants.clientSecret),
-        isNotNull(cpiTenants.authenticationUrl),
-        or(
-          isNull(cpiTenants.lastSyncAt),
-          lt(cpiTenants.lastSyncAt, minSyncTime)
-        )
+    const tenantsToSync = await db
+      .select()
+      .from(cpiTenants)
+      .where(
+        and(
+          eq(cpiTenants.isConnected, true),
+          eq(cpiTenants.authType, "OAUTH"),
+          isNotNull(cpiTenants.clientId),
+          isNotNull(cpiTenants.clientSecret),
+          isNotNull(cpiTenants.authenticationUrl),
+          or(
+            isNull(cpiTenants.lastSyncAt),
+            lt(cpiTenants.lastSyncAt, minSyncTime),
+          ),
+        ),
       )
-    ).limit(CONFIG.maxTenantsPerRun).orderBy(asc(cpiTenants.lastSyncAt));
-
+      .limit(CONFIG.maxTenantsPerRun)
+      .orderBy(asc(cpiTenants.lastSyncAt));
 
     if (tenantsToSync.length === 0) {
       return NextResponse.json({
@@ -90,11 +110,13 @@ export async function GET(request: NextRequest) {
       const tenantStartTime = Date.now();
 
       try {
-
         // Use Promise.race for timeout
         const syncPromise = syncTenantInternal(tenant.id);
         const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("Tenant sync timeout")), CONFIG.tenantTimeoutMs);
+          setTimeout(
+            () => reject(new Error("Tenant sync timeout")),
+            CONFIG.tenantTimeoutMs,
+          );
         });
 
         const result = await Promise.race([syncPromise, timeoutPromise]);
@@ -118,7 +140,8 @@ export async function GET(request: NextRequest) {
           });
         }
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
         results.push({
           tenantId: tenant.id,
           tenantName: tenant.name,
@@ -131,10 +154,12 @@ export async function GET(request: NextRequest) {
     }
 
     const totalDuration = Date.now() - startTime;
-    const successCount = results.filter(r => r.success).length;
-    const totalExecutions = results.reduce((sum, r) => sum + (r.executions || 0), 0);
+    const successCount = results.filter((r) => r.success).length;
+    const totalExecutions = results.reduce(
+      (sum, r) => sum + (r.executions || 0),
+      0,
+    );
     const totalIFlows = results.reduce((sum, r) => sum + (r.iflows || 0), 0);
-
 
     return NextResponse.json({
       success: true,
@@ -154,9 +179,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Cron job failed"
+        error: error instanceof Error ? error.message : "Cron job failed",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

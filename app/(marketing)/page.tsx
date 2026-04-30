@@ -24,8 +24,15 @@ import {
 
 import { Container } from "@/components/marketing/container";
 import { siteConfig } from "@/lib/config";
+import { isCloudMode } from "@/lib/deployment";
 
 export default function Home() {
+  const cloud = isCloudMode();
+  const primaryCtaHref = cloud
+    ? `${siteConfig.links.github}#quick-start`
+    : "/sign-up";
+  const primaryCtaLabel = cloud ? "Self-Host Now" : "Get Started Free";
+
   return (
     <>
       {/* Hero Section */}
@@ -82,7 +89,14 @@ export default function Home() {
                   size="lg"
                   className="border-transparent px-6 text-sm shadow-xl shadow-indigo-950/30"
                 >
-                  <Link href="/sign-up">Get Started Free</Link>
+                  <Link
+                    href={primaryCtaHref}
+                    {...(cloud
+                      ? { target: "_blank", rel: "noopener noreferrer" }
+                      : {})}
+                  >
+                    {primaryCtaLabel}
+                  </Link>
                 </Button>
                 <Button
                   asChild
@@ -463,7 +477,14 @@ export default function Home() {
                 size="lg"
                 className="px-8 shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/30 transition-shadow"
               >
-                <Link href="/sign-up">Get Started Free</Link>
+                <Link
+                  href={primaryCtaHref}
+                  {...(cloud
+                    ? { target: "_blank", rel: "noopener noreferrer" }
+                    : {})}
+                >
+                  {primaryCtaLabel}
+                </Link>
               </Button>
               <Button
                 asChild

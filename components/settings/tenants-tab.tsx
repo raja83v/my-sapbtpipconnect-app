@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { IconPlus, IconServer, IconCheck, IconX, IconSettings, IconTrash, IconRefresh } from "@tabler/icons-react";
+import { IconPlus, IconServer, IconCheck, IconX, IconSettings, IconTrash, IconRefresh, IconKey } from "@tabler/icons-react";
 import { TenantWithRole } from "@/app/actions/tenant";
 import { AddTenantDialog } from "@/components/settings/add-tenant-dialog";
 import { formatDistanceToNow } from "date-fns";
@@ -22,6 +22,8 @@ import {
 import { deleteTenant, syncTenantIFlows } from "@/app/actions/tenant";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import { EditTenantDialog } from "@/components/settings/edit-tenant-dialog";
+import { RuntimeCredentialsDialog } from "@/components/settings/runtime-credentials-dialog";
 
 interface TenantsTabProps {
   tenants: TenantWithRole[];
@@ -31,6 +33,8 @@ export function TenantsTab({ tenants: initialTenants }: TenantsTabProps) {
   const [tenants, setTenants] = useState<TenantWithRole[]>(initialTenants);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState<string | null>(null);
+  const [editingTenant, setEditingTenant] = useState<TenantWithRole | null>(null);
+  const [runtimeCredsTenant, setRuntimeCredsTenant] = useState<TenantWithRole | null>(null);
   const router = useRouter();
 
   const handleSyncTenant = async (tenantId: string) => {
@@ -187,9 +191,20 @@ export function TenantsTab({ tenants: initialTenants }: TenantsTabProps) {
                           <IconRefresh className={`h-4 w-4 mr-2 ${isSyncing === tenant.id ? 'animate-spin' : ''}`} />
                           {isSyncing === tenant.id ? 'Syncing...' : 'Sync'}
                         </Button>
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm"
+                          onClick={() => setEditingTenant(tenant)}
+                        >
                           <IconSettings className="h-4 w-4 mr-2" />
                           Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setRuntimeCredsTenant(tenant)}
+                          title="Configure runtime credentials for the iFlow Test runner"
+                        >
+                          <IconKey className="h-4 w-4 mr-2" />
+                          Runtime
                         </Button>
                         {tenant.memberRole === "OWNER" && (
                           <AlertDialog>
@@ -233,6 +248,23 @@ export function TenantsTab({ tenants: initialTenants }: TenantsTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {editingTenant && (
+        <EditTenantDialog
+          tenant={editingTenant}
+          open={!!editingTenant}
+          onOpenChange={(open) => { if (!open) setEditingTenant(null); }}
+        />
+      )}
+
+      {runtimeCredsTenant && (
+        <RuntimeCredentialsDialog
+          tenantId={runtimeCredsTenant.id}
+          tenantName={runtimeCredsTenant.name}
+          open={!!runtimeCredsTenant}
+          onOpenChange={(open) => { if (!open) setRuntimeCredsTenant(null); }}
+        />
+      )}
     </div>
   );
 }

@@ -8,12 +8,12 @@ const globalForDb = globalThis as unknown as {
 };
 
 function createDb() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    throw new Error(
-      "DATABASE_URL is not set. Set it in .env or embedded postgres will set it at startup."
-    );
-  }
+  // Default to the embedded Postgres started by instrumentation.ts on port 5435.
+  // In Next.js 16 + Turbopack, route handlers can run in worker threads that
+  // don't see process.env mutations from instrumentation, so we fall back to
+  // the well-known embedded URL rather than throwing.
+  const url =
+    process.env.DATABASE_URL ?? "postgresql://app:app@127.0.0.1:5435/app";
 
   const client = postgres(url, {
     max: process.env.NODE_ENV === "production" ? 20 : 5,

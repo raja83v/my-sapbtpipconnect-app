@@ -26,6 +26,7 @@ import {
   Github,
 } from "lucide-react";
 import { useMedia } from "@/hooks/use-media";
+import { useDeploymentMode } from "@/hooks/use-deployment-mode";
 import {
   Accordion,
   AccordionContent,
@@ -116,14 +117,6 @@ const contentLinks: FeatureLink[] = [
 ];
 
 const mobileLinks: MobileLink[] = [
-  {
-    groupName: "Product",
-    links: features,
-  },
-  {
-    groupName: "Solutions",
-    links: [...useCases, ...contentLinks],
-  },
   { name: "Pricing", href: "/#pricing" },
   { name: "Help", href: "/help" },
   { name: "Blog", href: "/blog" },
@@ -134,6 +127,7 @@ export function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
   const [isScrolled, setIsScrolled] = React.useState(false);
   const isLarge = useMedia("(min-width: 64rem)");
+  const { isCloud } = useDeploymentMode();
 
   React.useEffect(() => {
     const handleScroll = () => {
@@ -167,7 +161,7 @@ export function Header() {
           "border-foregroud/5 absolute inset-x-0 top-0 z-50 transition-all duration-300",
           "in-data-scrolled:border-b in-data-scrolled:bg-background/75 in-data-scrolled:backdrop-blur",
           !isLarge && "h-14 overflow-hidden border-b",
-          isMobileMenuOpen && "bg-background/75 h-screen backdrop-blur"
+          isMobileMenuOpen && "bg-background/75 h-screen backdrop-blur",
         )}
       >
         <div className="mx-auto max-w-6xl px-6 lg:px-12">
@@ -179,7 +173,10 @@ export function Header() {
                 className="flex items-center space-x-2"
               >
                 <div className="flex items-center gap-2">
-                  <Cloud className="h-6 w-6 text-indigo-600" strokeWidth={1.5} />
+                  <Cloud
+                    className="h-6 w-6 text-indigo-600"
+                    strokeWidth={1.5}
+                  />
                   <span className="text-lg font-bold bg-linear-to-r from-indigo-600 to-blue-600 bg-clip-text text-transparent">
                     CPI Connect
                   </span>
@@ -209,26 +206,36 @@ export function Header() {
 
             <div className="max-lg:in-data-[state=active]:mt-6 in-data-[state=active]:flex mb-6 hidden w-full flex-wrap items-center justify-end space-y-8 md:flex-nowrap lg:m-0 lg:flex lg:w-fit lg:gap-6 lg:space-y-0 lg:border-transparent lg:bg-transparent lg:p-0 lg:shadow-none dark:shadow-none dark:lg:bg-transparent">
               <div className="flex w-full flex-col space-y-3 sm:flex-row sm:gap-3 sm:space-y-0 md:w-fit">
-                <Button asChild variant="ghost" size="icon" className="hidden sm:inline-flex">
-                  <Link
-                    href={siteConfig.links.github}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="GitHub"
-                  >
-                    <Github className="h-4 w-4" />
-                  </Link>
-                </Button>
                 <Button asChild variant="outline" size="sm">
-                  <Link href="/sign-in">
-                    <span>Login</span>
+                  <Link href={siteConfig.links.github} target="_blank" rel="noopener noreferrer">
+                    <Github className="mr-2 h-4 w-4" />
+                    <span>Star on GitHub</span>
                   </Link>
                 </Button>
-                <Button asChild size="sm">
-                  <Link href="/sign-up">
-                    <span>Get Started</span>
-                  </Link>
-                </Button>
+                {isCloud ? (
+                  <Button asChild size="sm">
+                    <Link
+                      href={`${siteConfig.links.github}#self-hosting-guide`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span>Self-Host Guide</span>
+                    </Link>
+                  </Button>
+                ) : (
+                  <>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href="/sign-in">
+                        <span>Login</span>
+                      </Link>
+                    </Button>
+                    <Button asChild size="sm">
+                      <Link href="/sign-up">
+                        <span>Get Started</span>
+                      </Link>
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -239,9 +246,56 @@ export function Header() {
 }
 
 const MobileMenu = ({ closeMenu }: { closeMenu: () => void }) => {
+  const menuRef = React.useRef<HTMLElement>(null);
+
+  // Trap focus within the mobile menu when open
+  React.useEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+
+    const focusableSelectors =
+      'a[href], button:not([disabled]), input, textarea, select, [tabindex]:not([tabindex="-1"])';
+    const focusable = Array.from(
+      menu.querySelectorAll<HTMLElement>(focusableSelectors),
+    );
+
+    if (focusable.length === 0) return;
+
+    // Move focus into the menu
+    focusable[0].focus();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeMenu();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    menu.addEventListener("keydown", handleKeyDown);
+    return () => menu.removeEventListener("keydown", handleKeyDown);
+  }, [closeMenu]);
+
   return (
     <nav
+      ref={menuRef}
       role="navigation"
+      aria-label="Mobile navigation"
       className="w-full [--color-muted:--alpha(var(--color-foreground)/5%)]"
     >
       <Accordion
@@ -310,16 +364,6 @@ const NavMenu = () => {
   return (
     <NavigationMenu className="**:data-[slot=navigation-menu-viewport]:bg-[color-mix(in_oklch,var(--color-muted)_25%,var(--color-background))] **:data-[slot=navigation-menu-viewport]:shadow-lg **:data-[slot=navigation-menu-viewport]:rounded-2xl **:data-[slot=navigation-menu-viewport]:top-4 [--color-muted:color-mix(in_oklch,var(--color-foreground)_5%,transparent)] [--viewport-outer-px:2rem] max-lg:hidden">
       <NavigationMenuList className="gap-3">
-        <NavigationMenuItem value="product">
-          <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
-            <Link href="#">Product</Link>
-          </NavigationMenuLink>
-        </NavigationMenuItem>
-        <NavigationMenuItem value="solutions">
-          <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
-            <Link href="#">Solutions</Link>
-          </NavigationMenuLink>
-        </NavigationMenuItem>
         <NavigationMenuItem value="pricing">
           <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
             <Link href="/#pricing">Pricing</Link>

@@ -14,6 +14,7 @@ import {
   IconLock,
   IconKey,
   IconLoader2,
+  IconApi,
 } from "@tabler/icons-react";
 import { Cloud } from "lucide-react";
 import Link from "next/link";
@@ -83,6 +84,15 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
+  // APIM Configuration
+  const [apimUrl, setApimUrl] = useState("");
+  const [apimAuthType, setApimAuthType] = useState<"SAME_AS_CPI" | "OAUTH" | "BASIC_AUTH">("SAME_AS_CPI");
+  const [apimTokenUrl, setApimTokenUrl] = useState("");
+  const [apimClientId, setApimClientId] = useState("");
+  const [apimClientSecret, setApimClientSecret] = useState("");
+  const [apimUsername, setApimUsername] = useState("");
+  const [apimPassword, setApimPassword] = useState("");
+
   const [isLoading, setIsLoading] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState("");
@@ -142,6 +152,14 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
         tokenUrl: authType === "OAUTH" ? tokenUrl.trim() : undefined,
         username: authType === "BASIC_AUTH" ? username.trim() : undefined,
         password: authType === "BASIC_AUTH" ? password.trim() : undefined,
+        // APIM
+        apimUrl: apimUrl.trim() || undefined,
+        apimAuthType: apimAuthType === "SAME_AS_CPI" ? null : apimAuthType,
+        apimTokenUrl: apimTokenUrl.trim() || undefined,
+        apimClientId: apimAuthType === "OAUTH" ? apimClientId.trim() : undefined,
+        apimClientSecret: apimAuthType === "OAUTH" ? apimClientSecret.trim() : undefined,
+        apimUsername: apimAuthType === "BASIC_AUTH" ? apimUsername.trim() : undefined,
+        apimPassword: apimAuthType === "BASIC_AUTH" ? apimPassword.trim() : undefined,
       });
 
       if (result.success) {
@@ -540,6 +558,147 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
                     </p>
                   </div>
 
+                  {/* ── APIM Section ──────────────────────────────────── */}
+                  <div className="relative my-1">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-background px-2 text-muted-foreground flex items-center gap-1">
+                        <IconApi className="h-3 w-3" />
+                        SAP API Management
+                        <span className="normal-case font-normal">(Optional)</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Configure SAP API Management (APIM) if your Integration Suite includes the API portal.
+                    You can also add or update this later in Settings.
+                  </p>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="apimUrl">APIM Portal URL</Label>
+                    <Input
+                      id="apimUrl"
+                      type="url"
+                      value={apimUrl}
+                      onChange={(e) => setApimUrl(e.target.value)}
+                      placeholder="https://example.integrationsuite.cfapps.ap10.hana.ondemand.com"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The <code className="bg-muted px-1 rounded text-xs">url</code> from your APIM service key. Required for the APIs dashboard.
+                    </p>
+                  </div>
+
+                  {apimUrl.trim() && (
+                    <>
+                      <div className="grid gap-2">
+                        <Label htmlFor="apimAuthType">APIM Authentication</Label>
+                        <Select
+                          value={apimAuthType}
+                          onValueChange={(v: "SAME_AS_CPI" | "OAUTH" | "BASIC_AUTH") => setApimAuthType(v)}
+                        >
+                          <SelectTrigger id="apimAuthType">
+                            <SelectValue placeholder="Select APIM authentication" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="SAME_AS_CPI">Same as CPI (default)</SelectItem>
+                            <SelectItem value="OAUTH">OAuth 2.0 — separate APIM credentials</SelectItem>
+                            <SelectItem value="BASIC_AUTH">Basic Auth — separate APIM credentials</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Choose "Same as CPI" if your APIM service key credentials match CPI.
+                        </p>
+                      </div>
+
+                      {/* APIM Token URL — shown for OAuth modes */}
+                      {(apimAuthType === "OAUTH" || (apimAuthType === "SAME_AS_CPI" && authType === "OAUTH")) && (
+                        <div className="grid gap-2">
+                          <Label htmlFor="apimTokenUrl">
+                            APIM Token URL{apimAuthType === "OAUTH" ? " *" : " (Optional)"}                          
+                          </Label>
+                          <Input
+                            id="apimTokenUrl"
+                            type="url"
+                            value={apimTokenUrl}
+                            onChange={(e) => setApimTokenUrl(e.target.value)}
+                            placeholder="https://example.authentication.ap10.hana.ondemand.com/oauth/token"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {apimAuthType === "SAME_AS_CPI" ? "Leave blank to use the CPI token URL." : "Token endpoint from your APIM service key."}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Separate APIM OAuth credentials */}
+                      {apimAuthType === "OAUTH" && (
+                        <>
+                          <div className="grid gap-2">
+                            <Label htmlFor="apimClientId">APIM Client ID *</Label>
+                            <div className="relative">
+                              <IconKey className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+                              <Input
+                                id="apimClientId"
+                                value={apimClientId}
+                                onChange={(e) => setApimClientId(e.target.value)}
+                                placeholder="apim-client-id"
+                                className="pl-10"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid gap-2">
+                            <Label htmlFor="apimClientSecret">APIM Client Secret *</Label>
+                            <div className="relative">
+                              <IconLock className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+                              <Input
+                                id="apimClientSecret"
+                                type="password"
+                                value={apimClientSecret}
+                                onChange={(e) => setApimClientSecret(e.target.value)}
+                                placeholder="••••••••••••••••"
+                                className="pl-10"
+                                autoComplete="off"
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {/* Separate APIM Basic Auth credentials */}
+                      {apimAuthType === "BASIC_AUTH" && (
+                        <>
+                          <div className="grid gap-2">
+                            <Label htmlFor="apimUsername">APIM Username *</Label>
+                            <Input
+                              id="apimUsername"
+                              value={apimUsername}
+                              onChange={(e) => setApimUsername(e.target.value)}
+                              placeholder="apim-username"
+                            />
+                          </div>
+
+                          <div className="grid gap-2">
+                            <Label htmlFor="apimPassword">APIM Password *</Label>
+                            <div className="relative">
+                              <IconLock className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+                              <Input
+                                id="apimPassword"
+                                type="password"
+                                value={apimPassword}
+                                onChange={(e) => setApimPassword(e.target.value)}
+                                placeholder="••••••••••••••••"
+                                className="pl-10"
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+
                   {error && (
                     <div className="bg-destructive/10 border border-destructive/20 p-4 rounded-lg">
                       <p className="text-sm text-destructive">{error}</p>
@@ -565,7 +724,9 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
                         !tenantName.trim() ||
                         !tenantUrl.trim() ||
                         (authType === "OAUTH" && (!authenticationUrl.trim() || !clientId.trim() || !clientSecret.trim())) ||
-                        (authType === "BASIC_AUTH" && (!username.trim() || !password.trim()))
+                        (authType === "BASIC_AUTH" && (!username.trim() || !password.trim())) ||
+                        (apimAuthType === "OAUTH" && (!apimTokenUrl.trim() || !apimClientId.trim() || !apimClientSecret.trim())) ||
+                        (apimAuthType === "BASIC_AUTH" && (!apimUsername.trim() || !apimPassword.trim()))
                       }
                       className="flex-1"
                     >

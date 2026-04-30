@@ -606,7 +606,85 @@ ${this.generateLocalProcesses(sanitizedDesign)}
 ${this.generateBPMNDiagram(sanitizedDesign, collaborationId, processId)}
 </bpmn2:definitions>`;
 
-        return xml;
+        return this.sanitizeXmlReferences(xml, sanitizedDesign);
+    }
+
+    /**
+     * Strip references that bpmn-js cannot render, so the canvas doesn't
+     * surface "not yet drawn" / "targetRef not specified" errors:
+     *  - <bpmn2:sequenceFlow> whose targetRef is a Local Integration Process
+     *    id (a <bpmn2:process>, not a flow node within the same process)
+     *  - <bpmn2:sequenceFlow>/<bpmn2:messageFlow> whose source/target
+     *    references an id that doesn't exist anywhere in the document
+     *    (common when a timer-triggered flow keeps a stale `StartEvent_1`
+     *    targetRef, or when the LLM points routes at non-existent steps)
+     *  - <bpmn2:messageFlow> missing sourceRef or targetRef
+     *
+     * The XML still deploys to SAP CPI fine — these were dangling references
+     * the LLM produced for routes/branches that point to LIP-call activities
+     * that may not have been emitted.
+     */
+    private sanitizeXmlReferences(xml: string, design: IFlowDesign): string {
+        const localProcessIds = new Set(
+            (design.localProcesses ?? []).map(lp => lp.id).filter(Boolean) as string[]
+        );
+
+        // Collect every id="..." in the XML so we can detect dangling refs.
+        const knownIds = new Set<string>();
+        const idRegex = /\bid="([^"]+)"/g;
+        let m: RegExpExecArray | null;
+        while ((m = idRegex.exec(xml)) !== null) {
+            knownIds.add(m[1]);
+        }
+
+        const refExists = (val: string | undefined): boolean =>
+            !!val && knownIds.has(val);
+
+        const getAttr = (attrs: string, name: string): string | undefined => {
+            const r = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs);
+            return r ? r[1] : undefined;
+        };
+
+        let cleaned = xml;
+
+        // sequenceFlow — drop if targetRef is a LIP id, or if either ref is dangling.
+        const seqStrip = (match: string, attrs: string): string => {
+            const target = getAttr(attrs, "targetRef");
+            const source = getAttr(attrs, "sourceRef");
+            if (target && localProcessIds.has(target)) return "";
+            if (target && !refExists(target)) return "";
+            if (source && !refExists(source)) return "";
+            return match;
+        };
+        // Self-closing form
+        cleaned = cleaned.replace(
+            /<bpmn2:sequenceFlow\b([^>]*)\/>\s*/g,
+            seqStrip
+        );
+        // Block form
+        cleaned = cleaned.replace(
+            /<bpmn2:sequenceFlow\b([^>]*)>[\s\S]*?<\/bpmn2:sequenceFlow>\s*/g,
+            seqStrip
+        );
+
+        // messageFlow — drop if missing or dangling source/target.
+        const msgStrip = (match: string, attrs: string): string => {
+            const target = getAttr(attrs, "targetRef");
+            const source = getAttr(attrs, "sourceRef");
+            if (!source || !target) return "";
+            if (!refExists(source) || !refExists(target)) return "";
+            return match;
+        };
+        cleaned = cleaned.replace(
+            /<bpmn2:messageFlow\b([^>]*)\/>\s*/g,
+            msgStrip
+        );
+        cleaned = cleaned.replace(
+            /<bpmn2:messageFlow\b([^>]*)>[\s\S]*?<\/bpmn2:messageFlow>\s*/g,
+            msgStrip
+        );
+
+        return cleaned;
     }
 
     /**
@@ -1963,6 +2041,23 @@ ${this.generateCmdVariantProperty('Enricher', this.getComponentVersion('ContentM
         // SAP CPI expects a resource path here, not inline script content.
         const scriptValue = this.escapeXml(this.normalizeScriptPath(script));
 
+        // Entry-point function name. The CPI designer property sheet only
+        // renders when scriptFunction is present for Groovy/JavaScript steps;
+        // without it CPI throws "Unable to render property sheet. Metadata
+        // not available or not registered" when opening the script flowstep.
+        // XSLT steps don't have a function entry point, so omit the property.
+        const scriptFunctionProp = script.type === 'xslt'
+            ? ''
+            : `                <ifl:property>
+                    <key>scriptFunction</key>
+                    <value>processData</value>
+                </ifl:property>
+                <ifl:property>
+                    <key>scriptbundleid</key>
+                    <value></value>
+                </ifl:property>
+`;
+
         return `        <bpmn2:callActivity id="${script.id}" name="${this.escapeXml(script.name)}">
             <bpmn2:extensionElements>
                 <ifl:property>
@@ -1977,7 +2072,7 @@ ${this.generateCmdVariantProperty('Enricher', this.getComponentVersion('ContentM
                     <key>script</key>
                     <value>${scriptValue}</value>
                 </ifl:property>
-                <ifl:property>
+${scriptFunctionProp}                <ifl:property>
                     <key>componentVersion</key>
                     <value>${this.getComponentVersion('Script')}</value>
                 </ifl:property>

@@ -18,6 +18,15 @@ import type {
 
 export type PipelinePhase =
   | 'INIT'
+  // Studio (multi-agent v2)
+  | 'CLARIFYING'
+  | 'PLANNING'
+  | 'SPECIALISTS'
+  | 'INTEGRATING'
+  | 'SAMPLE_GEN'
+  | 'MODIFYING'
+  | 'DRAFTED'
+  // Shared / legacy linear pipeline
   | 'ARCHITECTURE'
   | 'DESIGN_REVIEW'
   | 'BPMN_GENERATION'
@@ -31,6 +40,16 @@ export type PipelinePhase =
   | 'CANCELLED';
 
 export type AgentName =
+  | 'CLARIFIER'
+  | 'PLANNER'
+  | 'ADAPTER_SPECIALIST'
+  | 'MAPPING_SPECIALIST'
+  | 'SCRIPT_SPECIALIST'
+  | 'EXTERNALIZATION_SPECIALIST'
+  | 'ERROR_HANDLER_SPECIALIST'
+  | 'DECOMPOSITION_SPECIALIST'
+  | 'PATCH'
+  | 'SAMPLE_DATA'
   | 'ARCHITECT'
   | 'REVIEWER'
   | 'VALIDATOR'
@@ -49,6 +68,10 @@ export interface TenantCapabilities {
   supportedFeatures: string[];
   securityMaterials: string[];
   fetchedAt: number;
+  /** Whether SAP API Management (APIM) is available on this tenant */
+  apimEnabled?: boolean;
+  /** Number of API proxies deployed in APIM (0 if APIM not available) */
+  apimProxyCount?: number;
 }
 
 // ============================================================================
@@ -383,17 +406,26 @@ export interface PipelineState {
 // ============================================================================
 
 export const VALID_TRANSITIONS: Record<PipelinePhase, PipelinePhase[]> = {
-  INIT: ['ARCHITECTURE', 'FAILED', 'CANCELLED'],
+  INIT: ['CLARIFYING', 'PLANNING', 'ARCHITECTURE', 'FAILED', 'CANCELLED'],
+  // Studio path
+  CLARIFYING: ['PLANNING', 'CANCELLED', 'FAILED'],
+  PLANNING: ['SPECIALISTS', 'INTEGRATING', 'ARCHITECTURE', 'CANCELLED', 'FAILED'],
+  SPECIALISTS: ['INTEGRATING', 'ARCHITECTURE', 'CANCELLED', 'FAILED'],
+  INTEGRATING: ['ARCHITECTURE', 'DESIGN_REVIEW', 'CANCELLED', 'FAILED'],
+  SAMPLE_GEN: ['AWAITING_APPROVAL', 'CANCELLED', 'FAILED'],
+  MODIFYING: ['DESIGN_REVIEW', 'AWAITING_APPROVAL', 'CANCELLED', 'FAILED'],
+  DRAFTED: ['DEPLOYING', 'MODIFYING', 'CANCELLED'],
+  // Shared
   ARCHITECTURE: ['DESIGN_REVIEW', 'FAILED', 'CANCELLED'],
   DESIGN_REVIEW: ['BPMN_GENERATION', 'AWAITING_APPROVAL', 'FAILED', 'CANCELLED'],
   BPMN_GENERATION: ['VALIDATION', 'FAILED', 'CANCELLED'],
-  VALIDATION: ['SUMMARIZATION', 'FIX_ATTEMPT', 'FAILED', 'CANCELLED'],
+  VALIDATION: ['SUMMARIZATION', 'FIX_ATTEMPT', 'SAMPLE_GEN', 'FAILED', 'CANCELLED'],
   FIX_ATTEMPT: ['BPMN_GENERATION', 'VALIDATION', 'SUMMARIZATION', 'FAILED', 'CANCELLED'],
-  SUMMARIZATION: ['AWAITING_APPROVAL', 'FAILED', 'CANCELLED'],
-  AWAITING_APPROVAL: ['DEPLOYING', 'ARCHITECTURE', 'CANCELLED'],
+  SUMMARIZATION: ['AWAITING_APPROVAL', 'SAMPLE_GEN', 'FAILED', 'CANCELLED'],
+  AWAITING_APPROVAL: ['DEPLOYING', 'DRAFTED', 'MODIFYING', 'ARCHITECTURE', 'CANCELLED'],
   DEPLOYING: ['COMPLETED', 'FAILED'],
   COMPLETED: [],
-  FAILED: ['ARCHITECTURE'], // Allow retry from failed
+  FAILED: ['ARCHITECTURE', 'CLARIFYING'],
   CANCELLED: [],
 };
 
@@ -410,13 +442,20 @@ export function isValidTransition(from: PipelinePhase, to: PipelinePhase): boole
 export function getPhaseLabel(phase: PipelinePhase): string {
   const labels: Record<PipelinePhase, string> = {
     INIT: 'Initializing',
+    CLARIFYING: 'Gathering requirements',
+    PLANNING: 'Planning architecture',
+    SPECIALISTS: 'Specialists at work',
+    INTEGRATING: 'Assembling design',
+    SAMPLE_GEN: 'Generating samples',
+    MODIFYING: 'Applying changes',
+    DRAFTED: 'Saved as draft',
     ARCHITECTURE: 'Designing iFlow',
-    DESIGN_REVIEW: 'Reviewing Design',
+    DESIGN_REVIEW: 'Reviewing design',
     BPMN_GENERATION: 'Generating BPMN2 XML',
     VALIDATION: 'Validating',
-    FIX_ATTEMPT: 'Fixing Errors',
-    SUMMARIZATION: 'Generating Summary',
-    AWAITING_APPROVAL: 'Awaiting Approval',
+    FIX_ATTEMPT: 'Fixing errors',
+    SUMMARIZATION: 'Summarizing',
+    AWAITING_APPROVAL: 'Awaiting approval',
     DEPLOYING: 'Deploying to SAP CPI',
     COMPLETED: 'Completed',
     FAILED: 'Failed',
@@ -461,3 +500,199 @@ export function getPhaseProgress(phase: PipelinePhase): number {
   // 10 phases total (INIT through COMPLETED)
   return Math.round((idx / 9) * 100);
 }
+
+// ============================================================================
+// STUDIO (Multi-agent v2) — Conversational types
+// ============================================================================
+
+/** Outcome of the Clarifier agent — structured requirements brief. */
+export interface RequirementsBrief {
+  goal: string;
+  sourceSystem?: string;
+  targetSystem?: string;
+  trigger: 'message' | 'timer' | 'event';
+  schedule?: string; // CRON or human description
+  payloadFormat?: string;
+  authentication?: string;
+  expectedThroughput?: string;
+  errorPolicy?: 'fail-fast' | 'retry' | 'dlc' | 'alert' | string;
+  logLevel?: 'NONE' | 'INFO' | 'DEBUG' | 'TRACE';
+  externalizationHints?: string[];
+  partnerIds?: string[];
+  additionalRequirements?: string[];
+  /** Open clarifier questions still unanswered. Empty array → ready to plan. */
+  openQuestions?: ClarifierQuestion[];
+  /** Confidence the brief is complete enough to plan (0-1). */
+  confidence?: number;
+}
+
+export interface ClarifierQuestion {
+  id: string;
+  question: string;
+  /** Optional preset choices to render as quick replies. */
+  options?: string[];
+  /** Required answers block planning. */
+  required: boolean;
+}
+
+// ============================================================================
+// STUDIO — Planning types
+// ============================================================================
+
+/** Planner output — high-level architectural blueprint */
+export interface IntegrationBlueprint {
+  pattern:
+    | 'PointToPoint'
+    | 'PublishSubscribe'
+    | 'ContentBasedRouter'
+    | 'Splitter'
+    | 'Aggregator'
+    | 'ScatterGather'
+    | 'Pipeline'
+    | 'RecipientList';
+  /** Specialist agents the planner wants to dispatch (in parallel). */
+  specialists: SpecialistDispatch[];
+  /** Local Integration Processes the planner wants to factor out. */
+  localProcesses: BlueprintLocalProcess[];
+  /** Whether to generate exception subprocesses. */
+  exceptionStrategy: 'NONE' | 'BASIC' | 'RETRY_DLC' | 'RETRY_DLC_ALERT';
+  /** Hints about what should be externalized. */
+  externalizationTargets: string[];
+  /** Brief rationale for the chosen pattern. */
+  rationale: string;
+}
+
+export interface SpecialistDispatch {
+  name:
+    | 'ADAPTER_SPECIALIST'
+    | 'MAPPING_SPECIALIST'
+    | 'SCRIPT_SPECIALIST'
+    | 'EXTERNALIZATION_SPECIALIST'
+    | 'ERROR_HANDLER_SPECIALIST'
+    | 'DECOMPOSITION_SPECIALIST';
+  brief: string;
+  priority: number;
+}
+
+export interface BlueprintLocalProcess {
+  id: string;
+  name: string;
+  responsibility: string;
+}
+
+// ============================================================================
+// STUDIO — Specialist agent results (heterogeneous; merged by Architect-as-integrator)
+// ============================================================================
+
+export interface SpecialistResultEnvelope<T> {
+  agent: AgentName;
+  ok: boolean;
+  payload?: T;
+  error?: string;
+  durationMs: number;
+  tokensUsed: number;
+}
+
+export interface AdapterSpecialistOutput {
+  adapters: unknown[]; // AdapterConfig[] but kept loose to avoid cycles
+}
+
+export interface MappingSpecialistOutput {
+  /** Generated message-mapping artifact files (.mmap, .xml). */
+  files: { path: string; content: string }[];
+  /** Mapping refs to wire into the design. */
+  mappings: unknown[];
+}
+
+export interface ScriptSpecialistOutput {
+  /** Groovy/JS script files plus any unit-test files. */
+  files: { path: string; content: string }[];
+  /** Script step references to wire into the design. */
+  scripts: unknown[];
+}
+
+export interface ExternalizationSpecialistOutput {
+  /** parameters.prop content. */
+  parametersFile: string;
+  /** External parameter metadata. */
+  parameters: ExternalParameter[];
+  /** Patches: paths into the design where literals were replaced with `{{name}}`. */
+  patches: { path: string; before: unknown; after: unknown }[];
+}
+
+export interface ExternalParameter {
+  name: string;
+  type: 'string' | 'integer' | 'boolean' | 'password' | 'credential';
+  defaultValue?: string;
+  description?: string;
+  /** Component IDs that reference this parameter. */
+  usedBy?: string[];
+}
+
+export interface ErrorHandlerSpecialistOutput {
+  /** Exception subprocess configs. */
+  exceptionSubprocesses: unknown[];
+  /** DLC config / retry strategy summary. */
+  strategy: 'NONE' | 'BASIC' | 'RETRY_DLC' | 'RETRY_DLC_ALERT';
+}
+
+export interface DecompositionSpecialistOutput {
+  localProcesses: unknown[];
+  callActivities: unknown[];
+}
+
+export type SpecialistResult =
+  | SpecialistResultEnvelope<AdapterSpecialistOutput>
+  | SpecialistResultEnvelope<MappingSpecialistOutput>
+  | SpecialistResultEnvelope<ScriptSpecialistOutput>
+  | SpecialistResultEnvelope<ExternalizationSpecialistOutput>
+  | SpecialistResultEnvelope<ErrorHandlerSpecialistOutput>
+  | SpecialistResultEnvelope<DecompositionSpecialistOutput>;
+
+// ============================================================================
+// STUDIO — Patch / Modify loop
+// ============================================================================
+
+export interface DesignPatch {
+  id: string;
+  instruction: string;
+  diffs: DesignDiff[];
+  rationale: string;
+  appliedAt: number;
+}
+
+// ============================================================================
+// STUDIO — Sample data
+// ============================================================================
+
+export interface SampleDataOutput {
+  inputPayloads: { name: string; contentType: string; content: string }[];
+  expectedOutputs: { name: string; contentType: string; content: string }[];
+  curlSnippet?: string;
+  notes?: string[];
+}
+
+// ============================================================================
+// STUDIO — Chat thread
+// ============================================================================
+
+export type ChatMessageRole = 'user' | 'assistant' | 'system' | 'agent';
+
+export type ChatMessageKind =
+  | 'TEXT'
+  | 'CLARIFIER_QUESTION'
+  | 'CLARIFIER_ANSWER'
+  | 'MODIFY_REQUEST'
+  | 'PATCH_RESULT'
+  | 'AGENT_STATUS'
+  | 'BLUEPRINT'
+  | 'DESIGN_READY';
+
+export interface ChatMessageMetadata {
+  agentName?: AgentName;
+  questionIds?: string[];
+  patchId?: string;
+  designVersion?: number;
+  [key: string]: unknown;
+}
+

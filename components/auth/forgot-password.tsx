@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth/client";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
@@ -25,16 +25,13 @@ export default function ForgotPasswordAuth() {
     setError(null);
 
     try {
-      const supabase = createClient();
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email,
-        {
-          redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
-        }
-      );
+      const { error: resetError } = await authClient.forgetPassword({
+        email: email.toLowerCase().trim(),
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
 
       if (resetError) {
-        setError(resetError.message);
+        setError(resetError.message ?? "Failed to send reset email");
         return;
       }
 
@@ -141,14 +138,7 @@ export default function ForgotPasswordAuth() {
           Back to Sign In
         </Link>
 
-        <AuthBrandPanel
-          testimonial={{
-            quote:
-              "Password recovery made simple. Get back to monitoring your SAP integrations in seconds, not hours.",
-            author: "Security Team",
-            title: "CPI Connect",
-          }}
-        />
+        <AuthBrandPanel />
 
         <div className="lg:p-8">
           <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">

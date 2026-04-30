@@ -38,7 +38,10 @@ interface MessageLogsTableProps {
   iflowName: string;
 }
 
-export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) {
+export function MessageLogsTable({
+  iflowId,
+  iflowName,
+}: MessageLogsTableProps) {
   const [logs, setLogs] = useState<MessageLog[]>([]);
   const [isLoading, setIsLoading] = useState(false); // Changed to false for instant render
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -51,13 +54,15 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
 
   const loadLogs = async () => {
     setIsLoading(true);
-    
+
     // Add timeout for the entire operation
     const timeoutId = setTimeout(() => {
       setIsLoading(false);
-      toast.error("Loading logs is taking longer than expected. Please check your connection.");
+      toast.error(
+        "Loading logs is taking longer than expected. Please check your connection.",
+      );
     }, 45000); // 45 second timeout
-    
+
     try {
       const result = await getMessageLogs({
         iflowId,
@@ -172,8 +177,11 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
               size="icon"
               onClick={loadLogs}
               disabled={isLoading}
+              aria-label="Refresh message logs"
             >
-              <IconRefresh className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+              <IconRefresh
+                className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
+              />
             </Button>
           </div>
         </div>
@@ -184,7 +192,9 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
           {isInitialLoad ? (
             <div className="h-5 w-48 bg-muted animate-pulse rounded" />
           ) : (
-            <>Showing {logs.length} of {total} messages</>
+            <>
+              Showing {logs.length} of {total} messages
+            </>
           )}
         </div>
 
@@ -192,7 +202,10 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
         {isInitialLoad ? (
           <div className="space-y-3">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-16 w-full bg-muted animate-pulse rounded-md" />
+              <div
+                key={i}
+                className="h-16 w-full bg-muted animate-pulse rounded-md"
+              />
             ))}
           </div>
         ) : logs.length === 0 ? (
@@ -225,18 +238,37 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                   {logs.map((log) => {
                     const isExpanded = expandedRows.has(log.id);
                     const hasFailed = log.status.toUpperCase() === "FAILED";
-                    
+
                     return (
                       <React.Fragment key={log.id}>
-                        <TableRow 
+                        <TableRow
                           className={cn(
-                            "cursor-pointer hover:bg-muted/50",
-                            hasFailed && "bg-destructive/5"
+                            "cursor-pointer hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                            hasFailed && "bg-destructive/5",
                           )}
                           onClick={() => toggleRow(log.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleRow(log.id);
+                            }
+                          }}
+                          tabIndex={0}
+                          role="button"
+                          aria-expanded={expandedRows.has(log.id)}
+                          aria-label={`${isExpanded ? "Collapse" : "Expand"} details for message ${log.messageId.substring(0, 12)}`}
                         >
                           <TableCell>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              aria-label={
+                                isExpanded
+                                  ? "Collapse row details"
+                                  : "Expand row details"
+                              }
+                            >
                               {isExpanded ? (
                                 <IconChevronUp className="h-4 w-4" />
                               ) : (
@@ -258,7 +290,10 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                                 })}
                               </div>
                               <div className="text-xs text-muted-foreground">
-                                {format(new Date(log.logStart), "MMM dd, HH:mm:ss")}
+                                {format(
+                                  new Date(log.logStart),
+                                  "MMM dd, HH:mm:ss",
+                                )}
                               </div>
                             </div>
                           </TableCell>
@@ -271,7 +306,10 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                                   })}
                                 </div>
                                 <div className="text-xs text-muted-foreground">
-                                  {format(new Date(log.logEnd), "MMM dd, HH:mm:ss")}
+                                  {format(
+                                    new Date(log.logEnd),
+                                    "MMM dd, HH:mm:ss",
+                                  )}
                                 </div>
                               </div>
                             ) : (
@@ -283,10 +321,14 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                               {calculateDuration(log.logStart, log.logEnd)}
                             </span>
                           </TableCell>
-                          <TableCell className="text-sm">{log.sender || "-"}</TableCell>
-                          <TableCell className="text-sm">{log.receiver || "-"}</TableCell>
+                          <TableCell className="text-sm">
+                            {log.sender || "-"}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {log.receiver || "-"}
+                          </TableCell>
                         </TableRow>
-                        
+
                         {/* Expanded Details Row */}
                         {isExpanded && (
                           <TableRow key={`${log.id}-details`}>
@@ -308,11 +350,11 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                                         </p>
                                       )}
                                     </div>
-                                    
+
                                     {/* AI Error Explainer */}
-                                    <ErrorExplainer 
-                                      messageId={log.messageId} 
-                                      iflowId={iflowId} 
+                                    <ErrorExplainer
+                                      messageId={log.messageId}
+                                      iflowId={iflowId}
                                     />
                                   </div>
                                 )}
@@ -320,11 +362,15 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                                 {/* Additional Details */}
                                 <div className="grid grid-cols-2 gap-4 text-sm">
                                   <div>
-                                    <span className="font-medium">Interface Type:</span>{" "}
+                                    <span className="font-medium">
+                                      Interface Type:
+                                    </span>{" "}
                                     {log.interfaceType || "N/A"}
                                   </div>
                                   <div>
-                                    <span className="font-medium">Full Message ID:</span>{" "}
+                                    <span className="font-medium">
+                                      Full Message ID:
+                                    </span>{" "}
                                     <code className="text-xs bg-secondary px-2 py-1 rounded">
                                       {log.messageId}
                                     </code>
@@ -332,7 +378,8 @@ export function MessageLogsTable({ iflowId, iflowName }: MessageLogsTableProps) 
                                 </div>
 
                                 {/* Payloads */}
-                                {(log.requestPayload || log.responsePayload) && (
+                                {(log.requestPayload ||
+                                  log.responsePayload) && (
                                   <div className="space-y-3">
                                     {log.requestPayload && (
                                       <div>

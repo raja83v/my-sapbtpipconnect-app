@@ -1,41 +1,23 @@
 "use server";
 
-import { getCurrentUser as getAuthUser } from "@/lib/auth-helpers";
-import type { CurrentUser } from "@/types/user";
-import { db } from "@/lib/db";
-import { users } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-export async function getCurrentUser(): Promise<CurrentUser> {
-  try {
-    const authUser = await getAuthUser();
+import { getCurrentUser as _getCurrentUser } from "@/lib/auth-helpers";
+import type { CurrentUser } from "@/lib/auth-helpers";
 
-    if (!authUser) {
-      return null;
-    }
+export type { CurrentUser };
 
-    // Fetch full user data from database
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, authUser.id),
-    });
-
-    if (!user) return null;
-
-    // Transform to CurrentUser type
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name ?? null,
-      image: user.image ?? null,
-      phone: user.phone ?? null,
-      role: user.role,
-      status: user.status,
-      emailVerified: user.emailVerified,
-      onboardingCompleted: user.onboardingCompleted,
-      defaultTenantId: user.defaultTenantId ?? null,
-      createdAt: user.createdAt,
-    };
-  } catch (error) {
-    console.error("Error fetching current user:", error);
-    return null;
-  }
+/**
+ * Get the current authenticated user.
+ *
+ * Delegates to the canonical implementation in lib/auth-helpers.ts which:
+ *   - Reads from the Supabase session (server-side cookies)
+ *   - Lazy-creates users on first login
+ *   - Backfills supabaseId for legacy users
+ *   - Is cached per request via React.cache()
+ *
+ * This thin wrapper exists because "use server" files can only export
+ * async functions — a bare re-export of the cache()-wrapped helper is
+ * rejected by Next.js.
+ */
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  return _getCurrentUser();
 }

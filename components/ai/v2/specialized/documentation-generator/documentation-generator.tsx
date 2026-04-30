@@ -1,992 +1,1230 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import Link from "next/link";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import {
-    FileText,
-    ArrowLeft,
-    Download,
-    RefreshCw,
-    Sparkles,
-    CheckCircle2,
-    ChevronRight,
-    Code,
-    Copy,
-    Check,
-    FileJson,
-    Layers,
-    ChevronsUpDown,
-    Search,
-    Eye,
-    FileCode,
-    BookOpen,
-    Settings,
-    AlertCircle,
-    Workflow,
-    Users,
-    Wrench,
-    Server,
-    Rocket,
-    FileOutput,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  AlertCircle,
+  ArrowLeft,
+  Check,
+  ChevronsUpDown,
+  Copy,
+  Download,
+  FileCode,
+  FileOutput,
+  FileText,
+  Layers,
+  Loader2,
+  RefreshCw,
+  Rocket,
+  Server,
+  Sparkles,
+  StopCircle,
+  Users,
+  Wrench,
+  Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-    getIFlowsForDocGenerator,
-    getIFlowDocMetadata,
-    generateDocumentation,
-} from "@/app/actions/documentation-generator";
-import {
-    AVAILABLE_SECTIONS,
-    generateMarkdownExportSync,
-    getDocumentTypeTitle,
-    type IFlowForDocGenerator,
-    type IFlowDocMetadata,
-    type DocumentationType,
-    type GeneratedDocument,
+  AVAILABLE_SECTIONS,
+  generateMarkdownExportSync,
+  getDocumentTypeTitle,
+  type DocumentationType,
+  type GeneratedDocument,
+  type IFlowDocMetadata,
+  type IFlowForDocGenerator,
+  type MermaidDiagram,
+  type DocumentSectionContent,
 } from "@/types/documentation-generator";
+import { getIFlowsForDocGenerator } from "@/app/actions/documentation-generator";
 import { generateDocx } from "@/lib/docx-export";
+import { renderMermaidToPng } from "./mermaid-render";
+import {
+  DocGeneratorTimeline,
+  type TimelinePhase,
+} from "./doc-generator-timeline";
+import { DocGeneratorSectionCard } from "./doc-generator-section-card";
 
-interface DocumentationGeneratorProps {
-    tenantId: string;
-    iflowId?: string;
-}
+// ---------------------------------------------------------------------------
+// Doc-type catalog
+// ---------------------------------------------------------------------------
 
-// Document type definitions
-const DOCUMENT_TYPES: Array<{
-    type: DocumentationType;
-    name: string;
-    description: string;
-    icon: React.ElementType;
-    color: string;
+const DOC_TYPES: Array<{
+  type: DocumentationType;
+  name: string;
+  description: string;
+  icon: React.ElementType;
+  accent: string;
 }> = [
-    {
-        type: "technical-spec",
-        name: "Technical Spec",
-        description: "Comprehensive technical documentation for developers",
-        icon: FileCode,
-        color: "text-blue-500",
-    },
-    {
-        type: "user-guide",
-        name: "User Guide",
-        description: "End-user focused documentation",
-        icon: Users,
-        color: "text-green-500",
-    },
-    {
-        type: "ops-runbook",
-        name: "Ops Runbook",
-        description: "Operational procedures and monitoring",
-        icon: Wrench,
-        color: "text-orange-500",
-    },
-    {
-        type: "api-docs",
-        name: "API Docs",
-        description: "API endpoint specifications",
-        icon: Server,
-        color: "text-purple-500",
-    },
-    {
-        type: "deployment-guide",
-        name: "Deployment Guide",
-        description: "Installation and configuration guide",
-        icon: Rocket,
-        color: "text-cyan-500",
-    },
+  {
+    type: "technical-spec",
+    name: "Technical Spec",
+    description: "Comprehensive developer-focused documentation",
+    icon: FileCode,
+    accent: "from-blue-500/15 to-violet-500/15 ring-blue-500/30",
+  },
+  {
+    type: "user-guide",
+    name: "User Guide",
+    description: "End-user documentation with examples",
+    icon: Users,
+    accent: "from-emerald-500/15 to-teal-500/15 ring-emerald-500/30",
+  },
+  {
+    type: "ops-runbook",
+    name: "Ops Runbook",
+    description: "Operational procedures & monitoring",
+    icon: Wrench,
+    accent: "from-orange-500/15 to-amber-500/15 ring-orange-500/30",
+  },
+  {
+    type: "api-docs",
+    name: "API Docs",
+    description: "REST/SOAP endpoint specifications",
+    icon: Server,
+    accent: "from-fuchsia-500/15 to-pink-500/15 ring-fuchsia-500/30",
+  },
+  {
+    type: "deployment-guide",
+    name: "Deployment Guide",
+    description: "Installation and config guide",
+    icon: Rocket,
+    accent: "from-cyan-500/15 to-sky-500/15 ring-cyan-500/30",
+  },
 ];
 
-export function DocumentationGenerator({ tenantId, iflowId }: DocumentationGeneratorProps) {
-    // State
-    const [iflows, setIflows] = useState<IFlowForDocGenerator[]>([]);
-    const [selectedIflowId, setSelectedIflowId] = useState<string>(iflowId || "");
-    const [iflowMetadata, setIflowMetadata] = useState<IFlowDocMetadata | null>(null);
-    const [document, setDocument] = useState<GeneratedDocument | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const [isGenerating, setIsGenerating] = useState(false);
-    const [isLoadingMetadata, setIsLoadingMetadata] = useState(false);
-    const [open, setOpen] = useState(false);
-    const [searchQuery, setSearchQuery] = useState("");
-    const [copiedId, setCopiedId] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState("overview");
-    const [generationCount, setGenerationCount] = useState(0);
+// ---------------------------------------------------------------------------
+// SSE event types
+// ---------------------------------------------------------------------------
 
-    // Document options
-    const [documentationType, setDocumentationType] = useState<DocumentationType>("technical-spec");
-    const [selectedSections, setSelectedSections] = useState<string[]>(
-        AVAILABLE_SECTIONS.filter(s => s.enabled).map(s => s.id)
-    );
-
-    // Sort and filter iFlows
-    const sortedAndFilteredIflows = useMemo(() => {
-        return iflows
-            .filter(iflow =>
-                iflow.name.toLowerCase().includes(searchQuery.toLowerCase())
-            )
-            .sort((a, b) => a.name.localeCompare(b.name));
-    }, [iflows, searchQuery]);
-
-    // Load iFlows on mount
-    useEffect(() => {
-        loadIflows();
-    }, [tenantId]);
-
-    // Load metadata when iFlow changes
-    useEffect(() => {
-        if (selectedIflowId) {
-            loadIflowMetadata();
-        } else {
-            setIflowMetadata(null);
-            setDocument(null);
-        }
-    }, [selectedIflowId]);
-
-    const loadIflows = async () => {
-        setIsLoading(true);
-        try {
-            const result = await getIFlowsForDocGenerator({ tenantId });
-
-            if (result.success && result.data) {
-                setIflows(result.data);
-
-                if (iflowId) {
-                    setSelectedIflowId(iflowId);
-                }
-            } else {
-                toast.error(result.error || "Failed to load iFlows");
-            }
-        } catch (error) {
-            console.error("Error loading iFlows:", error);
-            toast.error("Failed to load iFlows");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const loadIflowMetadata = async () => {
-        if (!selectedIflowId) return;
-
-        setIsLoadingMetadata(true);
-        try {
-            const result = await getIFlowDocMetadata({ tenantId, iflowId: selectedIflowId });
-
-            if (result.success && result.data) {
-                setIflowMetadata(result.data);
-            } else {
-                toast.error(result.error || "Failed to load iFlow metadata");
-            }
-        } catch (error) {
-            console.error("Error loading iFlow metadata:", error);
-            toast.error("Failed to load iFlow metadata");
-        } finally {
-            setIsLoadingMetadata(false);
-        }
-    };
-
-    const handleGenerateDocumentation = async () => {
-        if (!selectedIflowId || !iflowMetadata) {
-            toast.error("Please select an iFlow first");
-            return;
-        }
-
-        if (selectedSections.length === 0) {
-            toast.error("Please select at least one section");
-            return;
-        }
-
-        setIsGenerating(true);
-        try {
-            const result = await generateDocumentation({
-                tenantId,
-                iflowId: selectedIflowId,
-                metadata: iflowMetadata,
-                documentationType,
-                sections: selectedSections,
-            });
-
-            if (result.success && result.data) {
-                setDocument(result.data);
-                setGenerationCount(prev => prev + 1);
-                setActiveTab("preview");
-                toast.success(`Documentation generated with ${result.data.sections.length} sections`);
-            } else {
-                toast.error(result.error || "Failed to generate documentation");
-            }
-        } catch (error) {
-            console.error("Error generating documentation:", error);
-            toast.error("Failed to generate documentation");
-        } finally {
-            setIsGenerating(false);
-        }
-    };
-
-    const handleCopy = (text: string, id: string) => {
-        navigator.clipboard.writeText(text);
-        setCopiedId(id);
-        toast.success("Copied to clipboard");
-        setTimeout(() => setCopiedId(null), 2000);
-    };
-
-    const handleExportMarkdown = () => {
-        if (!document) return;
-
-        const markdown = generateMarkdownExportSync(document);
-        const blob = new Blob([markdown], { type: "text/markdown" });
-        const url = URL.createObjectURL(blob);
-        const a = window.document.createElement("a");
-        a.href = url;
-        a.download = `${document.iflowName}-${document.type}-${Date.now()}.md`;
-        a.click();
-        URL.revokeObjectURL(url);
-        toast.success("Documentation exported as Markdown");
-    };
-
-    const handleExportJson = () => {
-        if (!document) return;
-
-        const blob = new Blob([JSON.stringify(document, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = window.document.createElement("a");
-        a.href = url;
-        a.download = `${document.iflowName}-${document.type}-${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        toast.success("Documentation exported as JSON");
-    };
-
-    const handleCopyAllContent = () => {
-        if (!document) return;
-
-        const markdown = generateMarkdownExportSync(document);
-        navigator.clipboard.writeText(markdown);
-        toast.success("Documentation copied to clipboard");
-    };
-
-    const [isExportingDocx, setIsExportingDocx] = useState(false);
-
-    const handleExportDocx = async () => {
-        if (!document) return;
-
-        setIsExportingDocx(true);
-        try {
-            const blob = await generateDocx(document);
-            const url = URL.createObjectURL(blob);
-            const a = window.document.createElement("a");
-            a.href = url;
-            a.download = `${document.iflowName} - ${getDocumentTypeTitle(document.type)}.docx`;
-            a.click();
-            URL.revokeObjectURL(url);
-            toast.success("Documentation exported as DOCX");
-        } catch (error) {
-            console.error("Error exporting DOCX:", error);
-            toast.error("Failed to export as DOCX");
-        } finally {
-            setIsExportingDocx(false);
-        }
-    };
-
-    const toggleSection = (sectionId: string) => {
-        setSelectedSections(prev =>
-            prev.includes(sectionId)
-                ? prev.filter(id => id !== sectionId)
-                : [...prev, sectionId]
-        );
-    };
-
-    const selectAllSections = () => {
-        setSelectedSections(AVAILABLE_SECTIONS.map(s => s.id));
-    };
-
-    const deselectAllSections = () => {
-        setSelectedSections([]);
-    };
-
-    const selectedIflowName = useMemo(() => {
-        return iflows.find(i => i.id === selectedIflowId)?.name || "";
-    }, [iflows, selectedIflowId]);
-
-    // Render loading state
-    if (isLoading) {
-        return (
-            <div className="container mx-auto p-6 space-y-6">
-                <div className="flex items-center gap-4">
-                    <Skeleton className="h-10 w-10 rounded-lg" />
-                    <div className="space-y-2">
-                        <Skeleton className="h-6 w-48" />
-                        <Skeleton className="h-4 w-72" />
-                    </div>
-                </div>
-                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-                    {[...Array(4)].map((_, i) => (
-                        <Skeleton key={i} className="h-32" />
-                    ))}
-                </div>
-            </div>
-        );
+type SSEEvent =
+  | { phase: "metadata"; payload: { metadata: IFlowDocMetadata } }
+  | {
+      phase: "outline";
+      payload: { sections: Array<{ id: string; title: string }> };
     }
+  | {
+      phase: "section.start";
+      payload: { sectionId: string; title: string };
+    }
+  | {
+      phase: "section.delta";
+      payload: { sectionId: string; delta: string };
+    }
+  | {
+      phase: "section.end";
+      payload: { sectionId: string; title: string; content: string };
+    }
+  | { phase: "diagrams.start"; payload: Record<string, unknown> }
+  | { phase: "diagrams"; payload: { diagrams: MermaidDiagram[] } }
+  | { phase: "persisted"; payload: { documentId: string | null } }
+  | {
+      phase: "done";
+      payload: {
+        tokensUsed: number;
+        durationMs: number;
+        documentId: string | null;
+      };
+    }
+  | { phase: "error"; payload: { message: string } };
 
-    return (
-        <div className="container mx-auto p-6 space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    <Link href="/dashboard/ai-agents">
-                        <Button variant="ghost" size="icon">
-                            <ArrowLeft className="h-4 w-4" />
-                        </Button>
-                    </Link>
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-                            <FileText className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-                        </div>
-                        <div>
-                            <h1 className="text-2xl font-bold">Documentation Generator</h1>
-                            <p className="text-muted-foreground">
-                                Generate comprehensive documentation from your iFlow configurations
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" onClick={loadIflows} disabled={isLoading}>
-                        <RefreshCw className={cn("h-4 w-4 mr-2", isLoading && "animate-spin")} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+// ---------------------------------------------------------------------------
+// Component props
+// ---------------------------------------------------------------------------
 
-            {/* iFlow Selector */}
-            <Card>
-                <CardHeader className="pb-3">
-                    <CardTitle className="text-lg">Select iFlow</CardTitle>
-                    <CardDescription>
-                        Choose an iFlow to generate documentation from its configuration
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <Popover open={open} onOpenChange={setOpen}>
-                        <PopoverTrigger asChild>
-                            <Button
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={open}
-                                className="w-full justify-between"
-                            >
-                                {selectedIflowId ? selectedIflowName : "Select an iFlow..."}
-                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[400px] p-0" align="start">
-                            <Command>
-                                <CommandInput
-                                    placeholder="Search iFlows..."
-                                    value={searchQuery}
-                                    onValueChange={setSearchQuery}
-                                />
-                                <CommandList>
-                                    <CommandEmpty>No iFlow found.</CommandEmpty>
-                                    <CommandGroup>
-                                        {sortedAndFilteredIflows.map((iflow) => (
-                                            <CommandItem
-                                                key={iflow.id}
-                                                value={iflow.name}
-                                                onSelect={() => {
-                                                    setSelectedIflowId(iflow.id);
-                                                    setOpen(false);
-                                                    setSearchQuery("");
-                                                }}
-                                            >
-                                                <div className="flex items-center justify-between w-full">
-                                                    <span>{iflow.name}</span>
-                                                    <Badge variant="outline" className="text-xs">
-                                                        {iflow.status}
-                                                    </Badge>
-                                                </div>
-                                                {selectedIflowId === iflow.id && (
-                                                    <Check className="ml-2 h-4 w-4" />
-                                                )}
-                                            </CommandItem>
-                                        ))}
-                                    </CommandGroup>
-                                </CommandList>
-                            </Command>
-                        </PopoverContent>
-                    </Popover>
-                </CardContent>
-            </Card>
-
-            {/* Main Content */}
-            {selectedIflowId && (
-                <Tabs value={activeTab} onValueChange={setActiveTab}>
-                    <TabsList className="grid w-full grid-cols-4">
-                        <TabsTrigger value="overview" className="flex items-center gap-2">
-                            <Layers className="h-4 w-4" />
-                            Overview
-                        </TabsTrigger>
-                        <TabsTrigger value="generate" className="flex items-center gap-2">
-                            <Settings className="h-4 w-4" />
-                            Configure
-                        </TabsTrigger>
-                        <TabsTrigger value="preview" className="flex items-center gap-2" disabled={!document}>
-                            <Eye className="h-4 w-4" />
-                            Preview
-                        </TabsTrigger>
-                        <TabsTrigger value="export" className="flex items-center gap-2" disabled={!document}>
-                            <Download className="h-4 w-4" />
-                            Export
-                        </TabsTrigger>
-                    </TabsList>
-
-                    {/* Overview Tab */}
-                    <TabsContent value="overview" className="space-y-4">
-                        {isLoadingMetadata ? (
-                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                                {[...Array(4)].map((_, i) => (
-                                    <Skeleton key={i} className="h-24" />
-                                ))}
-                            </div>
-                        ) : iflowMetadata ? (
-                            <>
-                                {/* Stats Grid */}
-                                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                                    <Card>
-                                        <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm font-medium text-muted-foreground">
-                                                Adapters
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <p className="text-2xl font-bold">{iflowMetadata.adapters.length}</p>
-                                            <p className="text-xs text-muted-foreground mt-1">
-                                                {iflowMetadata.adapters.filter(a => a.direction === 'sender').length} sender, {iflowMetadata.adapters.filter(a => a.direction === 'receiver').length} receiver
-                                            </p>
-                                        </CardContent>
-                                    </Card>
-                                    <Card>
-                                        <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm font-medium text-muted-foreground">
-                                                Scripts
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <p className="text-2xl font-bold">{iflowMetadata.scripts.length}</p>
-                                            <p className="text-xs text-muted-foreground mt-1">
-                                                {iflowMetadata.scripts.reduce((acc, s) => acc + s.linesOfCode, 0)} total lines
-                                            </p>
-                                        </CardContent>
-                                    </Card>
-                                    <Card>
-                                        <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm font-medium text-muted-foreground">
-                                                Mappings
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <p className="text-2xl font-bold">{iflowMetadata.mappings.length}</p>
-                                            <p className="text-xs text-muted-foreground mt-1">
-                                                Message transformations
-                                            </p>
-                                        </CardContent>
-                                    </Card>
-                                    <Card>
-                                        <CardHeader className="pb-2">
-                                            <CardTitle className="text-sm font-medium text-muted-foreground">
-                                                Error Handlers
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <p className="text-2xl font-bold">{iflowMetadata.errorHandlers.length}</p>
-                                            <p className="text-xs text-muted-foreground mt-1">
-                                                Exception configurations
-                                            </p>
-                                        </CardContent>
-                                    </Card>
-                                </div>
-
-                                {/* Detailed Info */}
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    {/* Adapters */}
-                                    <Card>
-                                        <CardHeader>
-                                            <CardTitle className="text-base flex items-center gap-2">
-                                                <Workflow className="h-4 w-4" />
-                                                Adapters
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <ScrollArea className="h-[200px]">
-                                                <div className="space-y-3">
-                                                    {iflowMetadata.adapters.map((adapter) => (
-                                                        <div key={adapter.id} className="flex items-center justify-between p-2 bg-muted/50 rounded-lg">
-                                                            <div>
-                                                                <p className="font-medium text-sm">{adapter.name}</p>
-                                                                <p className="text-xs text-muted-foreground">{adapter.type}</p>
-                                                            </div>
-                                                            <Badge variant={adapter.direction === 'sender' ? 'default' : 'secondary'}>
-                                                                {adapter.direction}
-                                                            </Badge>
-                                                        </div>
-                                                    ))}
-                                                    {iflowMetadata.adapters.length === 0 && (
-                                                        <p className="text-sm text-muted-foreground">No adapters configured</p>
-                                                    )}
-                                                </div>
-                                            </ScrollArea>
-                                        </CardContent>
-                                    </Card>
-
-                                    {/* Scripts */}
-                                    <Card>
-                                        <CardHeader>
-                                            <CardTitle className="text-base flex items-center gap-2">
-                                                <Code className="h-4 w-4" />
-                                                Scripts
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <ScrollArea className="h-[200px]">
-                                                <div className="space-y-3">
-                                                    {iflowMetadata.scripts.map((script) => (
-                                                        <div key={script.id} className="flex items-center justify-between p-2 bg-muted/50 rounded-lg">
-                                                            <div>
-                                                                <p className="font-medium text-sm">{script.name}</p>
-                                                                <p className="text-xs text-muted-foreground">{script.type} • {script.linesOfCode} lines</p>
-                                                            </div>
-                                                            <Badge variant="outline" className={cn(
-                                                                script.complexity === 'high' && 'border-red-500 text-red-500',
-                                                                script.complexity === 'medium' && 'border-yellow-500 text-yellow-500',
-                                                                script.complexity === 'low' && 'border-green-500 text-green-500'
-                                                            )}>
-                                                                {script.complexity}
-                                                            </Badge>
-                                                        </div>
-                                                    ))}
-                                                    {iflowMetadata.scripts.length === 0 && (
-                                                        <p className="text-sm text-muted-foreground">No scripts configured</p>
-                                                    )}
-                                                </div>
-                                            </ScrollArea>
-                                        </CardContent>
-                                    </Card>
-                                </div>
-                            </>
-                        ) : (
-                            <Card>
-                                <CardContent className="flex flex-col items-center justify-center py-12">
-                                    <AlertCircle className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                                    <p className="text-muted-foreground">Failed to load iFlow metadata</p>
-                                    <Button variant="outline" onClick={loadIflowMetadata} className="mt-4">
-                                        <RefreshCw className="h-4 w-4 mr-2" />
-                                        Retry
-                                    </Button>
-                                </CardContent>
-                            </Card>
-                        )}
-                    </TabsContent>
-
-                    {/* Generate Tab */}
-                    <TabsContent value="generate" className="space-y-4">
-                        <div className="grid gap-6 md:grid-cols-2">
-                            {/* Document Type Selection */}
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="text-base">Document Type</CardTitle>
-                                    <CardDescription>
-                                        Select the type of documentation to generate
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="grid gap-3">
-                                        {DOCUMENT_TYPES.map((docType) => (
-                                            <div
-                                                key={docType.type}
-                                                className={cn(
-                                                    "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
-                                                    documentationType === docType.type
-                                                        ? "border-primary bg-primary/5"
-                                                        : "border-border hover:bg-muted/50"
-                                                )}
-                                                onClick={() => setDocumentationType(docType.type)}
-                                            >
-                                                <docType.icon className={cn("h-5 w-5", docType.color)} />
-                                                <div className="flex-1">
-                                                    <p className="font-medium text-sm">{docType.name}</p>
-                                                    <p className="text-xs text-muted-foreground">{docType.description}</p>
-                                                </div>
-                                                {documentationType === docType.type && (
-                                                    <CheckCircle2 className="h-5 w-5 text-primary" />
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </CardContent>
-                            </Card>
-
-                            {/* Section Selection */}
-                            <Card>
-                                <CardHeader>
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <CardTitle className="text-base">Sections</CardTitle>
-                                            <CardDescription>
-                                                Choose which sections to include ({selectedSections.length} selected)
-                                            </CardDescription>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <Button variant="ghost" size="sm" onClick={selectAllSections}>
-                                                All
-                                            </Button>
-                                            <Button variant="ghost" size="sm" onClick={deselectAllSections}>
-                                                None
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </CardHeader>
-                                <CardContent>
-                                    <ScrollArea className="h-[300px] pr-4">
-                                        <div className="space-y-3">
-                                            {AVAILABLE_SECTIONS.map((section) => (
-                                                <div
-                                                    key={section.id}
-                                                    className="flex items-start gap-3"
-                                                >
-                                                    <Checkbox
-                                                        id={section.id}
-                                                        checked={selectedSections.includes(section.id)}
-                                                        onCheckedChange={() => toggleSection(section.id)}
-                                                    />
-                                                    <div className="grid gap-1 leading-none">
-                                                        <Label
-                                                            htmlFor={section.id}
-                                                            className="text-sm font-medium cursor-pointer"
-                                                        >
-                                                            {section.name}
-                                                        </Label>
-                                                        <p className="text-xs text-muted-foreground">
-                                                            {section.description}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </ScrollArea>
-                                </CardContent>
-                            </Card>
-                        </div>
-
-                        {/* Generate Button */}
-                        <Card>
-                            <CardContent className="pt-6">
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <p className="font-medium">Ready to generate</p>
-                                        <p className="text-sm text-muted-foreground">
-                                            {DOCUMENT_TYPES.find(d => d.type === documentationType)?.name} with {selectedSections.length} sections
-                                        </p>
-                                    </div>
-                                    <Button
-                                        onClick={handleGenerateDocumentation}
-                                        disabled={isGenerating || !iflowMetadata || selectedSections.length === 0}
-                                        className="min-w-[180px]"
-                                    >
-                                        {isGenerating ? (
-                                            <>
-                                                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                                                Generating...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Sparkles className="h-4 w-4 mr-2" />
-                                                Generate Documentation
-                                            </>
-                                        )}
-                                    </Button>
-                                </div>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
-
-                    {/* Preview Tab */}
-                    <TabsContent value="preview" className="space-y-4">
-                        {document && (
-                            <>
-                                {/* Document Header */}
-                                <Card>
-                                    <CardHeader>
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <CardTitle>{document.title}</CardTitle>
-                                                <CardDescription>
-                                                    Generated on {new Date(document.generatedAt).toLocaleString()}
-                                                </CardDescription>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <Badge variant="secondary">
-                                                    {document.tokensUsed.toLocaleString()} tokens
-                                                </Badge>
-                                                <Badge variant="outline">
-                                                    {document.sections.length} sections
-                                                </Badge>
-                                            </div>
-                                        </div>
-                                    </CardHeader>
-                                </Card>
-
-                                {/* Sections */}
-                                <Card>
-                                    <CardHeader>
-                                        <CardTitle className="text-base">Document Content</CardTitle>
-                                    </CardHeader>
-                                    <CardContent>
-                                        <ScrollArea className="h-[500px] pr-4">
-                                            <div className="space-y-6">
-                                                {document.sections.map((section) => (
-                                                    <div key={section.id} className="space-y-2">
-                                                        <div className="flex items-center justify-between">
-                                                            <h3 className="font-semibold text-lg">{section.title}</h3>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="sm"
-                                                                onClick={() => handleCopy(section.content, section.id)}
-                                                            >
-                                                                {copiedId === section.id ? (
-                                                                    <Check className="h-4 w-4" />
-                                                                ) : (
-                                                                    <Copy className="h-4 w-4" />
-                                                                )}
-                                                            </Button>
-                                                        </div>
-                                                        <div className="prose prose-sm dark:prose-invert max-w-none">
-                                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                                {section.content}
-                                                            </ReactMarkdown>
-                                                        </div>
-                                                        <Separator />
-                                                    </div>
-                                                ))}
-
-                                                {/* Diagrams */}
-                                                {document.diagrams.length > 0 && (
-                                                    <div className="space-y-4">
-                                                        <h3 className="font-semibold text-lg">Diagrams</h3>
-                                                        {document.diagrams.map((diagram) => (
-                                                            <div key={diagram.id} className="space-y-2">
-                                                                <div className="flex items-center justify-between">
-                                                                    <div className="flex items-center gap-2">
-                                                                        <p className="font-medium">{diagram.title}</p>
-                                                                        <Badge variant="outline" className="text-xs">
-                                                                            {diagram.type}
-                                                                        </Badge>
-                                                                    </div>
-                                                                    <Button
-                                                                        variant="ghost"
-                                                                        size="sm"
-                                                                        onClick={() => handleCopy(diagram.mermaidCode, `diagram-${diagram.id}`)}
-                                                                    >
-                                                                        {copiedId === `diagram-${diagram.id}` ? (
-                                                                            <Check className="h-4 w-4" />
-                                                                        ) : (
-                                                                            <Copy className="h-4 w-4" />
-                                                                        )}
-                                                                    </Button>
-                                                                </div>
-                                                                <MermaidPreview code={diagram.mermaidCode} />
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </ScrollArea>
-                                    </CardContent>
-                                </Card>
-                            </>
-                        )}
-                    </TabsContent>
-
-                    {/* Export Tab */}
-                    <TabsContent value="export" className="space-y-4">
-                        {document && (
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle>Export Documentation</CardTitle>
-                                    <CardDescription>
-                                        Download your generated documentation in various formats
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent className="space-y-4">
-                                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                                        <Button
-                                            variant="outline"
-                                            className="h-24 flex-col gap-2 border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-950"
-                                            onClick={handleExportDocx}
-                                            disabled={isExportingDocx}
-                                        >
-                                            {isExportingDocx ? (
-                                                <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
-                                            ) : (
-                                                <FileOutput className="h-8 w-8 text-blue-600" />
-                                            )}
-                                            <span>{isExportingDocx ? "Generating…" : "Export as DOCX"}</span>
-                                        </Button>
-                                        <Button
-                                            variant="outline"
-                                            className="h-24 flex-col gap-2"
-                                            onClick={handleExportMarkdown}
-                                        >
-                                            <FileText className="h-8 w-8" />
-                                            <span>Export as Markdown</span>
-                                        </Button>
-                                        <Button
-                                            variant="outline"
-                                            className="h-24 flex-col gap-2"
-                                            onClick={handleExportJson}
-                                        >
-                                            <FileJson className="h-8 w-8" />
-                                            <span>Export as JSON</span>
-                                        </Button>
-                                        <Button
-                                            variant="outline"
-                                            className="h-24 flex-col gap-2"
-                                            onClick={handleCopyAllContent}
-                                        >
-                                            <Copy className="h-8 w-8" />
-                                            <span>Copy to Clipboard</span>
-                                        </Button>
-                                    </div>
-
-                                    <Separator />
-
-                                    <div className="space-y-2">
-                                        <Label className="text-muted-foreground">Document Summary</Label>
-                                        <div className="bg-muted p-4 rounded-lg space-y-2 text-sm">
-                                            <p><strong>iFlow:</strong> {document.iflowName}</p>
-                                            <p><strong>Type:</strong> {DOCUMENT_TYPES.find(d => d.type === document.type)?.name}</p>
-                                            <p><strong>Sections:</strong> {document.sections.length}</p>
-                                            <p><strong>Diagrams:</strong> {document.diagrams.length}</p>
-                                            <p><strong>Generated:</strong> {new Date(document.generatedAt).toLocaleString()}</p>
-                                            <p><strong>Tokens Used:</strong> {document.tokensUsed.toLocaleString()}</p>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        )}
-                    </TabsContent>
-                </Tabs>
-            )}
-
-            {/* Empty State */}
-            {!selectedIflowId && (
-                <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16">
-                        <FileText className="h-16 w-16 text-muted-foreground/50 mb-4" />
-                        <h3 className="text-lg font-semibold mb-2">Select an iFlow</h3>
-                        <p className="text-muted-foreground text-center max-w-md">
-                            Choose an iFlow from the dropdown above to generate comprehensive documentation
-                            based on its configuration and metadata.
-                        </p>
-                    </CardContent>
-                </Card>
-            )}
-        </div>
-    );
+interface DocumentationGeneratorProps {
+  tenantId: string;
+  iflowId?: string;
 }
 
-// ============================================================================
-// Mermaid Diagram Preview Component
-// ============================================================================
+interface SectionState {
+  id: string;
+  title: string;
+  status: "queued" | "running" | "done" | "failed";
+  content: string;
+  startedAt?: number;
+  durationMs?: number;
+}
 
-function MermaidPreview({ code }: { code: string }) {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
-    useEffect(() => {
-        let cancelled = false;
-        const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`;
+export function DocumentationGenerator({
+  tenantId,
+  iflowId: initialIflowId,
+}: DocumentationGeneratorProps) {
+  // -------------------- iFlow selection ----------------------------------
+  const [iflows, setIflows] = useState<IFlowForDocGenerator[]>([]);
+  const [iflowsLoading, setIflowsLoading] = useState(true);
+  const [selectedIflowId, setSelectedIflowId] = useState<string>(
+    initialIflowId ?? "",
+  );
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
-        async function render() {
-            try {
-                const mermaid = (await import("mermaid")).default;
-                mermaid.initialize({
-                    startOnLoad: false,
-                    theme: "default",
-                    securityLevel: "loose",
-                    flowchart: { useMaxWidth: true, htmlLabels: true },
-                    sequence: { useMaxWidth: true },
-                });
+  // -------------------- Configuration ------------------------------------
+  const [docType, setDocType] = useState<DocumentationType>("technical-spec");
+  const [selectedSections, setSelectedSections] = useState<string[]>(
+    AVAILABLE_SECTIONS.filter((s) => s.enabled).map((s) => s.id),
+  );
 
-                // Validate the syntax first using mermaid.parse
-                const valid = await mermaid.parse(code, { suppressErrors: true });
-                if (!valid) {
-                    if (!cancelled) setStatus("error");
-                    return;
-                }
+  // -------------------- Streaming runtime --------------------------------
+  const [tab, setTab] = useState("configure");
+  const [running, setRunning] = useState(false);
+  const [streamMetadata, setStreamMetadata] =
+    useState<IFlowDocMetadata | null>(null);
+  const [phases, setPhases] = useState<TimelinePhase[]>([]);
+  const [sectionsState, setSectionsState] = useState<SectionState[]>([]);
+  const [diagrams, setDiagrams] = useState<MermaidDiagram[]>([]);
+  const [generatedDoc, setGeneratedDoc] = useState<GeneratedDocument | null>(
+    null,
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [exportingDocx, setExportingDocx] = useState(false);
 
-                const { svg: rendered } = await mermaid.render(id, code);
-                if (!cancelled && containerRef.current) {
-                    containerRef.current.innerHTML = rendered;
-                    setStatus("success");
-                }
-            } catch {
-                if (!cancelled) setStatus("error");
-            } finally {
-                // Clean up any orphaned Mermaid error elements injected into document.body
-                const orphan = document.getElementById(id);
-                if (orphan && !containerRef.current?.contains(orphan)) {
-                    orphan.remove();
-                }
-                // Also remove the detached d3 container Mermaid v11 creates
-                const detached = document.querySelector(`#d${id}`);
-                detached?.remove();
-            }
-        }
+  const abortRef = useRef<AbortController | null>(null);
+  const startTimeRef = useRef<number>(0);
 
-        setStatus("loading");
-        if (containerRef.current) containerRef.current.innerHTML = "";
-        render();
+  // -------------------- Effects ------------------------------------------
+  useEffect(() => {
+    void loadIflows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
 
-        return () => {
-            cancelled = true;
-            // Clean up DOM on unmount
-            const orphan = document.getElementById(id);
-            orphan?.remove();
-            const detached = document.querySelector(`#d${id}`);
-            detached?.remove();
-        };
-    }, [code]);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => {
+      setElapsedMs(Date.now() - startTimeRef.current);
+    }, 200);
+    return () => clearInterval(t);
+  }, [running]);
 
-    if (status === "error") {
-        return (
-            <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-80">
-                <code>{code}</code>
-            </pre>
-        );
+  // -------------------- Helpers ------------------------------------------
+  const loadIflows = async () => {
+    setIflowsLoading(true);
+    try {
+      const result = await getIFlowsForDocGenerator({ tenantId });
+      if (result.success && result.data) {
+        setIflows(result.data);
+      } else {
+        toast.error(result.error || "Failed to load iFlows");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to load iFlows");
+    } finally {
+      setIflowsLoading(false);
     }
+  };
 
-    return (
-        <div
-            ref={containerRef}
-            className={cn(
-                "bg-white dark:bg-muted rounded-lg p-4 overflow-auto border",
-                status === "loading" && "min-h-[120px] flex items-center justify-center"
-            )}
-        >
-            {status === "loading" && (
-                <p className="text-muted-foreground text-sm">Rendering diagram…</p>
-            )}
-        </div>
+  const filteredIflows = useMemo(
+    () =>
+      iflows
+        .filter((i) =>
+          i.name.toLowerCase().includes(search.toLowerCase()),
+        )
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [iflows, search],
+  );
+
+  const selectedIflow = useMemo(
+    () => iflows.find((i) => i.id === selectedIflowId),
+    [iflows, selectedIflowId],
+  );
+
+  const toggleSection = (id: string) =>
+    setSelectedSections((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
     );
+
+  // -------------------- SSE parsing & streaming --------------------------
+  const handleEvent = useCallback((evt: SSEEvent) => {
+    switch (evt.phase) {
+      case "metadata": {
+        setStreamMetadata(evt.payload.metadata);
+        setPhases((p) =>
+          completeAndAdd(p, "metadata", "Inspect iFlow", "metadata", "done"),
+        );
+        break;
+      }
+      case "outline": {
+        const next: SectionState[] = evt.payload.sections.map((s) => ({
+          id: s.id,
+          title: s.title,
+          status: "queued",
+          content: "",
+        }));
+        setSectionsState(next);
+        setPhases((p) =>
+          completeAndAdd(
+            p,
+            "outline",
+            "Plan sections",
+            "outline",
+            "done",
+            `${evt.payload.sections.length} section${evt.payload.sections.length === 1 ? "" : "s"}`,
+          ),
+        );
+        break;
+      }
+      case "section.start": {
+        const { sectionId, title } = evt.payload;
+        setSectionsState((prev) =>
+          prev.map((s) =>
+            s.id === sectionId
+              ? { ...s, status: "running", startedAt: Date.now() }
+              : s,
+          ),
+        );
+        setPhases((p) =>
+          completeAndAdd(
+            p,
+            `section:${sectionId}`,
+            title,
+            "section",
+            "running",
+          ),
+        );
+        break;
+      }
+      case "section.delta": {
+        const { sectionId, delta } = evt.payload;
+        setSectionsState((prev) =>
+          prev.map((s) =>
+            s.id === sectionId ? { ...s, content: s.content + delta } : s,
+          ),
+        );
+        break;
+      }
+      case "section.end": {
+        const { sectionId, content } = evt.payload;
+        setSectionsState((prev) =>
+          prev.map((s) =>
+            s.id === sectionId
+              ? {
+                  ...s,
+                  status: "done",
+                  content,
+                  durationMs: s.startedAt
+                    ? Date.now() - s.startedAt
+                    : undefined,
+                }
+              : s,
+          ),
+        );
+        setPhases((p) =>
+          markDone(p, `section:${sectionId}`, p.find((x) => x.id === `section:${sectionId}`)?.label),
+        );
+        break;
+      }
+      case "diagrams.start": {
+        setPhases((p) =>
+          completeAndAdd(
+            p,
+            "diagrams",
+            "Generate diagrams",
+            "diagrams",
+            "running",
+          ),
+        );
+        break;
+      }
+      case "diagrams": {
+        setDiagrams(evt.payload.diagrams ?? []);
+        setPhases((p) =>
+          markDone(
+            p,
+            "diagrams",
+            `Generate diagrams · ${evt.payload.diagrams?.length ?? 0}`,
+          ),
+        );
+        break;
+      }
+      case "persisted": {
+        // no-op visually for now
+        break;
+      }
+      case "done": {
+        setPhases((p) =>
+          completeAndAdd(p, "done", "Document ready", "done", "done", undefined),
+        );
+        break;
+      }
+      case "error": {
+        setErrorMessage(evt.payload.message);
+        setPhases((p) =>
+          p.length > 0
+            ? p.map((x, i) =>
+                i === p.length - 1 ? { ...x, status: "failed" } : x,
+              )
+            : [
+                {
+                  id: "error",
+                  label: "Generation failed",
+                  status: "failed",
+                  detail: evt.payload.message,
+                },
+              ],
+        );
+        break;
+      }
+    }
+  }, []);
+
+  const startGeneration = async () => {
+    if (!selectedIflowId) {
+      toast.error("Please select an iFlow");
+      return;
+    }
+    if (selectedSections.length === 0) {
+      toast.error("Please select at least one section");
+      return;
+    }
+    // Reset state
+    setRunning(true);
+    setErrorMessage(null);
+    setStreamMetadata(null);
+    setSectionsState([]);
+    setDiagrams([]);
+    setGeneratedDoc(null);
+    setPhases([
+      {
+        id: "metadata",
+        label: "Inspect iFlow",
+        status: "running",
+        icon: "metadata",
+      },
+    ]);
+    startTimeRef.current = Date.now();
+    setElapsedMs(0);
+    setTab("generate");
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    try {
+      const res = await fetch("/api/ai/doc-generator/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          iflowId: selectedIflowId,
+          documentationType: docType,
+          sections: selectedSections,
+        }),
+        signal: ctrl.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const txt = await res.text().catch(() => "Unknown error");
+        throw new Error(txt || `Request failed: ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // SSE messages separated by blank line
+        let sepIdx;
+        while ((sepIdx = buf.indexOf("\n\n")) !== -1) {
+          const raw = buf.slice(0, sepIdx);
+          buf = buf.slice(sepIdx + 2);
+          for (const line of raw.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trimStart();
+            if (!data) continue;
+            try {
+              const parsed = JSON.parse(data) as SSEEvent;
+              handleEvent(parsed);
+            } catch (err) {
+              console.warn("Bad SSE chunk", err, data);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") {
+        toast.info("Generation cancelled");
+      } else {
+        const msg = err instanceof Error ? err.message : "Generation failed";
+        setErrorMessage(msg);
+        toast.error(msg);
+      }
+    } finally {
+      setRunning(false);
+      abortRef.current = null;
+    }
+  };
+
+  const cancelGeneration = () => {
+    abortRef.current?.abort();
+  };
+
+  // -------------------- Build final GeneratedDocument --------------------
+  useEffect(() => {
+    if (running) return;
+    if (sectionsState.length === 0) return;
+    if (!sectionsState.every((s) => s.status === "done" || s.status === "failed"))
+      return;
+
+    const sections: DocumentSectionContent[] = sectionsState.map((s) => ({
+      id: s.id,
+      title: s.title,
+      content: s.content,
+    }));
+    const doc: GeneratedDocument = {
+      title: streamMetadata
+        ? `${streamMetadata.name} - ${getDocumentTypeTitle(docType)}`
+        : `${selectedIflow?.name ?? "iFlow"} - ${getDocumentTypeTitle(docType)}`,
+      type: docType,
+      iflowName: streamMetadata?.name ?? selectedIflow?.name ?? "",
+      version: streamMetadata?.version ?? "1.0.0",
+      sections,
+      diagrams,
+      generatedAt: new Date().toISOString(),
+      tokensUsed: 0,
+    };
+    setGeneratedDoc(doc);
+  }, [running, sectionsState, diagrams, streamMetadata, docType, selectedIflow]);
+
+  // -------------------- Export handlers ----------------------------------
+  const handleCopyMarkdown = async () => {
+    if (!generatedDoc) return;
+    await navigator.clipboard.writeText(generateMarkdownExportSync(generatedDoc));
+    toast.success("Markdown copied");
+  };
+
+  const handleDownloadMarkdown = () => {
+    if (!generatedDoc) return;
+    const md = generateMarkdownExportSync(generatedDoc);
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = window.document.createElement("a");
+    a.href = url;
+    a.download = `${generatedDoc.iflowName}-${generatedDoc.type}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Markdown downloaded");
+  };
+
+  const handleDownloadDocx = async () => {
+    if (!generatedDoc) return;
+    setExportingDocx(true);
+    try {
+      // 1. Collect every mermaid source we need to rasterize:
+      //    - the standalone diagrams array
+      //    - any ```mermaid code blocks embedded in section markdown
+      const mermaidSources = new Set<string>();
+      for (const d of generatedDoc.diagrams) {
+        if (d.mermaidCode?.trim()) {
+          mermaidSources.add(normalizeMermaid(d.mermaidCode));
+        }
+      }
+      for (const s of generatedDoc.sections) {
+        for (const code of extractMermaidBlocks(s.content)) {
+          mermaidSources.add(normalizeMermaid(code));
+        }
+      }
+
+      // 2. Rasterize each unique source once.
+      const diagramImages = new Map<
+        string,
+        { data: Uint8Array; widthPx: number; heightPx: number }
+      >();
+      for (const src of mermaidSources) {
+        const png = await renderMermaidToPng(src);
+        if (png) {
+          diagramImages.set(src, {
+            data: png.data,
+            widthPx: png.widthPx,
+            heightPx: png.heightPx,
+          });
+        }
+      }
+
+      // 3. Pick a cover diagram (prefer flowchart / architecture).
+      const cover =
+        generatedDoc.diagrams.find(
+          (d) => d.type === "flowchart" || d.id.includes("architecture"),
+        ) ?? generatedDoc.diagrams[0];
+      const coverPng = cover
+        ? diagramImages.get(normalizeMermaid(cover.mermaidCode))
+        : null;
+
+      const blob = await generateDocx(generatedDoc, {
+        coverDiagram: coverPng ?? undefined,
+        diagramImages,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = window.document.createElement("a");
+      a.href = url;
+      a.download = `${generatedDoc.iflowName} - ${getDocumentTypeTitle(generatedDoc.type)}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("DOCX exported");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export DOCX");
+    } finally {
+      setExportingDocx(false);
+    }
+  };
+
+  // -------------------- Computed UI --------------------------------------
+  const isReady = generatedDoc != null && !running;
+
+  // -------------------- Render -------------------------------------------
+  return (
+    <div className="container mx-auto p-4 sm:p-6 space-y-5 pb-24">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="mt-0.5 size-9"
+            aria-label="Back"
+          >
+            <Link href="/dashboard/ai-agents">
+              <ArrowLeft className="size-4" />
+            </Link>
+          </Button>
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+              <span className="inline-flex size-9 items-center justify-center rounded-xl bg-linear-to-br from-violet-500 to-blue-500 text-white shadow-sm">
+                <Sparkles className="size-4" />
+              </span>
+              Documentation Generator
+            </h1>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              Stream a complete technical specification with live progress and export to Markdown or .docx.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <Tabs value={tab} onValueChange={setTab} className="space-y-5">
+        <TabsList>
+          <TabsTrigger value="configure">
+            <Workflow className="mr-1.5 size-3.5" />
+            Configure
+          </TabsTrigger>
+          <TabsTrigger value="generate" disabled={!running && phases.length === 0}>
+            <Sparkles className="mr-1.5 size-3.5" />
+            Generate
+            {running && (
+              <span className="ml-1.5 size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="export" disabled={!isReady}>
+            <FileOutput className="mr-1.5 size-3.5" />
+            Export
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ============ Configure ============ */}
+        <TabsContent value="configure" className="space-y-5">
+          {/* iFlow selector */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Select iFlow</CardTitle>
+              <CardDescription>
+                Choose the integration flow to document.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    className="w-full justify-between"
+                    disabled={iflowsLoading}
+                  >
+                    <span className="truncate">
+                      {iflowsLoading
+                        ? "Loading iFlows…"
+                        : selectedIflow
+                          ? selectedIflow.name
+                          : "Select an iFlow…"}
+                    </span>
+                    <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-(--radix-popover-trigger-width) p-0"
+                  align="start"
+                >
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      placeholder="Search iFlows…"
+                      value={search}
+                      onValueChange={setSearch}
+                    />
+                    <CommandList>
+                      <CommandEmpty>No iFlows found.</CommandEmpty>
+                      <CommandGroup>
+                        {filteredIflows.map((i) => (
+                          <CommandItem
+                            key={i.id}
+                            value={i.id}
+                            onSelect={() => {
+                              setSelectedIflowId(i.id);
+                              setPickerOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 size-4",
+                                selectedIflowId === i.id
+                                  ? "opacity-100"
+                                  : "opacity-0",
+                              )}
+                            />
+                            <span className="truncate">{i.name}</span>
+                            <Badge
+                              variant="outline"
+                              className="ml-auto text-[10px]"
+                            >
+                              {i.status}
+                            </Badge>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </CardContent>
+          </Card>
+
+          {/* Document type */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Document Type</CardTitle>
+              <CardDescription>
+                Pick the documentation flavour.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {DOC_TYPES.map((dt) => {
+                  const active = docType === dt.type;
+                  const Icon = dt.icon;
+                  return (
+                    <button
+                      type="button"
+                      key={dt.type}
+                      onClick={() => setDocType(dt.type)}
+                      className={cn(
+                        "group relative flex items-start gap-3 rounded-xl border p-3 text-left transition-all",
+                        "hover:shadow-md hover:-translate-y-0.5",
+                        active
+                          ? `bg-linear-to-br ${dt.accent} ring-1 border-transparent shadow-sm`
+                          : "border-border bg-card",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                          active
+                            ? "bg-background/80 text-foreground"
+                            : "bg-muted text-muted-foreground",
+                        )}
+                      >
+                        <Icon className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-sm">
+                            {dt.name}
+                          </span>
+                          {active && (
+                            <Check className="size-3.5 text-emerald-600" />
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          {dt.description}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Sections */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <div>
+                <CardTitle className="text-base">Sections</CardTitle>
+                <CardDescription>
+                  Choose which sections to generate. Each is streamed separately.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setSelectedSections(AVAILABLE_SECTIONS.map((s) => s.id))
+                  }
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedSections([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {AVAILABLE_SECTIONS.map((s) => {
+                  const checked = selectedSections.includes(s.id);
+                  return (
+                    <label
+                      key={s.id}
+                      className={cn(
+                        "flex cursor-pointer items-start gap-3 rounded-lg border p-2.5 transition-colors",
+                        checked
+                          ? "border-blue-500/40 bg-blue-500/5"
+                          : "border-border hover:bg-muted/50",
+                      )}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleSection(s.id)}
+                        className="mt-0.5"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">{s.name}</div>
+                        <p className="text-xs text-muted-foreground line-clamp-2">
+                          {s.description}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ============ Generate ============ */}
+        <TabsContent value="generate" className="space-y-5">
+          {errorMessage && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/5 p-3 text-sm">
+              <AlertCircle className="size-4 mt-0.5 shrink-0 text-red-600" />
+              <div className="min-w-0">
+                <div className="font-medium text-red-700 dark:text-red-300">
+                  Generation failed
+                </div>
+                <div className="text-red-700/80 dark:text-red-300/80 wrap-anywhere">
+                  {errorMessage}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="grid gap-5 lg:grid-cols-[280px_1fr]">
+            {/* Timeline rail */}
+            <Card className="lg:sticky lg:top-20 h-fit">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Pipeline</CardTitle>
+                <CardDescription className="text-xs tabular-nums">
+                  {running
+                    ? `Running · ${(elapsedMs / 1000).toFixed(1)}s`
+                    : phases.length > 0
+                      ? `Completed · ${(elapsedMs / 1000).toFixed(1)}s`
+                      : "Idle"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="max-h-[60vh] pr-2">
+                  {phases.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Press Generate to start.
+                    </p>
+                  ) : (
+                    <DocGeneratorTimeline
+                      phases={phases}
+                      onPhaseClick={(id) => {
+                        const sectionId = id.startsWith("section:")
+                          ? id.slice("section:".length)
+                          : null;
+                        if (!sectionId) return;
+                        const el = window.document.getElementById(
+                          `section-${sectionId}`,
+                        );
+                        el?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                      }}
+                    />
+                  )}
+                </ScrollArea>
+              </CardContent>
+            </Card>
+
+            {/* Sections stream */}
+            <div className="space-y-3 min-w-0">
+              {streamMetadata && (
+                <Card>
+                  <CardContent className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4">
+                    <Stat label="Steps" value={streamMetadata.totalSteps} />
+                    <Stat
+                      label="Adapters"
+                      value={streamMetadata.adapters.length}
+                    />
+                    <Stat
+                      label="Scripts"
+                      value={streamMetadata.scripts.length}
+                    />
+                    <Stat
+                      label="Mappings"
+                      value={streamMetadata.mappings.length}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+
+              {sectionsState.length === 0 && !running && (
+                <Card>
+                  <CardContent className="p-6 text-center text-sm text-muted-foreground">
+                    No sections yet. Configure and press{" "}
+                    <span className="font-medium">Generate</span>.
+                  </CardContent>
+                </Card>
+              )}
+
+              {sectionsState.map((s) => (
+                <DocGeneratorSectionCard
+                  key={s.id}
+                  sectionId={s.id}
+                  title={s.title}
+                  status={s.status}
+                  content={s.content}
+                  durationMs={s.durationMs}
+                />
+              ))}
+
+              {diagrams.length > 0 && !running && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Layers className="size-4 text-violet-500" />
+                      Diagrams ({diagrams.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {diagrams.map((d) => (
+                      <details
+                        key={d.id}
+                        className="group rounded-md border p-2"
+                      >
+                        <summary className="cursor-pointer text-sm font-medium">
+                          {d.title}{" "}
+                          <span className="text-xs text-muted-foreground font-normal">
+                            ({d.type})
+                          </span>
+                        </summary>
+                        <pre className="mt-2 overflow-x-auto rounded bg-muted/50 p-2 text-xs">
+                          <code>{d.mermaidCode}</code>
+                        </pre>
+                      </details>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* ============ Export ============ */}
+        <TabsContent value="export" className="space-y-5">
+          {generatedDoc ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">{generatedDoc.title}</CardTitle>
+                  <CardDescription>
+                    {generatedDoc.sections.length} sections ·{" "}
+                    {generatedDoc.diagrams.length} diagrams · generated{" "}
+                    {new Date(generatedDoc.generatedAt).toLocaleString()}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={handleDownloadDocx}
+                    disabled={exportingDocx}
+                  >
+                    {exportingDocx ? (
+                      <Loader2 className="mr-1.5 size-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-1.5 size-4" />
+                    )}
+                    Download .docx
+                  </Button>
+                  <Button variant="outline" onClick={handleDownloadMarkdown}>
+                    <FileText className="mr-1.5 size-4" />
+                    Download .md
+                  </Button>
+                  <Button variant="ghost" onClick={handleCopyMarkdown}>
+                    <Copy className="mr-1.5 size-4" />
+                    Copy markdown
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setTab("configure");
+                    }}
+                  >
+                    <RefreshCw className="mr-1.5 size-4" />
+                    New document
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Preview</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <article className="prose prose-sm dark:prose-invert max-w-none min-w-0 wrap-anywhere prose-pre:my-2 prose-pre:overflow-x-auto prose-table:my-2 prose-table:text-xs">
+                    {generatedDoc.sections.map((s) => (
+                      <section key={s.id} className="mb-6">
+                        <h2 className="mt-0!">{s.title}</h2>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {s.content}
+                        </ReactMarkdown>
+                      </section>
+                    ))}
+                  </article>
+                </CardContent>
+              </Card>
+            </>
+          ) : (
+            <Card>
+              <CardContent className="p-6 text-sm text-muted-foreground">
+                Generate a document first.
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {/* Sticky action bar */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/85 backdrop-blur-md">
+        <div className="container mx-auto flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-3 text-sm min-w-0">
+            {running ? (
+              <>
+                <Loader2 className="size-4 animate-spin text-emerald-500" />
+                <span className="font-medium">
+                  {phases[phases.length - 1]?.label ?? "Working"}
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {(elapsedMs / 1000).toFixed(1)}s
+                </span>
+              </>
+            ) : isReady ? (
+              <>
+                <Check className="size-4 text-emerald-600" />
+                <span className="font-medium">Ready</span>
+                <span className="text-muted-foreground">
+                  {generatedDoc?.sections.length} sections ·{" "}
+                  {generatedDoc?.diagrams.length} diagrams
+                </span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">
+                {selectedIflow
+                  ? `${selectedIflow.name} · ${selectedSections.length} section${selectedSections.length === 1 ? "" : "s"}`
+                  : "Select an iFlow to begin"}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {running ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={cancelGeneration}
+              >
+                <StopCircle className="mr-1.5 size-4" />
+                Cancel
+              </Button>
+            ) : (
+              <>
+                {isReady && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleDownloadDocx}
+                    disabled={exportingDocx}
+                  >
+                    {exportingDocx ? (
+                      <Loader2 className="mr-1.5 size-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-1.5 size-4" />
+                    )}
+                    .docx
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  onClick={startGeneration}
+                  disabled={
+                    !selectedIflowId || selectedSections.length === 0 || running
+                  }
+                  className="bg-linear-to-br from-violet-500 to-blue-500 hover:opacity-95"
+                >
+                  <Sparkles className="mr-1.5 size-4" />
+                  {isReady ? "Regenerate" : "Generate"}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function Stat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xl font-bold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function normalizeMermaid(code: string): string {
+  return code.trim().replace(/\r\n/g, "\n");
+}
+
+/** Extract every ```mermaid ... ``` block from a markdown string. */
+function extractMermaidBlocks(markdown: string): string[] {
+  const out: string[] = [];
+  const re = /```mermaid\s*\n([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(markdown)) !== null) {
+    if (m[1]?.trim()) out.push(m[1]);
+  }
+  return out;
+}
+
+function completeAndAdd(
+  existing: TimelinePhase[],
+  id: string,
+  label: string,
+  icon: TimelinePhase["icon"],
+  status: TimelinePhase["status"],
+  detail?: string,
+): TimelinePhase[] {
+  // If the id already exists, update in place; otherwise append.
+  // Mark the previously-running phase as done.
+  const startedAt = Date.now();
+  const updated = existing.map((p) =>
+    p.status === "running" && p.id !== id
+      ? {
+          ...p,
+          status: "done" as const,
+          durationMs: p.durationMs ?? undefined,
+        }
+      : p,
+  );
+  const idx = updated.findIndex((p) => p.id === id);
+  if (idx >= 0) {
+    updated[idx] = { ...updated[idx], label, status, detail, icon };
+    return updated;
+  }
+  return [
+    ...updated,
+    {
+      id,
+      label,
+      status,
+      icon,
+      detail,
+      durationMs: undefined,
+      // store start in detail when needed via a local map; UI computes elapsed at top
+      // For per-phase duration tracking we record via markDone below.
+      ...({ _startedAt: startedAt } as object),
+    } as TimelinePhase,
+  ];
+}
+
+function markDone(
+  existing: TimelinePhase[],
+  id: string,
+  label?: string,
+): TimelinePhase[] {
+  return existing.map((p) =>
+    p.id === id
+      ? {
+          ...p,
+          status: "done" as const,
+          label: label ?? p.label,
+          durationMs:
+            (p as TimelinePhase & { _startedAt?: number })._startedAt
+              ? Date.now() -
+                ((p as TimelinePhase & { _startedAt?: number })._startedAt ?? Date.now())
+              : p.durationMs,
+        }
+      : p,
+  );
 }

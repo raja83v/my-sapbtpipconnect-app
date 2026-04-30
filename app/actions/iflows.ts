@@ -18,6 +18,7 @@ import {
   type MappingConfig,
   type ScriptConfig,
 } from "@/lib/sap-cpi/client";
+import { parseSAPDate } from "@/lib/sap-date";
 
 // ============================================================================
 // Helper Functions
@@ -473,7 +474,17 @@ export async function getIFlowFullDetails(iflowId: string): Promise<ActionResult
         try {
           designTimeData = await client.getIntegrationDesigntimeArtifact(iflow.iFlowId);
         } catch (err) {
-          console.warn("Failed to fetch design-time artifact:", err);
+          // Log message only (avoid passing raw Error so Turbopack does not
+          // attempt to symbolicate stack frames from dependencies that ship
+          // malformed sourcemaps, which produces a misleading
+          // "Invalid source map" console error in dev).
+          const message = err instanceof Error ? err.message : String(err);
+          // 404 = artifact deleted or never deployed to this tenant; expected.
+          if (message.includes("(404)") || /not\s+found/i.test(message)) {
+            // Quiet — page will render DB-only data.
+          } else {
+            console.warn(`Failed to fetch design-time artifact: ${message}`);
+          }
         }
 
         // Fetch runtime artifact
@@ -816,25 +827,28 @@ export async function getMessageLogs(
       return { success: false, error: "You don't have access to this iFlow" };
     }
 
-    // Get OAuth token (with caching)
-    if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-      return { success: false, error: "OAuth credentials not configured" };
-    }
-
-    // Try to get cached token first
-    let accessToken = getCachedToken(tenant.id);
-
-    if (!accessToken) {
-      // Token not cached or expired, fetch new one
-      const decryptedClientSecret = await decrypt(tenant.clientSecret);
-      accessToken = await getSAPToken(
-        tenant.authenticationUrl,
-        tenant.clientId,
-        decryptedClientSecret
-      );
-
-      // Cache the token for future requests
-      cacheToken(tenant.id, accessToken);
+    // Build auth header
+    let authHeader: string;
+    if (tenant.authType === "OAUTH") {
+      if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+        return { success: false, error: "OAuth credentials not configured" };
+      }
+      let accessToken = getCachedToken(tenant.id);
+      if (!accessToken) {
+        const decryptedClientSecret = await decrypt(tenant.clientSecret);
+        accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+        cacheToken(tenant.id, accessToken);
+      }
+      authHeader = `Bearer ${accessToken}`;
+    } else if (tenant.authType === "BASIC_AUTH") {
+      if (!tenant.username || !tenant.password) {
+        return { success: false, error: "Basic Auth credentials not configured" };
+      }
+      let password: string;
+      try { password = await decrypt(tenant.password); } catch { password = tenant.password; }
+      authHeader = `Basic ${Buffer.from(`${tenant.username}:${password}`).toString("base64")}`;
+    } else {
+      return { success: false, error: "Unsupported authentication type" };
     }
 
     // Build filter query
@@ -852,7 +866,7 @@ export async function getMessageLogs(
     const logsResponse = await fetch(logsUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": authHeader,
         "Accept": "application/json",
       },
     });
@@ -878,8 +892,8 @@ export async function getMessageLogs(
       messageId: log.MessageGuid || log.MessageId,
       correlationId: log.CorrelationId || null,
       status: log.Status,
-      logStart: new Date(log.LogStart),
-      logEnd: log.LogEnd ? new Date(log.LogEnd) : null,
+      logStart: parseSAPDate(log.LogStart) ?? new Date(0),
+      logEnd: parseSAPDate(log.LogEnd),
       sender: log.Sender || null,
       receiver: log.Receiver || null,
       integrationFlowName: log.IntegrationFlowName || iflow.name,
@@ -955,24 +969,32 @@ export async function toggleIFlowDeployment(
       return { success: false, error: "You don't have permission to deploy/undeploy iFlows" };
     }
 
-    // Get OAuth token
-    if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-      return { success: false, error: "OAuth credentials not configured" };
+    // Get auth token
+    let deployAuthHeader: string;
+    if (tenant.authType === "OAUTH") {
+      if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+        return { success: false, error: "OAuth credentials not configured" };
+      }
+      const decryptedClientSecret = await decrypt(tenant.clientSecret);
+      const accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+      deployAuthHeader = `Bearer ${accessToken}`;
+    } else if (tenant.authType === "BASIC_AUTH") {
+      if (!tenant.username || !tenant.password) {
+        return { success: false, error: "Basic Auth credentials not configured" };
+      }
+      let password: string;
+      try { password = await decrypt(tenant.password); } catch { password = tenant.password; }
+      deployAuthHeader = `Basic ${Buffer.from(`${tenant.username}:${password}`).toString("base64")}`;
+    } else {
+      return { success: false, error: "Unsupported authentication type" };
     }
-
-    const decryptedClientSecret = await decrypt(tenant.clientSecret);
-    const accessToken = await getSAPToken(
-      tenant.authenticationUrl,
-      tenant.clientId,
-      decryptedClientSecret
-    );
 
     // Deploy or undeploy via SAP CPI API
     const deployUrl = `${tenant.tenantUrl}/api/v1/IntegrationRuntimeArtifacts('${iflow.iFlowId}')`;
     const deployResponse = await fetch(deployUrl, {
       method: action === "deploy" ? "POST" : "DELETE",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": deployAuthHeader,
         "Accept": "application/json",
       },
     });
@@ -1074,23 +1096,31 @@ export async function diagnoseExecutionError(
     } else {
       // Fetch message details from SAP CPI API
       try {
-        if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-          return { success: false, error: "OAuth credentials not configured" };
+        let authHeaderForDetail: string;
+        if (tenant.authType === "OAUTH") {
+          if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+            return { success: false, error: "OAuth credentials not configured" };
+          }
+          const decryptedClientSecret = await decrypt(tenant.clientSecret);
+          const accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+          authHeaderForDetail = `Bearer ${accessToken}`;
+        } else if (tenant.authType === "BASIC_AUTH") {
+          if (!tenant.username || !tenant.password) {
+            return { success: false, error: "Basic Auth credentials not configured" };
+          }
+          let password: string;
+          try { password = await decrypt(tenant.password); } catch { password = tenant.password; }
+          authHeaderForDetail = `Basic ${Buffer.from(`${tenant.username}:${password}`).toString("base64")}`;
+        } else {
+          return { success: false, error: "Unsupported authentication type" };
         }
-
-        const decryptedClientSecret = await decrypt(tenant.clientSecret);
-        const accessToken = await getSAPToken(
-          tenant.authenticationUrl,
-          tenant.clientId,
-          decryptedClientSecret
-        );
 
         // Fetch message log details
         const messageUrl = `${tenant.tenantUrl}/api/v1/MessageProcessingLogs('${messageId}')?$format=json`;
         const messageResponse = await fetch(messageUrl, {
           method: "GET",
           headers: {
-            "Authorization": `Bearer ${accessToken}`,
+            "Authorization": authHeaderForDetail,
             "Accept": "application/json",
           },
         });
@@ -1102,18 +1132,8 @@ export async function diagnoseExecutionError(
         const messageData = await messageResponse.json();
         const log = messageData.d || messageData;
 
-        const parseDate = (dateStr: any): Date | null => {
-          if (!dateStr) return null;
-          try {
-            const date = new Date(dateStr);
-            return isNaN(date.getTime()) ? null : date;
-          } catch {
-            return null;
-          }
-        };
-
-        const logStart = parseDate(log.LogStart);
-        const logEnd = parseDate(log.LogEnd);
+        const logStart = parseSAPDate(log.LogStart);
+        const logEnd = parseSAPDate(log.LogEnd);
 
         // Fetch actual error message if status is FAILED
         let actualErrorMessage = null;
@@ -1123,7 +1143,7 @@ export async function diagnoseExecutionError(
             const errorResponse = await fetch(errorUrl, {
               method: "GET",
               headers: {
-                "Authorization": `Bearer ${accessToken}`,
+                "Authorization": authHeaderForDetail,
                 "Accept": "text/plain",
               },
             });

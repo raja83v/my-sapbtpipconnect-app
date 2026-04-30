@@ -10,6 +10,12 @@ export type ActionResult<T = void> = {
   success: boolean;
   data?: T;
   error?: string;
+  /**
+   * Optional machine-readable code that classifies the failure so UI can
+   * branch (e.g. show an inline empty state vs. a generic toast). Free-form
+   * to keep the type backwards compatible. Examples: "APIM_NOT_CONFIGURED".
+   */
+  code?: string;
 };
 
 /**

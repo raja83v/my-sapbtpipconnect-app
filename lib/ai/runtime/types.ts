@@ -24,6 +24,8 @@ export interface AITextRequest {
   maxTokens?: number;
   modelKind?: AIModelKind;
   providerOverride?: AIProvider;
+  /** When true, force the provider to return a single JSON object (OpenAI json_object mode). */
+  jsonMode?: boolean;
 }
 
 export interface AITextResponse {

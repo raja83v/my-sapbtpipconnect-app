@@ -6,7 +6,6 @@ import { cpiTenants, tenantMembers } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import type { ActionResult } from "@/types/actions";
 import { SAPCPIClient } from "@/lib/sap-cpi/client";
-import { decrypt } from "@/lib/encryption";
 import { runText } from "@/lib/ai/runtime/text";
 import { IFlowDescription, IFlowDesign } from "@/components/ai/v2/specialized/iflow-creator/types";
 import { createIFlowDesignPrompt, IFLOW_CREATOR_SYSTEM_PROMPT } from "@/lib/ai/prompts-iflow-creator";
@@ -52,30 +51,37 @@ export async function getIntegrationPackages(tenantId: string): Promise<ActionRe
             return { success: false, error: "You don't have access to this tenant" };
         }
 
-        // Validate tenant configuration
+        // Get authentication and create SAP CPI client
         if (!tenant.tenantUrl) {
             return { success: false, error: "Tenant URL is not configured" };
         }
 
-        // Get authentication token
-        if (tenant.authType !== "OAUTH") {
-            return { success: false, error: "Only OAuth authentication is currently supported" };
+        let sapCpiClient: SAPCPIClient;
+
+        if (tenant.authType === "OAUTH") {
+            if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+                return { success: false, error: "OAuth credentials not configured" };
+            }
+            sapCpiClient = new SAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "OAUTH",
+                clientId: tenant.clientId,
+                clientSecret: tenant.clientSecret,
+                tokenUrl: tenant.authenticationUrl,
+            });
+        } else if (tenant.authType === "BASIC_AUTH") {
+            if (!tenant.username || !tenant.password) {
+                return { success: false, error: "Basic Auth credentials not configured" };
+            }
+            sapCpiClient = new SAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "BASIC_AUTH",
+                username: tenant.username,
+                password: tenant.password,
+            });
+        } else {
+            return { success: false, error: "Unsupported authentication type" };
         }
-
-        if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-            return { success: false, error: "OAuth credentials not configured" };
-        }
-
-        const decryptedClientSecret = await decrypt(tenant.clientSecret);
-
-        // Create SAP CPI client
-        const sapCpiClient = new SAPCPIClient({
-            tenantUrl: tenant.tenantUrl,
-            authType: "OAUTH",
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret, // Pass encrypted, client will decrypt
-            tokenUrl: tenant.authenticationUrl,
-        });
 
         // Fetch integration packages
         const endpoint = `/api/v1/IntegrationPackages?$format=json`;

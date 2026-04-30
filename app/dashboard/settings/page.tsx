@@ -15,11 +15,12 @@ export default async function DashboardSettingsPage() {
     return null;
   }
 
-  const tenants = tenantsResult.success && tenantsResult.data ? tenantsResult.data : [];
+  const tenants =
+    tenantsResult.success && tenantsResult.data ? tenantsResult.data : [];
 
   // Check if user is admin (OWNER or ADMIN of any tenant) OR platform admin
   const isTenantAdmin = tenants.some(
-    (tenant) => tenant.memberRole === "OWNER" || tenant.memberRole === "ADMIN"
+    (tenant) => tenant.memberRole === "OWNER" || tenant.memberRole === "ADMIN",
   );
   const isPlatformAdmin = user.role === "admin";
   const isAdmin = isTenantAdmin || isPlatformAdmin;
@@ -44,10 +45,10 @@ export default async function DashboardSettingsPage() {
           <SettingsContent
             user={{
               id: user.id,
-              name: user.name,
+              name: user.name ?? null,
               email: user.email,
-              phone: user.phone,
-              image: user.image,
+              phone: (user as any).phone ?? null,
+              image: user.image ?? null,
             }}
             tenants={tenants}
             isAdmin={isAdmin}

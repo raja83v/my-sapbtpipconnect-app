@@ -133,7 +133,10 @@ export function MembersDataTable({
         <TableBody>
           {members.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={4} className="text-center text-muted-foreground">
+              <TableCell
+                colSpan={4}
+                className="text-center text-muted-foreground"
+              >
                 No members found
               </TableCell>
             </TableRow>
@@ -218,6 +221,7 @@ export function MembersDataTable({
                             variant="ghost"
                             size="icon-sm"
                             disabled={isUpdating || isRemoving}
+                            aria-label={`Remove ${member.user.name || member.user.email} from workspace`}
                           >
                             {isRemoving ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
@@ -234,8 +238,8 @@ export function MembersDataTable({
                               <span className="font-semibold">
                                 {member.user.name || member.user.email}
                               </span>{" "}
-                              from this workspace? They will lose access to all workspace
-                              resources.
+                              from this workspace? They will lose access to all
+                              workspace resources.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
                           <AlertDialogFooter>
@@ -244,7 +248,7 @@ export function MembersDataTable({
                               onClick={() =>
                                 handleRemoveMember(
                                   member.id,
-                                  member.user.name || member.user.email
+                                  member.user.name || member.user.email,
                                 )
                               }
                               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

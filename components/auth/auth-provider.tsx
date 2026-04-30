@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth/client";
 
 interface AuthUser {
   id: string;
@@ -36,7 +36,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
-  const supabase = createClient();
 
   const fetchUser = useCallback(async () => {
     try {
@@ -58,35 +57,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchUser();
   }, [fetchUser]);
 
-  // Listen for Supabase auth state changes
-  useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (
-        event === "SIGNED_IN" ||
-        event === "TOKEN_REFRESHED"
-      ) {
-        fetchUser();
-      } else if (event === "SIGNED_OUT") {
-        setUser(null);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [supabase, fetchUser]);
-
   const signOut = useCallback(async () => {
     try {
-      await supabase.auth.signOut();
-      await fetch("/api/auth/sign-out", { method: "POST" });
+      await authClient.signOut();
     } finally {
       setUser(null);
       router.push("/sign-in");
     }
-  }, [router, supabase]);
+  }, [router]);
 
   const refreshUser = useCallback(async () => {
     await fetchUser();

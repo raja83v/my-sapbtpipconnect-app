@@ -13,6 +13,9 @@ import {
   IconPlayerStop,
   IconArrowLeft,
   IconFolder,
+  IconPlugConnected,
+  IconFlask,
+  IconBug,
 } from "@tabler/icons-react";
 import { IFlowDetailData, getIFlowFullDetails } from "@/app/actions/iflows";
 import { IFlowOverviewTab } from "./iflow-overview-tab";
@@ -20,6 +23,10 @@ import { IFlowConfigurationTab } from "./iflow-configuration-tab";
 import { IFlowAnalyticsTab } from "./iflow-analytics-tab";
 import { IFlowMessageLogsTab } from "./iflow-message-logs-tab";
 import { IFlowResourcesTab } from "./iflow-resources-tab";
+import { IFlowEndpointsTab } from "./iflow-endpoints-tab";
+import { IFlowTestTab } from "./iflow-test-tab";
+import { IFlowTraceTab } from "./iflow-trace-tab";
+import type { IFlowEndpointSummary } from "@/app/actions/iflow-testing";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -36,6 +43,13 @@ export function IFlowDetailTabs({ iflow: initialIflow }: IFlowDetailTabsProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
+  const [testEndpoint, setTestEndpoint] = useState<IFlowEndpointSummary | null>(null);
+
+  const isStarted = iflow.status === "STARTED";
+  const handleTestEndpoint = useCallback((ep: IFlowEndpointSummary) => {
+    setTestEndpoint(ep);
+    setActiveTab("test");
+  }, []);
 
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
@@ -213,7 +227,11 @@ export function IFlowDetailTabs({ iflow: initialIflow }: IFlowDetailTabsProps) {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-grid">
+        <TabsList
+          className={`grid w-full lg:w-auto lg:inline-grid ${
+            isStarted ? "grid-cols-4 sm:grid-cols-8" : "grid-cols-3 sm:grid-cols-5"
+          }`}
+        >
           <TabsTrigger value="overview" className="gap-2">
             <IconInfoCircle className="h-4 w-4" />
             <span className="hidden sm:inline">Overview</span>
@@ -226,6 +244,24 @@ export function IFlowDetailTabs({ iflow: initialIflow }: IFlowDetailTabsProps) {
             <IconFolder className="h-4 w-4" />
             <span className="hidden sm:inline">Resources</span>
           </TabsTrigger>
+          {isStarted && (
+            <TabsTrigger value="endpoints" className="gap-2">
+              <IconPlugConnected className="h-4 w-4" />
+              <span className="hidden sm:inline">Endpoints</span>
+            </TabsTrigger>
+          )}
+          {isStarted && (
+            <TabsTrigger value="test" className="gap-2">
+              <IconFlask className="h-4 w-4" />
+              <span className="hidden sm:inline">Test</span>
+            </TabsTrigger>
+          )}
+          {isStarted && (
+            <TabsTrigger value="trace" className="gap-2">
+              <IconBug className="h-4 w-4" />
+              <span className="hidden sm:inline">Trace</span>
+            </TabsTrigger>
+          )}
           <TabsTrigger value="analytics" className="gap-2">
             <IconChartBar className="h-4 w-4" />
             <span className="hidden sm:inline">Analytics</span>
@@ -247,6 +283,24 @@ export function IFlowDetailTabs({ iflow: initialIflow }: IFlowDetailTabsProps) {
         <TabsContent value="resources">
           <IFlowResourcesTab iflow={iflow} onRefresh={handleRefresh} />
         </TabsContent>
+
+        {isStarted && (
+          <TabsContent value="endpoints">
+            <IFlowEndpointsTab iflow={iflow} onTestEndpoint={handleTestEndpoint} />
+          </TabsContent>
+        )}
+
+        {isStarted && (
+          <TabsContent value="test">
+            <IFlowTestTab iflow={iflow} initialEndpoint={testEndpoint} />
+          </TabsContent>
+        )}
+
+        {isStarted && (
+          <TabsContent value="trace">
+            <IFlowTraceTab iflow={iflow} />
+          </TabsContent>
+        )}
 
         <TabsContent value="analytics">
           <IFlowAnalyticsTab iflow={iflow} />

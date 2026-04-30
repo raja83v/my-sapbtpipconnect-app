@@ -109,7 +109,17 @@ export async function getDashboardData(): Promise<ActionResult<DashboardData>> {
       };
     }
 
-    const accessibleTenantIds = memberships.map((m) => m.tenantId);
+    const allAccessibleTenantIds = memberships.map((m) => m.tenantId);
+
+    // Filter to selected tenant if user has a default tenant set
+    const accessibleTenantIds = currentUser.defaultTenantId &&
+      allAccessibleTenantIds.includes(currentUser.defaultTenantId)
+      ? [currentUser.defaultTenantId]
+      : allAccessibleTenantIds;
+
+    const filteredMemberships = memberships.filter((m) =>
+      accessibleTenantIds.includes(m.tenantId)
+    );
 
     // Get AI agent usage stats
     const aiStatsRaw = await db.select({
@@ -142,7 +152,7 @@ export async function getDashboardData(): Promise<ActionResult<DashboardData>> {
     const executionTrendMap = new Map<string, { success: number; failed: number }>();
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    for (const membership of memberships) {
+    for (const membership of filteredMemberships) {
       const tenant = membership.tenant;
 
       // Get iFlow status counts
@@ -234,7 +244,7 @@ export async function getDashboardData(): Promise<ActionResult<DashboardData>> {
       .from(iFlows)
       .where(inArray(iFlows.tenantId, accessibleTenantIds));
     const iFlowMap = new Map(allIFlowIds.map((i) => [i.id, i]));
-    const tenantMap = new Map(memberships.map((m) => [m.tenantId, m.tenant.name]));
+    const tenantMap = new Map(filteredMemberships.map((m) => [m.tenantId, m.tenant.name]));
 
     const recentExecs = allIFlowIds.length > 0
       ? await db.select().from(iFlowExecutions)
@@ -293,7 +303,7 @@ export async function getDashboardData(): Promise<ActionResult<DashboardData>> {
       success: true,
       data: {
         stats: {
-          totalTenants: tenantData.length,
+          totalTenants: allAccessibleTenantIds.length,
           activeTenants: tenantData.filter((t) => t.isConnected).length,
           totalIFlows,
           activeIFlows,

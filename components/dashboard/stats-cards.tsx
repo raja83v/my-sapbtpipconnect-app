@@ -1,16 +1,14 @@
-"use client";
-
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { 
-  Activity, 
-  CheckCircle2, 
-  XCircle, 
-  Server, 
+import {
+  Activity,
+  CheckCircle2,
+  XCircle,
+  Server,
   Workflow,
   Sparkles,
   TrendingUp,
   TrendingDown,
-  Minus
+  Minus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DashboardStats } from "@/app/actions/dashboard";
@@ -37,16 +35,41 @@ export function StatsCards({ stats }: StatsCardsProps) {
       icon: Activity,
       iconColor: "text-emerald-500",
       bgColor: "bg-emerald-500/10",
-      trend: stats.successRate >= 95 ? "up" : stats.successRate >= 80 ? "neutral" : "down",
+      trend:
+        stats.successRate >= 95
+          ? "up"
+          : stats.successRate >= 80
+            ? "neutral"
+            : "down",
     },
     {
       title: "Success Rate",
       value: `${stats.successRate.toFixed(1)}%`,
       description: `${stats.failedExecutions.toLocaleString()} failures`,
-      icon: stats.successRate >= 95 ? CheckCircle2 : stats.successRate >= 80 ? Activity : XCircle,
-      iconColor: stats.successRate >= 95 ? "text-green-500" : stats.successRate >= 80 ? "text-yellow-500" : "text-red-500",
-      bgColor: stats.successRate >= 95 ? "bg-green-500/10" : stats.successRate >= 80 ? "bg-yellow-500/10" : "bg-red-500/10",
-      trend: stats.successRate >= 95 ? "up" : stats.successRate >= 80 ? "neutral" : "down",
+      icon:
+        stats.successRate >= 95
+          ? CheckCircle2
+          : stats.successRate >= 80
+            ? Activity
+            : XCircle,
+      iconColor:
+        stats.successRate >= 95
+          ? "text-green-500"
+          : stats.successRate >= 80
+            ? "text-yellow-500"
+            : "text-red-500",
+      bgColor:
+        stats.successRate >= 95
+          ? "bg-green-500/10"
+          : stats.successRate >= 80
+            ? "bg-yellow-500/10"
+            : "bg-red-500/10",
+      trend:
+        stats.successRate >= 95
+          ? "up"
+          : stats.successRate >= 80
+            ? "neutral"
+            : "down",
     },
     {
       title: "Connected Tenants",
@@ -69,9 +92,26 @@ export function StatsCards({ stats }: StatsCardsProps) {
   ];
 
   const TrendIcon = ({ trend }: { trend: string }) => {
-    if (trend === "up") return <TrendingUp className="h-3 w-3 text-green-500" />;
-    if (trend === "down") return <TrendingDown className="h-3 w-3 text-red-500" />;
-    return <Minus className="h-3 w-3 text-muted-foreground" />;
+    if (trend === "up")
+      return (
+        <>
+          <TrendingUp className="h-3 w-3 text-green-500" aria-hidden="true" />
+          <span className="sr-only">Trending up</span>
+        </>
+      );
+    if (trend === "down")
+      return (
+        <>
+          <TrendingDown className="h-3 w-3 text-red-500" aria-hidden="true" />
+          <span className="sr-only">Trending down</span>
+        </>
+      );
+    return (
+      <>
+        <Minus className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+        <span className="sr-only">No change</span>
+      </>
+    );
   };
 
   return (
@@ -82,7 +122,10 @@ export function StatsCards({ stats }: StatsCardsProps) {
             <CardTitle className="text-sm font-medium text-muted-foreground">
               {card.title}
             </CardTitle>
-            <div className={cn("p-2 rounded-lg", card.bgColor)}>
+            <div
+              className={cn("p-2 rounded-lg", card.bgColor)}
+              aria-hidden="true"
+            >
               <card.icon className={cn("h-4 w-4", card.iconColor)} />
             </div>
           </CardHeader>
@@ -91,13 +134,17 @@ export function StatsCards({ stats }: StatsCardsProps) {
               <div className="text-2xl font-bold">{card.value}</div>
               <TrendIcon trend={card.trend} />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">{card.description}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {card.description}
+            </p>
           </CardContent>
           {/* Decorative gradient */}
-          <div className={cn(
-            "absolute bottom-0 left-0 right-0 h-1",
-            card.iconColor.replace("text-", "bg-")
-          )} />
+          <div
+            className={cn(
+              "absolute bottom-0 left-0 right-0 h-1",
+              card.iconColor.replace("text-", "bg-"),
+            )}
+          />
         </Card>
       ))}
     </div>

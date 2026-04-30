@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth/client";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -54,15 +54,18 @@ export default function ResetPasswordAuth() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tokenError = searchParams.get("error");
+  const resetToken = searchParams.get("token");
 
   const passwordValidation = validatePasswordStrength(newPassword);
   const passwordsMatch = newPassword === confirmPassword && confirmPassword !== "";
 
   useEffect(() => {
-    if (tokenError === "INVALID_TOKEN") {
-      setError("This password reset link is invalid or has expired. Please request a new one.");
+    if (tokenError === "INVALID_TOKEN" || (!resetToken && !tokenError)) {
+      setError(
+        "This password reset link is invalid or has expired. Please request a new one."
+      );
     }
-  }, [tokenError]);
+  }, [tokenError, resetToken]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,9 +87,13 @@ export default function ResetPasswordAuth() {
     }
 
     try {
-      const supabase = createClient();
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPassword,
+      if (!resetToken) {
+        setError("Missing reset token. Please request a new reset link.");
+        return;
+      }
+      const { error: updateError } = await authClient.resetPassword({
+        newPassword,
+        token: resetToken,
       });
 
       if (updateError) {

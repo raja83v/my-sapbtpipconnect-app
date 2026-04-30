@@ -10,6 +10,7 @@ import { DocumentationGenerator } from "@/components/ai/v2/specialized/documenta
 import { CostAnalyzer } from "@/components/ai/v2/specialized/cost-analyzer";
 import { ChatInterface } from "@/components/ai/v2/general-assistant/chat-interface";
 import { IFlowCreator } from "@/components/ai/v2/specialized/iflow-creator/iflow-creator";
+import { IFlowStudio } from "@/components/ai/v2/specialized/iflow-creator/studio/iflow-studio";
 import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 
@@ -100,8 +101,14 @@ export default async function AgentPage({ params, searchParams }: AgentPageProps
         case "GENERAL_ASSISTANT":
             return <ChatInterface tenantId={tenantId} iflowId={iflowId} />;
 
-        case "IFLOW_CREATOR":
-            return <IFlowCreator tenantId={tenantId!} />;
+        case "IFLOW_CREATOR": {
+            const studioEnabled = process.env.IFLOW_STUDIO_ENABLED !== "false";
+            return studioEnabled ? (
+                <IFlowStudio tenantId={tenantId!} />
+            ) : (
+                <IFlowCreator tenantId={tenantId!} />
+            );
+        }
 
         case "TEST_CASE_GENERATOR":
             return <TestCaseGenerator tenantId={tenantId!} iflowId={iflowId} />;

@@ -43,6 +43,15 @@ import { DesignReviewerAgent } from "@/lib/ai/orchestrator/agents/design-reviewe
 import { Bpmn2ValidatorAgent } from "@/lib/ai/orchestrator/agents/bpmn2-validator-agent";
 import { FixAgent, MAX_FIX_ATTEMPTS } from "@/lib/ai/orchestrator/agents/fix-agent";
 import { SummarizerAgent } from "@/lib/ai/orchestrator/agents/summarizer-agent";
+import { ClarifierAgent } from "@/lib/ai/orchestrator/agents/clarifier-agent";
+import { PlannerAgent } from "@/lib/ai/orchestrator/agents/planner-agent";
+import { dispatchSpecialists } from "@/lib/ai/orchestrator/agents/specialist-dispatcher";
+import { iFlowPipelineMessages } from "@/lib/db/schema";
+import type {
+  IntegrationBlueprint,
+  RequirementsBrief,
+  SpecialistResultEnvelope,
+} from "@/lib/ai/orchestrator/pipeline-state";
 
 // ============================================================================
 // Pipeline Result Types
@@ -116,18 +125,25 @@ export async function startIFlowPipeline(
     const pipelineId = pipeline.id;
 
     // 5. Run the pipeline in the background (don't await)
-    // We fire-and-forget so the client gets the pipelineId immediately
-    // and can track progress via polling
-    runPipelineAsync(
-      pipelineId,
-      tenantId,
-      user.id,
-      packageSelection,
-      description,
-      tenant
-    ).catch((err) => {
-      console.error(`[Pipeline:${pipelineId}] Unhandled error:`, err);
-    });
+    // Studio mode: kick off the conversational clarifier first; the rest of
+    // the pipeline is triggered from the chat handler once requirements are
+    // captured. Legacy mode jumps straight into the architect flow.
+    if (pipeline.studioMode) {
+      runStudioClarifyPhase(pipelineId, description).catch((err) => {
+        console.error(`[Pipeline:${pipelineId}] Clarify-phase error:`, err);
+      });
+    } else {
+      runPipelineAsync(
+        pipelineId,
+        tenantId,
+        user.id,
+        packageSelection,
+        description,
+        tenant
+      ).catch((err) => {
+        console.error(`[Pipeline:${pipelineId}] Unhandled error:`, err);
+      });
+    }
 
     return {
       success: true,
@@ -167,10 +183,10 @@ export async function approveIFlowPipeline(
       return { success: false, error: "Pipeline not found or access denied" };
     }
 
-    if (pipeline.phase !== "AWAITING_APPROVAL") {
+    if (pipeline.phase !== "AWAITING_APPROVAL" && pipeline.phase !== "DRAFTED") {
       return {
         success: false,
-        error: `Pipeline is in "${pipeline.phase}" phase — can only approve from AWAITING_APPROVAL`,
+        error: `Pipeline is in "${pipeline.phase}" phase — can only deploy from AWAITING_APPROVAL or DRAFTED`,
       };
     }
 
@@ -202,11 +218,8 @@ export async function approveIFlowPipeline(
       return { success: false, error: "Tenant not found" };
     }
 
-    // Update phase
-    const orchestrator = new PipelineOrchestrator(
-      pipelineId,
-      "AWAITING_APPROVAL" // Pipeline is already in AWAITING_APPROVAL phase
-    );
+    // Update phase — accept either AWAITING_APPROVAL or DRAFTED as the entry.
+    const orchestrator = new PipelineOrchestrator(pipelineId, pipeline.phase);
     await orchestrator.transition("DEPLOYING");
 
     // Deploy
@@ -243,8 +256,120 @@ export async function approveIFlowPipeline(
 }
 
 // ============================================================================
-// ACTION: Cancel Pipeline
+// ACTION: Save iFlow Draft (upload to CPI without deploying)
 // ============================================================================
+
+export async function saveIFlowDraft(
+  pipelineId: string,
+): Promise<ActionResult<{ iflowId: string; packageId: string }>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { success: false, error: "Not authenticated" };
+
+    const pipeline = await db.query.iFlowPipelines.findFirst({
+      where: and(
+        eq(iFlowPipelines.id, pipelineId),
+        eq(iFlowPipelines.userId, user.id),
+      ),
+    });
+    if (!pipeline) return { success: false, error: "Pipeline not found" };
+
+    if (pipeline.phase !== "AWAITING_APPROVAL" && pipeline.phase !== "DRAFTED") {
+      return {
+        success: false,
+        error: `Cannot save draft from "${pipeline.phase}" phase`,
+      };
+    }
+
+    const finalDesign: IFlowDesign | null = pipeline.finalDesign
+      ? JSON.parse(pipeline.finalDesign)
+      : pipeline.architectResult
+        ? JSON.parse(pipeline.architectResult).design
+        : null;
+    if (!finalDesign) return { success: false, error: "No design in pipeline" };
+    if (!pipeline.bpmn2Xml) return { success: false, error: "No BPMN2 XML" };
+
+    const packageSelection: PackageSelection = JSON.parse(pipeline.packageSelection);
+    const scriptFiles: { path: string; content: string }[] = pipeline.bpmn2ScriptFiles
+      ? JSON.parse(pipeline.bpmn2ScriptFiles)
+      : [];
+
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, pipeline.tenantId),
+    });
+    if (!tenant) return { success: false, error: "Tenant not found" };
+
+    const sapClient = createSAPCPIClient({
+      tenantUrl: tenant.tenantUrl,
+      authType: tenant.authType as "OAUTH" | "BASIC_AUTH",
+      clientId: tenant.clientId ?? undefined,
+      clientSecret: tenant.clientSecret ? await decrypt(tenant.clientSecret) : undefined,
+      username: tenant.username ?? undefined,
+      password: tenant.password ? await decrypt(tenant.password) : undefined,
+      tokenUrl: tenant.authenticationUrl ?? undefined,
+    });
+
+    const packageId = packageSelection.packageId || "";
+    const shouldCreateNew =
+      packageSelection.createNewIFlow ||
+      packageSelection.mode === "new" ||
+      !packageSelection.iflowId;
+    const iflowId = shouldCreateNew ? finalDesign.metadata.id : packageSelection.iflowId!;
+    const iflowName = shouldCreateNew
+      ? finalDesign.metadata.name
+      : packageSelection.iflowName!;
+
+    if (packageSelection.mode === "new") {
+      try {
+        await sapClient.createIntegrationPackage(
+          packageId,
+          packageSelection.packageName || "New Package",
+          packageSelection.packageDescription,
+        );
+      } catch (err) {
+        if (!(err instanceof Error && err.message.includes("already exists"))) {
+          return {
+            success: false,
+            error: `Failed to create package: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+      }
+    }
+
+    try {
+      await sapClient.uploadIFlow(
+        packageId,
+        iflowId,
+        iflowName,
+        pipeline.bpmn2Xml,
+        scriptFiles.length > 0 ? scriptFiles : undefined,
+        shouldCreateNew,
+        pipeline.parametersFile
+          ? { parametersFile: pipeline.parametersFile }
+          : undefined,
+      );
+    } catch (err) {
+      return {
+        success: false,
+        error: `Failed to upload iFlow: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    await db
+      .update(iFlowPipelines)
+      .set({ phase: "DRAFTED", draftArtifactId: iflowId })
+      .where(eq(iFlowPipelines.id, pipelineId));
+
+    return { success: true, data: { iflowId, packageId } };
+  } catch (error) {
+    console.error("Error saving draft:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to save draft",
+    };
+  }
+}
+
 
 export async function cancelIFlowPipeline(
   pipelineId: string
@@ -339,6 +464,166 @@ export async function retryIFlowPipeline(
 }
 
 // ============================================================================
+// INTERNAL: Studio Clarify Phase
+// ============================================================================
+
+/**
+ * Studio entry point: transitions the pipeline to CLARIFYING and runs the
+ * Clarifier agent once to seed `requirementsBrief` and surface the first
+ * follow-up question (if any) into the chat thread. The chat handler in
+ * `app/actions/iflow-chat.ts` takes over from there: each user reply
+ * re-runs the agent until `openQuestions` is empty, at which point it
+ * calls `continueIFlowPipelineAfterClarify()` to kick off the architect.
+ */
+async function runStudioClarifyPhase(
+  pipelineId: string,
+  description: IFlowDescription,
+): Promise<void> {
+  const orchestrator = new PipelineOrchestrator(pipelineId);
+  await orchestrator.transition("CLARIFYING").catch(() => {
+    /* may already be in CLARIFYING after retry */
+  });
+  // Welcome message so the chat doesn't open empty.
+  await db.insert(iFlowPipelineMessages).values({
+    pipelineId,
+    role: "assistant",
+    kind: "TEXT",
+    content:
+      "Hi — I'll help you build this iFlow. Let me check the requirements first; I'll ask follow-up questions in chat if anything's unclear.",
+  });
+
+  const pipeline = await db.query.iFlowPipelines.findFirst({
+    where: eq(iFlowPipelines.id, pipelineId),
+  });
+  if (!pipeline) return;
+
+  const context: PipelineContext = {
+    pipelineId,
+    tenantId: pipeline.tenantId,
+    userId: pipeline.userId,
+    tenantCapabilities: getDefaultCapabilities(),
+    packageSelection: JSON.parse(pipeline.packageSelection),
+    description,
+  };
+
+  const clarifier = new ClarifierAgent();
+  const descriptionText =
+    typeof description === "string"
+      ? description
+      : (description as { summary?: string; goal?: string })?.summary ??
+        (description as { goal?: string })?.goal ??
+        JSON.stringify(description);
+
+  let brief: RequirementsBrief | null = null;
+  try {
+    const res = await clarifier.execute(
+      { description: descriptionText },
+      context,
+    );
+    if (res.success && res.output) brief = res.output;
+  } catch (err) {
+    console.error(`[Pipeline:${pipelineId}] Clarifier failed:`, err);
+  }
+
+  if (!brief) {
+    // Couldn't clarify — fall back to legacy direct-to-architect path so the
+    // user isn't stuck staring at an empty chat.
+    await db.insert(iFlowPipelineMessages).values({
+      pipelineId,
+      role: "assistant",
+      kind: "TEXT",
+      content:
+        "I couldn't run the clarifier just now — proceeding straight to the design step.",
+    });
+    await continueIFlowPipelineAfterClarify(pipelineId);
+    return;
+  }
+
+  await db
+    .update(iFlowPipelines)
+    .set({ requirementsBrief: brief })
+    .where(eq(iFlowPipelines.id, pipelineId));
+
+  const open = brief.openQuestions ?? [];
+  if (open.length === 0) {
+    // Already complete — skip straight to architect.
+    await db.insert(iFlowPipelineMessages).values({
+      pipelineId,
+      role: "assistant",
+      kind: "TEXT",
+      content: "Got it — I have everything I need. Building the design now…",
+    });
+    await continueIFlowPipelineAfterClarify(pipelineId);
+    return;
+  }
+
+  // Surface only the first open question (we'll iterate per answer).
+  const next = open[0];
+  await db.insert(iFlowPipelineMessages).values({
+    pipelineId,
+    role: "assistant",
+    kind: "CLARIFIER_QUESTION",
+    content: next.question,
+    metadata: {
+      id: next.id,
+      options: next.options ?? null,
+      required: !!next.required,
+    },
+  });
+}
+
+// ============================================================================
+// ACTION: Continue Pipeline After Clarify (called from chat handler)
+// ============================================================================
+
+/**
+ * Resumes the pipeline from the architect phase once the clarifier has
+ * captured the requirements. Safe to call multiple times — only kicks off
+ * work if the pipeline is in CLARIFYING / PLANNING / INIT.
+ */
+export async function continueIFlowPipelineAfterClarify(
+  pipelineId: string,
+): Promise<ActionResult<void>> {
+  try {
+    const pipeline = await db.query.iFlowPipelines.findFirst({
+      where: eq(iFlowPipelines.id, pipelineId),
+    });
+    if (!pipeline) return { success: false, error: "Pipeline not found" };
+
+    const RESUMABLE = new Set(["CLARIFYING", "PLANNING", "INIT"]);
+    if (!RESUMABLE.has(pipeline.phase)) {
+      return { success: true, data: undefined }; // already past clarify
+    }
+
+    const tenant = await db.query.cpiTenants.findFirst({
+      where: eq(cpiTenants.id, pipeline.tenantId),
+    });
+    if (!tenant) return { success: false, error: "Tenant not found" };
+
+    const packageSelection: PackageSelection = JSON.parse(pipeline.packageSelection);
+    const description: IFlowDescription = JSON.parse(pipeline.description);
+
+    runPipelineAsync(
+      pipelineId,
+      pipeline.tenantId,
+      pipeline.userId,
+      packageSelection,
+      description,
+      tenant as unknown as Record<string, unknown>,
+    ).catch((err) => {
+      console.error(`[Pipeline:${pipelineId}] Continue error:`, err);
+    });
+
+    return { success: true, data: undefined };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to continue pipeline",
+    };
+  }
+}
+
+// ============================================================================
 // INTERNAL: Full Pipeline Execution
 // ============================================================================
 
@@ -363,8 +648,6 @@ async function runPipelineAsync(
     // ──────────────────────────────────────────────────────────────────────
     // Phase 1: Fetch Tenant Capabilities
     // ──────────────────────────────────────────────────────────────────────
-    await orchestrator.transition("ARCHITECTURE");
-
     let tenantCapabilities: TenantCapabilities;
     try {
       const sapClient = createSAPCPIClient({
@@ -394,11 +677,101 @@ async function runPipelineAsync(
     };
 
     // ──────────────────────────────────────────────────────────────────────
+    // Phase 1.5 (Studio mode only): Planner + Specialists
+    // ──────────────────────────────────────────────────────────────────────
+    const pipelineRow = await db.query.iFlowPipelines.findFirst({
+      where: eq(iFlowPipelines.id, pipelineId),
+    });
+    const studioMode = pipelineRow?.studioMode === true;
+
+    let studioBlueprint: IntegrationBlueprint | null = null;
+    let studioSpecialistResults: SpecialistResultEnvelope<unknown>[] | null = null;
+
+    if (studioMode) {
+      const brief: RequirementsBrief = pipelineRow?.requirementsBrief
+        ? (pipelineRow.requirementsBrief as RequirementsBrief)
+        : {
+            goal:
+              typeof description === "string"
+                ? description
+                : (description as { goal?: string; summary?: string }).goal ??
+                  (description as { summary?: string }).summary ??
+                  "",
+            trigger: "message",
+            openQuestions: [],
+            confidence: 0.7,
+          };
+
+      // Planner
+      await orchestrator.transition("PLANNING").catch(() => {});
+      const plannerResult = await orchestrator.runAgent(
+        new PlannerAgent(),
+        {
+          requirementsBrief: brief,
+          tenantCapabilitiesSummary: summarizeCapabilities(tenantCapabilities),
+        },
+        context,
+      );
+
+      if (plannerResult.success && plannerResult.output) {
+        studioBlueprint = plannerResult.output;
+        await db
+          .update(iFlowPipelines)
+          .set({ blueprint: studioBlueprint })
+          .where(eq(iFlowPipelines.id, pipelineId));
+
+        await postStudioMessage(
+          pipelineId,
+          `Plan ready — pattern **${studioBlueprint.pattern}**, dispatching ${studioBlueprint.specialists.length} specialist agent(s) in parallel…`,
+        );
+
+        // Specialists (parallel, partial-success)
+        await orchestrator.transition("SPECIALISTS").catch(() => {});
+        studioSpecialistResults = await dispatchSpecialists(
+          orchestrator,
+          context,
+          brief,
+          studioBlueprint,
+          { tenantCapabilitiesSummary: summarizeCapabilities(tenantCapabilities) },
+        );
+        await db
+          .update(iFlowPipelines)
+          .set({ specialistResults: studioSpecialistResults })
+          .where(eq(iFlowPipelines.id, pipelineId));
+
+        const okCount = studioSpecialistResults.filter((r) => r.ok).length;
+        const failed = studioSpecialistResults
+          .filter((r) => !r.ok)
+          .map((r) => `${r.agent}: ${r.error}`);
+        await postStudioMessage(
+          pipelineId,
+          failed.length === 0
+            ? `All ${okCount} specialists succeeded. Integrating now…`
+            : `${okCount}/${studioSpecialistResults.length} specialists succeeded. Continuing with partial results — failed: ${failed.join("; ")}`,
+        );
+
+        await orchestrator.transition("INTEGRATING").catch(() => {});
+      } else {
+        await postStudioMessage(
+          pipelineId,
+          `Planner could not produce a blueprint (${plannerResult.error ?? "unknown error"}). Falling back to single-agent architect.`,
+        );
+      }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     // Phase 2: Architect Agent — Generate Design
     // ──────────────────────────────────────────────────────────────────────
+    if (studioMode) {
+      await orchestrator.transition("ARCHITECTURE").catch(() => {});
+    } else {
+      await orchestrator.transition("ARCHITECTURE");
+    }
     const architectResult = await orchestrator.runAgent(architectAgent, {
       description,
       tenantCapabilities,
+      blueprint: studioBlueprint ?? undefined,
+      specialistResults: studioSpecialistResults ?? undefined,
     }, context);
 
     if (!architectResult.success || !architectResult.output) {
@@ -412,6 +785,25 @@ async function runPipelineAsync(
     );
 
     let currentDesign = architectResult.output.design;
+
+    // Studio: merge specialist-emitted files (mappings/scripts) and parameters
+    // into the design + pipeline state so they end up in the deployed iFlow.
+    if (studioMode && studioSpecialistResults && studioSpecialistResults.length > 0) {
+      const merged = mergeSpecialistArtifacts(currentDesign, studioSpecialistResults);
+      currentDesign = merged.design;
+      if (merged.parametersFile) {
+        await db
+          .update(iFlowPipelines)
+          .set({ parametersFile: merged.parametersFile })
+          .where(eq(iFlowPipelines.id, pipelineId));
+      }
+      if (merged.fileCount > 0) {
+        await postStudioMessage(
+          pipelineId,
+          `Integrated ${merged.fileCount} specialist artifact(s) into the design.`,
+        );
+      }
+    }
 
     // ──────────────────────────────────────────────────────────────────────
     // Phase 3: Design Reviewer Agent
@@ -804,3 +1196,107 @@ async function deployToSAPCPI(
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
+
+// ============================================================================
+// INTERNAL: Studio helpers
+// ============================================================================
+
+async function postStudioMessage(
+  pipelineId: string,
+  content: string,
+  kind:
+    | "TEXT"
+    | "AGENT_STATUS"
+    | "BLUEPRINT"
+    | "PATCH_RESULT"
+    | "CLARIFIER_QUESTION" = "TEXT",
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  await db.insert(iFlowPipelineMessages).values({
+    pipelineId,
+    role: "assistant",
+    kind,
+    content,
+    metadata: metadata ?? {},
+  });
+}
+
+function summarizeCapabilities(caps: TenantCapabilities): string {
+  const lines: string[] = [];
+  lines.push(`- Runtime: ${caps.runtimeVersion}`);
+  if (caps.availableAdapters?.length) {
+    lines.push(`- Adapters: ${caps.availableAdapters.slice(0, 30).join(", ")}`);
+  }
+  if (caps.supportedFeatures?.length) {
+    lines.push(`- Features: ${caps.supportedFeatures.slice(0, 20).join(", ")}`);
+  }
+  if (caps.securityMaterials?.length) {
+    lines.push(
+      `- Security materials: ${caps.securityMaterials.slice(0, 20).join(", ")}`,
+    );
+  }
+  if (caps.apimEnabled) {
+    lines.push(`- APIM enabled (${caps.apimProxyCount ?? 0} proxies)`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Merge specialist outputs into the architect's design.
+ *
+ * - Adds mapping/script files from specialists into `design.scripts` so they
+ *   ride along through the existing scriptFiles persistence path. The path
+ *   prefix in `uploadIFlow` already routes `src/main/resources/...` artifacts
+ *   to the right zip location.
+ * - Returns the externalization specialist's `parametersFile` separately so
+ *   the caller can persist it to `iFlowPipelines.parametersFile`.
+ */
+function mergeSpecialistArtifacts(
+  design: IFlowDesign,
+  envelopes: SpecialistResultEnvelope<unknown>[],
+): { design: IFlowDesign; parametersFile?: string; fileCount: number } {
+  const out: IFlowDesign = { ...design, scripts: [...(design.scripts ?? [])] };
+  let parametersFile: string | undefined;
+  let fileCount = 0;
+
+  for (const env of envelopes) {
+    if (!env.ok || !env.payload) continue;
+    const payload = env.payload as {
+      files?: { path: string; content: string }[];
+      parametersFile?: string;
+    };
+    if (Array.isArray(payload.files)) {
+      for (const f of payload.files) {
+        if (!f?.path || typeof f.content !== "string") continue;
+        // Avoid duplicates if architect already emitted the same path.
+        if (out.scripts!.some((s) => s.scriptPath === f.path)) continue;
+        out.scripts!.push({
+          id: f.path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? `artifact-${fileCount}`,
+          name: f.path.split("/").pop() ?? "artifact",
+          scriptPath: f.path,
+          scriptContent: f.content,
+          type: f.path.endsWith(".groovy")
+            ? "groovy"
+            : f.path.endsWith(".js")
+              ? "javascript"
+              : "groovy",
+          purpose: "specialist-generated",
+          complexity: "low",
+        });
+        fileCount += 1;
+      }
+    }
+    if (
+      env.agent === "EXTERNALIZATION_SPECIALIST" &&
+      typeof payload.parametersFile === "string" &&
+      payload.parametersFile.trim().length > 0
+    ) {
+      parametersFile = payload.parametersFile;
+    }
+  }
+
+  return { design: out, parametersFile, fileCount };
+}
+
+
+

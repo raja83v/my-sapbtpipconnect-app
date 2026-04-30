@@ -16,7 +16,8 @@ export type ToolCategory =
   | "iflow"         // iFlow CRUD operations
   | "package"       // Integration package operations
   | "action"        // Deployment, restart, create (requires confirmation)
-  | "analytics";    // Stats, trends, metrics
+  | "analytics"     // Stats, trends, metrics
+  | "apim";         // SAP API Management monitoring
 
 // ============================================================================
 // Tenant Context
@@ -222,6 +223,32 @@ export const SearchSAPCatalogInputSchema = z.object({
   query: z.string().describe("Keywords to search for in the SAP content catalog (e.g., 'S/4HANA', 'SuccessFactors', 'Ariba')"),
   supportedPlatform: z.string().optional().describe("Filter by platform (e.g., 'SAP HANA Cloud Integration')"),
   top: z.number().min(1).max(20).default(10).describe("Maximum number of packages to return"),
+});
+
+// ============================================================================
+// APIM Monitoring Tool Schemas
+// ============================================================================
+
+export const GetAPIMLogsInputSchema = z.object({
+  proxyName: z.string().optional().describe("Filter by specific API proxy name"),
+  statusFilter: z.enum(["all", "2xx", "3xx", "4xx", "5xx", "error"]).optional().default("all").describe("Filter by HTTP status category"),
+  method: z.enum(["all", "GET", "POST", "PUT", "PATCH", "DELETE"]).optional().default("all").describe("Filter by HTTP method"),
+  fromDate: z.string().optional().describe("ISO 8601 date string for start of range"),
+  toDate: z.string().optional().describe("ISO 8601 date string for end of range"),
+  limit: z.number().min(1).max(100).default(50).describe("Maximum number of log entries to return"),
+});
+
+export const GetAPIMProxyListInputSchema = z.object({
+  search: z.string().optional().describe("Search term to filter proxies by name or title"),
+  state: z.enum(["DEPLOYED", "UNDEPLOYED"]).optional().describe("Filter by proxy deployment state"),
+  limit: z.number().min(1).max(200).default(50).describe("Maximum number of proxies to return"),
+});
+
+export const GetAPIMErrorsInputSchema = z.object({
+  proxyName: z.string().optional().describe("Filter errors by specific API proxy name"),
+  fromDate: z.string().optional().describe("ISO 8601 date string for start of range"),
+  toDate: z.string().optional().describe("ISO 8601 date string for end of range"),
+  limit: z.number().min(1).max(50).default(20).describe("Maximum number of error entries to return"),
 });
 
 // ============================================================================

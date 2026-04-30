@@ -4,11 +4,10 @@ import { withContentCollections } from "@content-collections/next";
 const nextConfig: NextConfig = {
   output: "standalone",
   serverExternalPackages: [
-    "@supabase/supabase-js",
-    "@supabase/ssr",
     "embedded-postgres",
     "pg",
     "postgres",
+    "undici",
   ],
   images: {
     remotePatterns: [

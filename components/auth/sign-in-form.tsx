@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/components/auth/auth-provider";
 import { AuthBrandPanel } from "@/components/auth/auth-brand-panel";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth/client";
 import { cn } from "@/lib/utils";
 import { Cloud } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
@@ -30,14 +30,13 @@ export function SignInForm() {
     setIsLoading(true);
 
     try {
-      const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { error: signInError } = await authClient.signIn.email({
         email: email.toLowerCase().trim(),
         password,
       });
 
       if (signInError) {
-        setError(signInError.message);
+        setError(signInError.message ?? "Invalid email or password");
         return;
       }
 
@@ -64,14 +63,7 @@ export function SignInForm() {
           Create Account
         </Link>
 
-        <AuthBrandPanel
-          testimonial={{
-            quote:
-              "CPI Connect transformed our integration monitoring. We now identify and resolve issues in minutes instead of hours.",
-            author: "Michael Torres",
-            title: "Integration Lead, Global Manufacturing Corp",
-          }}
-        />
+        <AuthBrandPanel />
 
         <div className="lg:p-8">
           <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">

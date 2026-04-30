@@ -27,6 +27,14 @@ export interface OnboardingData {
   tokenUrl?: string;
   username?: string;
   password?: string;
+  // APIM fields
+  apimUrl?: string;
+  apimAuthType?: "OAUTH" | "BASIC_AUTH" | null;
+  apimTokenUrl?: string;
+  apimClientId?: string;
+  apimClientSecret?: string;
+  apimUsername?: string;
+  apimPassword?: string;
 }
 
 export async function completeOnboarding(data: OnboardingData) {
@@ -215,6 +223,8 @@ export async function saveTenantConfig(data: OnboardingData) {
 
     const encryptedClientSecret = data.clientSecret ? await encrypt(data.clientSecret) : undefined;
     const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
+    const encryptedApimClientSecret = data.apimClientSecret ? await encrypt(data.apimClientSecret) : undefined;
+    const encryptedApimPassword = data.apimPassword ? await encrypt(data.apimPassword) : undefined;
 
     const tenant = await db.transaction(async (tx) => {
       const [newTenant] = await tx.insert(cpiTenants).values({
@@ -227,6 +237,13 @@ export async function saveTenantConfig(data: OnboardingData) {
         clientSecret: encryptedClientSecret,
         username: data.username,
         password: encryptedPassword,
+        apimUrl: data.apimUrl || undefined,
+        tokenUrl: data.apimTokenUrl || undefined,
+        apimAuthType: data.apimAuthType || undefined,
+        apimClientId: data.apimClientId || undefined,
+        apimClientSecret: encryptedApimClientSecret,
+        apimUsername: data.apimUsername || undefined,
+        apimPassword: encryptedApimPassword,
         status: "TESTING",
         isConnected: true,
         connectionTestAt: new Date(),

@@ -1,6 +1,11 @@
-import { IconTrendingDown, IconTrendingUp } from "@tabler/icons-react"
+/**
+ * @deprecated Template component with hardcoded placeholder data.
+ * This was scaffolded by shadcn/ui and is NOT used anywhere in the app.
+ * It should be removed or replaced with a component that accepts real props.
+ */
+import { IconTrendingDown, IconTrendingUp } from "@tabler/icons-react";
 
-import { Badge } from "@/components/ui/badge"
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardAction,
@@ -8,7 +13,7 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
+} from "@/components/ui/card";
 
 export function SectionCards() {
   return (
@@ -98,5 +103,5 @@ export function SectionCards() {
         </CardFooter>
       </Card>
     </div>
-  )
+  );
 }

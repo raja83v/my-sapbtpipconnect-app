@@ -1,10 +1,10 @@
 "use server";
 
 import { getCurrentUser } from "../user";
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users, tenantMembers } from "@/lib/db/schema";
 import { eq, and, or, count, desc, asc, ilike, inArray } from "drizzle-orm";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   createUserSchema,
   updateUserSchema,
@@ -208,28 +208,35 @@ export async function createUser(input: CreateUserInput): Promise<ActionResult<a
       return { success: false, error: "User with this email already exists" };
     }
 
-    // Create user in Supabase first
-    const supabaseAdmin = createAdminClient();
-    const { data: supabaseUser, error: supabaseError } =
-      await supabaseAdmin.auth.admin.createUser({
+    // Create user via BetterAuth (creates user + account with hashed password).
+    // Default password is "changeme123!" — admins should rotate via reset email.
+    const signUpResult = await auth.api.signUpEmail({
+      body: {
         email: validatedData.email,
         password: "changeme123!",
-        email_confirm: true,
-      });
+        name: validatedData.name || validatedData.email.split("@")[0],
+      },
+    });
 
-    if (supabaseError) {
-      return { success: false, error: supabaseError.message };
+    if (!signUpResult?.user?.id) {
+      return { success: false, error: "Failed to create authentication user" };
     }
 
-    const [user] = await db.insert(users).values({
-      email: validatedData.email,
-      name: validatedData.name || undefined,
-      supabaseId: supabaseUser.user.id,
-      role: (validatedData.role?.toLowerCase() ?? "user") as "user" | "admin",
-      status: (validatedData.status ?? "ACTIVE") as "ACTIVE" | "SUSPENDED" | "DELETED",
-      phone: validatedData.phone || undefined,
-      image: validatedData.image || undefined,
-    }).returning();
+    // Apply admin-controlled fields
+    const [user] = await db
+      .update(users)
+      .set({
+        role: (validatedData.role?.toLowerCase() ?? "user") as "user" | "admin",
+        status: (validatedData.status ?? "ACTIVE") as
+          | "ACTIVE"
+          | "SUSPENDED"
+          | "DELETED",
+        phone: validatedData.phone || undefined,
+        image: validatedData.image || undefined,
+        emailVerified: true,
+      })
+      .where(eq(users.id, signUpResult.user.id))
+      .returning();
 
     revalidatePath("/admin/users");
 

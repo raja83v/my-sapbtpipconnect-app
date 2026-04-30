@@ -94,7 +94,10 @@ export function ProfileTab({ user }: ProfileTabProps) {
         {/* Avatar Display */}
         <div className="flex items-center gap-4">
           <Avatar className="h-20 w-20">
-            <AvatarImage src={user.image || undefined} alt={user.name || "User"} />
+            <AvatarImage
+              src={user.image || undefined}
+              alt={user.name || "User"}
+            />
             <AvatarFallback className="text-lg">
               {getInitials(user.name, user.email)}
             </AvatarFallback>
@@ -116,6 +119,7 @@ export function ProfileTab({ user }: ProfileTabProps) {
               <Input
                 id="profile-name"
                 placeholder="Enter your name"
+                autoComplete="name"
                 disabled={isLoading}
                 {...form.register("name")}
               />
@@ -131,9 +135,12 @@ export function ProfileTab({ user }: ProfileTabProps) {
               <FieldLabel htmlFor="profile-email">Email</FieldLabel>
               <Input
                 id="profile-email"
+                type="email"
                 value={user.email}
-                disabled
-                className="bg-muted"
+                readOnly
+                aria-readonly="true"
+                autoComplete="email"
+                className="bg-muted cursor-not-allowed"
               />
               <FieldDescription>
                 Your email address cannot be changed.
@@ -145,7 +152,10 @@ export function ProfileTab({ user }: ProfileTabProps) {
               <FieldLabel htmlFor="profile-phone">Phone</FieldLabel>
               <Input
                 id="profile-phone"
-                placeholder="Enter your phone number"
+                type="tel"
+                inputMode="tel"
+                placeholder="+1 (555) 000-0000"
+                autoComplete="tel"
                 disabled={isLoading}
                 {...form.register("phone")}
               />

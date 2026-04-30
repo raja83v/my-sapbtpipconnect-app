@@ -35,6 +35,10 @@ import {
   GetTopErrorsInputSchema,
   // Catalog schemas
   SearchSAPCatalogInputSchema,
+  // APIM schemas
+  GetAPIMLogsInputSchema,
+  GetAPIMProxyListInputSchema,
+  GetAPIMErrorsInputSchema,
 } from "../types";
 
 // ============================================================================
@@ -393,6 +397,64 @@ Returns matching catalog packages with their artifacts.`,
     requiresConfirmation: false,
     cacheTTLSeconds: 3600, // Catalog content is relatively static
     rateLimit: { maxCalls: 10, windowSeconds: 60 },
+  },
+
+  // ==========================================================================
+  // APIM TOOLS - SAP API Management monitoring
+  // ==========================================================================
+
+  get_apim_logs: {
+    name: "get_apim_logs",
+    description: `Retrieve API call logs from SAP API Management (APIM). Use this to:
+- Monitor recent API proxy executions and traffic
+- Filter by API proxy name, HTTP status code, or HTTP method
+- Identify failed API calls (4xx/5xx errors)
+- Analyze API call patterns and response times
+- Search by date range for historical analysis
+
+Returns a list of API call summaries with status codes, response times, and error details.
+Note: APIM must be configured on the tenant for this tool to work.`,
+    category: "apim",
+    inputSchema: GetAPIMLogsInputSchema,
+    requiresConfirmation: false,
+    cacheTTLSeconds: 30, // Near real-time data
+    rateLimit: { maxCalls: 60, windowSeconds: 60 },
+  },
+
+  list_api_proxies: {
+    name: "list_api_proxies",
+    description: `List all API proxies deployed in SAP API Management (APIM). Use this to:
+- Get an overview of all published APIs
+- Find specific API proxies by name or title
+- Check deployment state (DEPLOYED/UNDEPLOYED)
+- Discover available API endpoints and their base paths
+- Identify which APIs are active
+
+Returns proxy names, titles, base paths, states, and target endpoints.
+Note: APIM must be configured on the tenant for this tool to work.`,
+    category: "apim",
+    inputSchema: GetAPIMProxyListInputSchema,
+    requiresConfirmation: false,
+    cacheTTLSeconds: 120, // Proxy list changes infrequently
+    rateLimit: { maxCalls: 30, windowSeconds: 60 },
+  },
+
+  get_apim_errors: {
+    name: "get_apim_errors",
+    description: `Get error details for failed API proxy calls in SAP API Management (APIM). Use this to:
+- Investigate API failures and fault codes
+- Identify the most common error patterns
+- Filter errors by specific API proxy
+- Analyze error trends over a time range
+- Get fault codes and fault sources for debugging
+
+Returns error summaries grouped by fault code with counts and examples.
+Note: APIM must be configured on the tenant for this tool to work.`,
+    category: "apim",
+    inputSchema: GetAPIMErrorsInputSchema,
+    requiresConfirmation: false,
+    cacheTTLSeconds: 60,
+    rateLimit: { maxCalls: 30, windowSeconds: 60 },
   },
 };
 

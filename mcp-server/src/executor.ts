@@ -58,8 +58,16 @@ import {
   SAPCPIClientInterface as AnalyticsClient,
 } from "./handlers/analytics";
 
+// APIM monitoring handlers
+import {
+  handleGetAPIMlogs,
+  handleListAPIProxies,
+  handleGetAPIMErrors,
+  SAPAPIMClientInterface as APIMClient,
+} from "./handlers/apim-monitoring";
+
 // Combined client interface
-export type SAPCPIClient = MonitoringClient & IFlowClient & ActionClient & AnalyticsClient;
+export type SAPCPIClient = MonitoringClient & IFlowClient & ActionClient & AnalyticsClient & APIMClient;
 
 // Audit log store (in production, this would be persisted)
 const auditLog: AuditLogEntry[] = [];
@@ -229,6 +237,14 @@ async function executeToolHandler(
       return handleGetPerformanceMetrics(client, args as any, context);
     case "get_top_errors":
       return handleGetTopErrors(client, args as any, context);
+
+    // APIM monitoring tools
+    case "get_apim_logs":
+      return handleGetAPIMlogs(client as any, args as any, context);
+    case "list_api_proxies":
+      return handleListAPIProxies(client as any, args as any, context);
+    case "get_apim_errors":
+      return handleGetAPIMErrors(client as any, args as any, context);
 
     default:
       return {

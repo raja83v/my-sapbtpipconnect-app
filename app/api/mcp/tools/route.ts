@@ -11,12 +11,16 @@ import { db } from "@/lib/db";
 import { tenantMembers, cpiTenants } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { createSAPCPIClient, type SAPCPIClient } from "@/lib/sap-cpi/client";
-import { decrypt } from "@/lib/encryption";
+import { getDecryptedCPICredentials } from "@/lib/sap-cpi/credentials";
 import {
   getAllTools,
   getToolByName,
   requiresConfirmation,
 } from "@/mcp-server/src";
+import {
+  createConfirmation,
+  validateConfirmation,
+} from "@/mcp-server/src/utils/confirmation";
 
 export const runtime = "nodejs";
 
@@ -34,7 +38,7 @@ export async function GET(request: NextRequest) {
     const tools = getAllTools();
 
     // Transform tools into Vercel AI SDK compatible format
-    const aiTools = tools.map(tool => ({
+    const aiTools = tools.map((tool) => ({
       type: "function" as const,
       function: {
         name: tool.name,
@@ -48,7 +52,7 @@ export async function GET(request: NextRequest) {
     console.error("[MCP Tools] Error fetching tools:", error);
     return NextResponse.json(
       { error: "Failed to fetch tools" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
@@ -70,14 +74,14 @@ export async function POST(request: NextRequest) {
     if (!toolName) {
       return NextResponse.json(
         { error: "Tool name is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (!tenantId) {
       return NextResponse.json(
         { error: "Tenant ID is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -86,19 +90,22 @@ export async function POST(request: NextRequest) {
     if (!tool) {
       return NextResponse.json(
         { error: `Unknown tool: ${toolName}` },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     // Verify user has access to the tenant
     const membership = await db.query.tenantMembers.findFirst({
-      where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, tenantId)),
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, tenantId),
+      ),
     });
 
     if (!membership) {
       return NextResponse.json(
         { error: "You don't have access to this tenant" },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
@@ -107,28 +114,44 @@ export async function POST(request: NextRequest) {
       where: eq(cpiTenants.id, tenantId),
     });
     if (!tenant) {
-      return NextResponse.json(
-        { error: "Tenant not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Tenant not found" }, { status: 404 });
     }
 
     // Check if this is an action tool that requires confirmation
     if (requiresConfirmation(toolName)) {
       if (!confirmationToken) {
-        // Create confirmation request
-        const token = `confirm-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-        const expiresAt = Date.now() + 120000; // 2 minutes
+        // Create a cryptographically secure confirmation token via the ConfirmationManager
+        const details = createConfirmation(
+          currentUser.id,
+          tenantId,
+          toolName,
+          parameters as Record<string, unknown>,
+        );
 
         return NextResponse.json({
           requiresConfirmation: true,
-          confirmationToken: token,
-          message: `Execute ${toolName} on tenant "${tenant.name}"`,
-          expiresAt,
+          confirmationToken: details.confirmationToken,
+          message: details.description,
+          action: details.action,
+          affectedResources: details.affectedResources,
+          expiresAt: details.expiresAt.getTime(),
         });
       }
 
-      // For now, accept any confirmation token (in production, validate properly)
+      // Validate the token — must match the user, tenant, and not be expired/used
+      const validation = validateConfirmation(
+        confirmationToken,
+        currentUser.id,
+        tenantId,
+      );
+      if (!validation.valid) {
+        return NextResponse.json(
+          {
+            error: validation.error || "Invalid or expired confirmation token",
+          },
+          { status: 400 },
+        );
+      }
     }
 
     // Create SAP CPI client
@@ -136,7 +159,7 @@ export async function POST(request: NextRequest) {
     if (!sapClient) {
       return NextResponse.json(
         { error: "Failed to create SAP CPI client" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -154,10 +177,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!result.success) {
-      return NextResponse.json(
-        { error: result.error },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: result.error }, { status: 400 });
     }
 
     return NextResponse.json({
@@ -168,8 +188,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("[MCP Tools] Error executing tool:", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Tool execution failed" },
-      { status: 500 }
+      {
+        error: error instanceof Error ? error.message : "Tool execution failed",
+      },
+      { status: 500 },
     );
   }
 }
@@ -179,9 +201,10 @@ export async function POST(request: NextRequest) {
  */
 async function executeToolDirectly(
   toolName: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   parameters: Record<string, any>,
-  sapClient: SAPCPIClient
-): Promise<{ success: boolean; data?: any; error?: string }> {
+  sapClient: SAPCPIClient,
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
   switch (toolName) {
     case "get_message_logs":
       const logs = await sapClient.getMessageProcessingLogs({
@@ -192,28 +215,35 @@ async function executeToolDirectly(
       return { success: true, data: logs };
 
     case "get_message_details":
-      const details = await sapClient.getMessageProcessingLogById(parameters.messageGuid);
+      const details = await sapClient.getMessageProcessingLogById(
+        parameters.messageGuid,
+      );
       const runSteps = parameters.includeSteps
         ? await sapClient.getMessageRunSteps(parameters.messageGuid)
         : null;
       return { success: true, data: { ...details, runSteps } };
 
     case "get_error_info":
-      const errorInfo = await sapClient.getMessageErrorInformation(parameters.messageGuid);
-      const errorText = await sapClient.getMessageErrorInformationValue(parameters.messageGuid);
+      const errorInfo = await sapClient.getMessageErrorInformation(
+        parameters.messageGuid,
+      );
+      const errorText = await sapClient.getMessageErrorInformationValue(
+        parameters.messageGuid,
+      );
       return { success: true, data: { errorInfo, errorText } };
 
     case "list_iflows":
       const iflows = await sapClient.listDeployedIFlows();
       let filtered = iflows;
       if (parameters.status) {
-        filtered = filtered.filter(f => f.Status === parameters.status);
+        filtered = filtered.filter((f) => f.Status === parameters.status);
       }
       if (parameters.search) {
         const query = parameters.search.toLowerCase();
-        filtered = filtered.filter(f =>
-          f.Name.toLowerCase().includes(query) ||
-          f.Id.toLowerCase().includes(query)
+        filtered = filtered.filter(
+          (f) =>
+            f.Name.toLowerCase().includes(query) ||
+            f.Id.toLowerCase().includes(query),
         );
       }
       return { success: true, data: filtered.slice(0, parameters.limit || 50) };
@@ -226,7 +256,7 @@ async function executeToolDirectly(
       const metrics = await sapClient.getIFlowPerformanceMetrics(
         parameters.iFlowId,
         parameters.iFlowName || parameters.iFlowId,
-        parameters.daysBack || 7
+        parameters.daysBack || 7,
       );
       return { success: true, data: metrics };
 
@@ -239,15 +269,19 @@ async function executeToolDirectly(
       });
       const stats = {
         total: allLogs.results.length,
-        completed: allLogs.results.filter((l: any) => l.Status === "COMPLETED").length,
-        failed: allLogs.results.filter((l: any) => l.Status === "FAILED").length,
-        processing: allLogs.results.filter((l: any) => l.Status === "PROCESSING").length,
+        completed: allLogs.results.filter((l) => l.Status === "COMPLETED")
+          .length,
+        failed: allLogs.results.filter((l) => l.Status === "FAILED").length,
+        processing: allLogs.results.filter((l) => l.Status === "PROCESSING")
+          .length,
       };
       return { success: true, data: stats };
 
     case "get_error_trends":
       const trendFromDate = new Date();
-      trendFromDate.setDate(trendFromDate.getDate() - (parameters.daysBack || 7));
+      trendFromDate.setDate(
+        trendFromDate.getDate() - ((parameters.daysBack as number) || 7),
+      );
       const failedLogs = await sapClient.getAllMessageProcessingLogs({
         status: "FAILED",
         fromDate: trendFromDate,
@@ -255,15 +289,18 @@ async function executeToolDirectly(
       });
       const trends: Record<string, number> = {};
       for (const log of failedLogs.results) {
-        const date = new Date((log as any).LogStart).toISOString().split('T')[0];
+        const date = new Date(log.LogStart).toISOString().split("T")[0];
         trends[date] = (trends[date] || 0) + 1;
       }
       return {
         success: true,
         data: {
           totalErrors: failedLogs.results.length,
-          trends: Object.entries(trends).map(([date, count]) => ({ date, count })),
-        }
+          trends: Object.entries(trends).map(([date, count]) => ({
+            date,
+            count,
+          })),
+        },
       };
 
     default:
@@ -272,25 +309,16 @@ async function executeToolDirectly(
 }
 
 /**
- * Helper to create SAP CPI client for a tenant
+ * Helper to create SAP CPI client for a tenant using centralized credential decryption.
  */
-async function createSAPClientForTenant(tenant: any) {
+async function createSAPClientForTenant(
+  tenant: Parameters<typeof getDecryptedCPICredentials>[0],
+) {
   try {
-    const credentials: any = {
-      tenantUrl: tenant.tenantUrl,
-      authType: tenant.authType,
-    };
-
-    if (tenant.authType === "OAUTH") {
-      credentials.clientId = tenant.clientId;
-      credentials.clientSecret = tenant.clientSecret; // Client will decrypt
-      credentials.tokenUrl = tenant.authenticationUrl;
-    } else if (tenant.authType === "BASIC_AUTH") {
-      credentials.username = tenant.username;
-      credentials.password = tenant.password; // Client will decrypt
-    }
-
-    return createSAPCPIClient(credentials);
+    const credentials = await getDecryptedCPICredentials(tenant);
+    return createSAPCPIClient(
+      credentials as Parameters<typeof createSAPCPIClient>[0],
+    );
   } catch (error) {
     console.error("[MCP Tools] Error creating SAP client:", error);
     return null;

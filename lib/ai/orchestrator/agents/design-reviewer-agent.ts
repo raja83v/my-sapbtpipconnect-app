@@ -68,9 +68,10 @@ export class DesignReviewerAgent extends BaseAgent<DesignReviewerInput, Reviewer
     const result = await runText({
       system: DESIGN_REVIEWER_SYSTEM_PROMPT,
       prompt: userPrompt,
-      maxTokens: 6000,
+      maxTokens: 12000,
       temperature: 0.2, // Low temperature for consistent reviews
       modelKind: 'orchestrator',
+      jsonMode: true,
     });
     const text = result.text;
 

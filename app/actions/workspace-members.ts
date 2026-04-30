@@ -1,5 +1,12 @@
 "use server";
 
+/**
+ * @deprecated These workspace-member actions are legacy wrappers around the
+ * tenant-member system. Use `app/actions/tenant-members.ts` directly instead.
+ * This file is kept for backward compatibility and will be removed in a future
+ * cleanup pass.
+ */
+
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { tenantMembers, users } from "@/lib/db/schema";
@@ -19,10 +26,13 @@ import {
  */
 async function checkWorkspaceAdmin(
   userId: string,
-  tenantId: string
+  tenantId: string,
 ): Promise<ActionResult<boolean>> {
   const member = await db.query.tenantMembers.findFirst({
-    where: and(eq(tenantMembers.userId, userId), eq(tenantMembers.tenantId, tenantId)),
+    where: and(
+      eq(tenantMembers.userId, userId),
+      eq(tenantMembers.tenantId, tenantId),
+    ),
   });
 
   if (!member || (member.role !== "OWNER" && member.role !== "ADMIN")) {
@@ -39,7 +49,7 @@ async function checkWorkspaceAdmin(
  * Get all members of a workspace (tenant)
  */
 export async function getWorkspaceMembers(
-  workspaceId: string
+  workspaceId: string,
 ): Promise<ActionResult<WorkspaceMemberWithUser[]>> {
   try {
     const currentUser = await getCurrentUser();
@@ -50,7 +60,10 @@ export async function getWorkspaceMembers(
 
     // Check if user is a member of the tenant
     const isMember = await db.query.tenantMembers.findFirst({
-      where: and(eq(tenantMembers.userId, currentUser.id), eq(tenantMembers.tenantId, workspaceId)),
+      where: and(
+        eq(tenantMembers.userId, currentUser.id),
+        eq(tenantMembers.tenantId, workspaceId),
+      ),
     });
 
     if (!isMember) {
@@ -58,28 +71,32 @@ export async function getWorkspaceMembers(
     }
 
     // Get all members with user info
-    const members = await db.select({
-      id: tenantMembers.id,
-      role: tenantMembers.role,
-      joinedAt: tenantMembers.joinedAt,
-      user: {
-        id: users.id,
-        email: users.email,
-        name: users.name,
-        image: users.image,
-        status: users.status,
-      },
-    }).from(tenantMembers)
+    const members = await db
+      .select({
+        id: tenantMembers.id,
+        role: tenantMembers.role,
+        joinedAt: tenantMembers.joinedAt,
+        user: {
+          id: users.id,
+          email: users.email,
+          name: users.name,
+          image: users.image,
+          status: users.status,
+        },
+      })
+      .from(tenantMembers)
       .innerJoin(users, eq(tenantMembers.userId, users.id))
       .where(eq(tenantMembers.tenantId, workspaceId))
       .orderBy(asc(tenantMembers.joinedAt));
 
-    const membersWithUser: WorkspaceMemberWithUser[] = members.map((member) => ({
-      id: member.id,
-      role: member.role as WorkspaceMemberWithUser["role"],
-      joinedAt: member.joinedAt,
-      user: member.user,
-    }));
+    const membersWithUser: WorkspaceMemberWithUser[] = members.map(
+      (member) => ({
+        id: member.id,
+        role: member.role as WorkspaceMemberWithUser["role"],
+        joinedAt: member.joinedAt,
+        user: member.user,
+      }),
+    );
 
     return { success: true, data: membersWithUser };
   } catch (error) {
@@ -96,7 +113,7 @@ export async function getWorkspaceMembers(
  * Requires OWNER or ADMIN permission
  */
 export async function updateMemberRole(
-  input: UpdateMemberRoleInput
+  input: UpdateMemberRoleInput,
 ): Promise<ActionResult<WorkspaceMemberWithUser>> {
   try {
     const currentUser = await getCurrentUser();
@@ -109,23 +126,25 @@ export async function updateMemberRole(
     const validatedData = updateMemberRoleSchema.parse(input);
 
     // Get member info
-    const member = await db.select({
-      id: tenantMembers.id,
-      role: tenantMembers.role,
-      tenantId: tenantMembers.tenantId,
-      userId: tenantMembers.userId,
-      joinedAt: tenantMembers.joinedAt,
-      user: {
-        id: users.id,
-        email: users.email,
-        name: users.name,
-        image: users.image,
-        status: users.status,
-      },
-    }).from(tenantMembers)
+    const member = await db
+      .select({
+        id: tenantMembers.id,
+        role: tenantMembers.role,
+        tenantId: tenantMembers.tenantId,
+        userId: tenantMembers.userId,
+        joinedAt: tenantMembers.joinedAt,
+        user: {
+          id: users.id,
+          email: users.email,
+          name: users.name,
+          image: users.image,
+          status: users.status,
+        },
+      })
+      .from(tenantMembers)
       .innerJoin(users, eq(tenantMembers.userId, users.id))
       .where(eq(tenantMembers.id, validatedData.memberId))
-      .then(rows => rows[0] ?? null);
+      .then((rows) => rows[0] ?? null);
 
     if (!member) {
       return { success: false, error: "Member not found" };
@@ -134,7 +153,7 @@ export async function updateMemberRole(
     // Check workspace admin permission
     const adminCheck = await checkWorkspaceAdmin(
       currentUser.id,
-      member.tenantId
+      member.tenantId,
     );
     if (!adminCheck.success) {
       return { success: false, error: adminCheck.error };
@@ -150,9 +169,15 @@ export async function updateMemberRole(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER" && validatedData.role !== "OWNER") {
-      const [{ c: ownerCount }] = await db.select({ c: count() }).from(tenantMembers).where(
-        and(eq(tenantMembers.tenantId, member.tenantId), eq(tenantMembers.role, "OWNER"))
-      );
+      const [{ c: ownerCount }] = await db
+        .select({ c: count() })
+        .from(tenantMembers)
+        .where(
+          and(
+            eq(tenantMembers.tenantId, member.tenantId),
+            eq(tenantMembers.role, "OWNER"),
+          ),
+        );
 
       if (ownerCount <= 1) {
         return {
@@ -163,25 +188,28 @@ export async function updateMemberRole(
     }
 
     // Update role
-    await db.update(tenantMembers)
+    await db
+      .update(tenantMembers)
       .set({ role: validatedData.role as "OWNER" | "ADMIN" | "MEMBER" })
       .where(eq(tenantMembers.id, validatedData.memberId));
 
-    const updatedMember = await db.select({
-      id: tenantMembers.id,
-      role: tenantMembers.role,
-      joinedAt: tenantMembers.joinedAt,
-      user: {
-        id: users.id,
-        email: users.email,
-        name: users.name,
-        image: users.image,
-        status: users.status,
-      },
-    }).from(tenantMembers)
+    const updatedMember = await db
+      .select({
+        id: tenantMembers.id,
+        role: tenantMembers.role,
+        joinedAt: tenantMembers.joinedAt,
+        user: {
+          id: users.id,
+          email: users.email,
+          name: users.name,
+          image: users.image,
+          status: users.status,
+        },
+      })
+      .from(tenantMembers)
       .innerJoin(users, eq(tenantMembers.userId, users.id))
       .where(eq(tenantMembers.id, validatedData.memberId))
-      .then(rows => rows[0]!);
+      .then((rows) => rows[0]!);
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -208,7 +236,7 @@ export async function updateMemberRole(
  * Requires OWNER or ADMIN permission
  */
 export async function removeMember(
-  input: RemoveMemberInput
+  input: RemoveMemberInput,
 ): Promise<ActionResult<void>> {
   try {
     const currentUser = await getCurrentUser();
@@ -232,7 +260,7 @@ export async function removeMember(
     // Check workspace admin permission
     const adminCheck = await checkWorkspaceAdmin(
       currentUser.id,
-      member.tenantId
+      member.tenantId,
     );
     if (!adminCheck.success) {
       return { success: false, error: adminCheck.error };
@@ -248,9 +276,15 @@ export async function removeMember(
 
     // Prevent removing the last OWNER
     if (member.role === "OWNER") {
-      const [{ c: ownerCount }] = await db.select({ c: count() }).from(tenantMembers).where(
-        and(eq(tenantMembers.tenantId, member.tenantId), eq(tenantMembers.role, "OWNER"))
-      );
+      const [{ c: ownerCount }] = await db
+        .select({ c: count() })
+        .from(tenantMembers)
+        .where(
+          and(
+            eq(tenantMembers.tenantId, member.tenantId),
+            eq(tenantMembers.role, "OWNER"),
+          ),
+        );
 
       if (ownerCount <= 1) {
         return {
@@ -261,7 +295,9 @@ export async function removeMember(
     }
 
     // Remove member
-    await db.delete(tenantMembers).where(eq(tenantMembers.id, validatedData.memberId));
+    await db
+      .delete(tenantMembers)
+      .where(eq(tenantMembers.id, validatedData.memberId));
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");

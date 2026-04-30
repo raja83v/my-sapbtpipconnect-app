@@ -12,7 +12,12 @@
 
 import type { LanguageModel } from 'ai';
 import { BaseAgent } from '../agent-base';
-import type { PipelineContext, TenantCapabilities } from '../pipeline-state';
+import type {
+  IntegrationBlueprint,
+  PipelineContext,
+  SpecialistResultEnvelope,
+  TenantCapabilities,
+} from '../pipeline-state';
 import { createIFlowDesignPrompt, IFLOW_CREATOR_SYSTEM_PROMPT } from '@/lib/ai/prompts-iflow-creator';
 import type { IFlowDescription, IFlowDesign } from '@/components/ai/v2/specialized/iflow-creator/types';
 import { cleanAIJson, fixUnescapedQuotesStateMachine, tryFixAtPosition } from '../utils/json-cleaner';
@@ -25,6 +30,10 @@ import { runText } from '@/lib/ai/runtime/text';
 export interface ArchitectInput {
   description: IFlowDescription;
   tenantCapabilities: TenantCapabilities;
+  /** Studio mode: planner blueprint to guide pattern + decomposition. */
+  blueprint?: IntegrationBlueprint;
+  /** Studio mode: specialist outputs to merge into the design. */
+  specialistResults?: SpecialistResultEnvelope<unknown>[];
 }
 
 export interface ArchitectOutput {
@@ -45,25 +54,53 @@ export class ArchitectAgent extends BaseAgent<ArchitectInput, ArchitectOutput> {
     input: ArchitectInput,
     _context: PipelineContext
   ): Promise<{ output: ArchitectOutput; tokensUsed: number }> {
-    const { description, tenantCapabilities } = input;
+    const { description, tenantCapabilities, blueprint, specialistResults } = input;
 
-    // Build enhanced prompt with tenant awareness
-    const userPrompt = buildEnhancedPrompt(description, tenantCapabilities);
+    // Build enhanced prompt with tenant awareness + (optionally) specialist context
+    const userPrompt = buildEnhancedPrompt(
+      description,
+      tenantCapabilities,
+      blueprint,
+      specialistResults,
+    );
 
     // Call AI model
     const result = await runText({
       system: IFLOW_CREATOR_SYSTEM_PROMPT,
       prompt: userPrompt,
-      maxTokens: 8000,
+      // The architect emits the full design — adapters, mappings, scripts,
+      // error handlers, flow diagram — in one JSON. With multiple Groovy
+      // scripts inline this can run long; 8000 was hitting truncation
+      // mid-string. 16000 leaves comfortable headroom.
+      maxTokens: 16000,
       temperature: 0.3, // Low temperature for more deterministic design
       modelKind: 'orchestrator',
+      jsonMode: true,
     });
     const text = result.text;
 
     // Log raw response stats for debugging
 
-    // Parse the AI response
-    const design = parseDesignResponse(text);
+    // Parse the AI response — with an LLM-based repair fallback when the
+    // deterministic repair pipeline can't recover (e.g. unescaped quotes
+    // inside Groovy strings that don't match any of our regex heuristics).
+    let design: IFlowDesign;
+    try {
+      design = parseDesignResponse(text);
+    } catch (firstParseErr) {
+      const errMsg = firstParseErr instanceof Error ? firstParseErr.message : String(firstParseErr);
+      console.warn(`[ArchitectAgent] Deterministic repair failed (${errMsg}); falling back to LLM repair`);
+      const repair = await runText({
+        system:
+          "You repair invalid JSON. Return ONLY the corrected JSON object — no prose, no markdown fences. Preserve all keys, values, and structure exactly. The most common bug is unescaped double quotes inside string values containing Groovy or JavaScript code: convert any inline double-quoted Groovy/JS string literals to single-quoted ones (Groovy and JS both accept single quotes), and escape any genuinely needed double quotes as \\\".",
+        prompt: `The following response should be a single JSON object but failed to parse with: ${errMsg}\n\nRaw response:\n${text}`,
+        modelKind: 'orchestrator',
+        temperature: 0,
+        maxTokens: 16000,
+        jsonMode: true,
+      });
+      design = parseDesignResponse(repair.text);
+    }
 
     // Ensure all design arrays have defaults
     ensureDesignDefaults(design);
@@ -86,7 +123,9 @@ export class ArchitectAgent extends BaseAgent<ArchitectInput, ArchitectOutput> {
 
 function buildEnhancedPrompt(
   description: IFlowDescription,
-  capabilities: TenantCapabilities
+  capabilities: TenantCapabilities,
+  blueprint?: IntegrationBlueprint,
+  specialistResults?: SpecialistResultEnvelope<unknown>[],
 ): string {
   // Use the existing prompt builder
   const basePrompt = createIFlowDesignPrompt(description);
@@ -109,13 +148,109 @@ The target SAP CPI tenant has the following capabilities. You MUST only use comp
   }
 
 If a required adapter is not listed above, choose the closest available alternative and note it in performanceNotes.
+`;
+
+  const integratorSection = buildIntegratorSection(blueprint, specialistResults);
+
+  const rationaleSection = `
 
 ## ADDITIONAL OUTPUT REQUEST
 
 After the JSON design, on a new line starting with "RATIONALE:", provide a brief (2-3 sentence) explanation of your key design decisions — why you chose those specific adapters, patterns, and error handling strategies.
 `;
 
-  return basePrompt + capabilitySection;
+  return basePrompt + capabilitySection + integratorSection + rationaleSection;
+}
+
+/**
+ * When studio specialists have already produced typed outputs (adapters,
+ * mappings, scripts, externalization, error handlers, decomposition), the
+ * architect's job shifts from "design from scratch" to "integrate the
+ * specialists' work into a single coherent IFlowDesign".
+ *
+ * We pass each specialist's payload as structured context plus an explicit
+ * instruction to keep their decisions intact rather than re-deriving them.
+ */
+function buildIntegratorSection(
+  blueprint?: IntegrationBlueprint,
+  specialistResults?: SpecialistResultEnvelope<unknown>[],
+): string {
+  if (!blueprint && (!specialistResults || specialistResults.length === 0)) {
+    return '';
+  }
+
+  const lines: string[] = [];
+  lines.push('\n\n## STUDIO MULTI-AGENT CONTEXT (AUTHORITATIVE)');
+  lines.push(
+    'You are now acting as **Architect-as-Integrator**. A planner and 1-6 specialists have already produced typed outputs. **Reuse them verbatim** — do not redesign their decisions. Your job is to assemble a single valid `IFlowDesign` JSON that wires their work together.',
+  );
+
+  if (blueprint) {
+    lines.push('');
+    lines.push('### Planner blueprint');
+    lines.push('```json');
+    lines.push(JSON.stringify(blueprint, null, 2));
+    lines.push('```');
+    lines.push(
+      `- Set \`integrationPattern\` on the design to **${blueprint.pattern}**.`,
+    );
+    if (blueprint.localProcesses?.length) {
+      lines.push(
+        `- Emit ${blueprint.localProcesses.length} local integration process(es) matching the planner's list.`,
+      );
+    }
+    if (blueprint.exceptionStrategy && blueprint.exceptionStrategy !== 'NONE') {
+      lines.push(
+        `- Apply exception strategy **${blueprint.exceptionStrategy}** via \`errorHandlers\` and \`exceptionSubprocesses\`.`,
+      );
+    }
+  }
+
+  if (specialistResults && specialistResults.length > 0) {
+    const ok = specialistResults.filter((r) => r.ok);
+    const failed = specialistResults.filter((r) => !r.ok);
+    lines.push('');
+    lines.push('### Specialist outputs');
+    for (const env of ok) {
+      lines.push(`#### ${env.agent} (${env.durationMs}ms)`);
+      lines.push('```json');
+      lines.push(JSON.stringify(env.payload, null, 2));
+      lines.push('```');
+    }
+    if (failed.length > 0) {
+      lines.push('');
+      lines.push('### Failed specialists (work around these)');
+      for (const env of failed) {
+        lines.push(`- **${env.agent}**: ${env.error}`);
+      }
+    }
+
+    lines.push('');
+    lines.push('### Integration rules');
+    lines.push(
+      '- Adapter specialist output → populate `adapters[]` with the same `id`/`type`/`config` values; preserve `"{{paramName}}"` placeholders.',
+    );
+    lines.push(
+      '- Mapping specialist output → emit one `mappings[]` entry per mapping ref. The actual `.mmap` file content is stored separately; reference it by its `artifactRef`.',
+    );
+    lines.push(
+      '- Script specialist output → emit one `scripts[]` entry per script ref. Set `scriptContent` to a SHORT placeholder comment (`"// see <artifactRef>"`); the real source is persisted alongside the design.',
+    );
+    lines.push(
+      '- Externalization specialist output → wire the externalized values as `"{{PARAM_NAME}}"` placeholders inside adapter `config` and script properties; the parameters.prop file is persisted separately.',
+    );
+    lines.push(
+      '- Error handler specialist output → emit `errorHandlers[]` and `exceptionSubprocesses[]` matching the specialist\'s steps.',
+    );
+    lines.push(
+      '- Decomposition specialist output → emit `localProcesses[]` and reference them via call activities in `flowDiagram[]`/`steps[]`.',
+    );
+    lines.push(
+      '- For any failed specialist above, fall back to a minimal stub of that concern (e.g. an inline mapping or basic error handler) and note the fallback in `performanceNotes`.',
+    );
+  }
+
+  return lines.join('\n');
 }
 
 // ============================================================================

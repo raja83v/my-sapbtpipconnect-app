@@ -25,6 +25,21 @@ export interface TenantWithRole {
   description: string | null;
   tenantUrl: string;
   authType: string;
+  // Non-sensitive config fields (no secrets/passwords)
+  authenticationUrl: string | null;
+  clientId: string | null;
+  username: string | null;
+  apimUrl: string | null;
+  tokenUrl: string | null;
+  // APIM-specific credentials (non-sensitive parts only)
+  apimAuthType: string | null;
+  apimClientId: string | null;
+  apimUsername: string | null;
+  // Secrets are NOT included — only boolean indicators
+  hasClientSecret: boolean;
+  hasPassword: boolean;
+  hasApimClientSecret: boolean;
+  hasApimPassword: boolean;
   status: string;
   isConnected: boolean;
   lastSyncAt: Date | null;
@@ -58,6 +73,18 @@ export async function getUserTenants(): Promise<ActionResult<TenantWithRole[]>> 
       description: m.tenant.description ?? null,
       tenantUrl: m.tenant.tenantUrl,
       authType: m.tenant.authType,
+      authenticationUrl: m.tenant.authenticationUrl ?? null,
+      clientId: m.tenant.clientId ?? null,
+      username: m.tenant.username ?? null,
+      apimUrl: m.tenant.apimUrl ?? null,
+      tokenUrl: m.tenant.tokenUrl ?? null,
+      apimAuthType: m.tenant.apimAuthType ?? null,
+      apimClientId: m.tenant.apimClientId ?? null,
+      apimUsername: m.tenant.apimUsername ?? null,
+      hasClientSecret: !!m.tenant.clientSecret,
+      hasPassword: !!m.tenant.password,
+      hasApimClientSecret: !!m.tenant.apimClientSecret,
+      hasApimPassword: !!m.tenant.apimPassword,
       status: m.tenant.status,
       isConnected: m.tenant.isConnected,
       lastSyncAt: m.tenant.lastSyncAt,
@@ -201,6 +228,14 @@ export async function createTenant(data: {
   clientSecret?: string;
   username?: string;
   password?: string;
+  apimUrl?: string;
+  tokenUrl?: string;
+  // APIM-specific credentials (all optional; null/absent = use CPI credentials)
+  apimAuthType?: "OAUTH" | "BASIC_AUTH" | null;
+  apimClientId?: string;
+  apimClientSecret?: string;
+  apimUsername?: string;
+  apimPassword?: string;
 }): Promise<ActionResult<{ tenantId: string }>> {
   try {
     const currentUser = await getCurrentUser();
@@ -241,6 +276,8 @@ export async function createTenant(data: {
     // Encrypt sensitive credentials if provided
     const encryptedClientSecret = data.clientSecret ? await encrypt(data.clientSecret) : undefined;
     const encryptedPassword = data.password ? await encrypt(data.password) : undefined;
+    const encryptedApimClientSecret = data.apimClientSecret ? await encrypt(data.apimClientSecret) : undefined;
+    const encryptedApimPassword = data.apimPassword ? await encrypt(data.apimPassword) : undefined;
 
     // Test OAuth connection if credentials provided
     let isConnected = false;
@@ -270,6 +307,13 @@ export async function createTenant(data: {
           clientSecret: encryptedClientSecret,
           username: data.username,
           password: encryptedPassword,
+          apimUrl: data.apimUrl || null,
+          tokenUrl: data.tokenUrl || null,
+          apimAuthType: data.apimAuthType || null,
+          apimClientId: data.apimClientId || null,
+          apimClientSecret: encryptedApimClientSecret || null,
+          apimUsername: data.apimUsername || null,
+          apimPassword: encryptedApimPassword || null,
           isConnected,
           connectionTestAt,
       }).returning();
@@ -308,6 +352,14 @@ export async function updateTenant(
     clientSecret?: string;
     username?: string;
     password?: string;
+    apimUrl?: string | null;
+    tokenUrl?: string | null;
+    // APIM-specific credentials
+    apimAuthType?: "OAUTH" | "BASIC_AUTH" | null;
+    apimClientId?: string | null;
+    apimClientSecret?: string;
+    apimUsername?: string | null;
+    apimPassword?: string;
   }
 ): Promise<ActionResult<void>> {
   try {
@@ -349,6 +401,13 @@ export async function updateTenant(
     if (data.clientSecret) updateData.clientSecret = await encrypt(data.clientSecret);
     if (data.username !== undefined) updateData.username = data.username;
     if (data.password) updateData.password = await encrypt(data.password);
+    if (data.apimUrl !== undefined) updateData.apimUrl = data.apimUrl;
+    if (data.tokenUrl !== undefined) updateData.tokenUrl = data.tokenUrl;
+    if (data.apimAuthType !== undefined) updateData.apimAuthType = data.apimAuthType;
+    if (data.apimClientId !== undefined) updateData.apimClientId = data.apimClientId;
+    if (data.apimClientSecret) updateData.apimClientSecret = await encrypt(data.apimClientSecret);
+    if (data.apimUsername !== undefined) updateData.apimUsername = data.apimUsername;
+    if (data.apimPassword) updateData.apimPassword = await encrypt(data.apimPassword);
 
     await db.update(cpiTenants).set(updateData).where(eq(cpiTenants.id, tenantId));
 
@@ -452,6 +511,35 @@ function mapExecutionStatus(sapStatus: string): "COMPLETED" | "FAILED" | "PROCES
 }
 
 /**
+ * Build the Authorization header for a CPI tenant (OAUTH or BASIC_AUTH)
+ */
+async function getAuthHeaderForTenant(tenant: { authType: string; authenticationUrl: string | null; clientId: string | null; clientSecret: string | null; username: string | null; password: string | null }): Promise<string> {
+  if (tenant.authType === "OAUTH") {
+    if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+      throw new Error("OAuth credentials not configured");
+    }
+    const decryptedSecret = await decrypt(tenant.clientSecret);
+    const accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedSecret);
+    return `Bearer ${accessToken}`;
+  }
+
+  if (tenant.authType === "BASIC_AUTH") {
+    if (!tenant.username || !tenant.password) {
+      throw new Error("Basic Auth credentials not configured");
+    }
+    let password: string;
+    try {
+      password = await decrypt(tenant.password);
+    } catch {
+      password = tenant.password;
+    }
+    return `Basic ${Buffer.from(`${tenant.username}:${password}`).toString("base64")}`;
+  }
+
+  throw new Error(`Unsupported auth type: ${tenant.authType}`);
+}
+
+/**
  * Map error message to ErrorCategory
  */
 function categorizeError(errorMessage: string | null): "SYSTEM" | "NETWORK" | "MAPPING" | "SECURITY" | "TIMEOUT" | "BUSINESS_LOGIC" | "UNKNOWN" | null {
@@ -474,7 +562,7 @@ function categorizeError(errorMessage: string | null): "SYSTEM" | "NETWORK" | "M
  */
 export async function syncTenantExecutions(
   tenantId: string,
-  accessToken: string,
+  authHeader: string,
   tenantUrl: string,
   options: {
     daysBack?: number;
@@ -533,7 +621,7 @@ export async function syncTenantExecutions(
     const logsResponse = await fetch(logsUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": authHeader,
         "Accept": "application/json",
       },
       signal: controller.signal,
@@ -676,23 +764,23 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
       return { success: false, error: "Tenant not found" };
     }
 
-    if (!tenant.tenantUrl || tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-      return { success: false, error: "Tenant credentials not configured" };
+    if (!tenant.tenantUrl) {
+      return { success: false, error: "Tenant URL not configured" };
     }
 
-    const decryptedClientSecret = await decrypt(tenant.clientSecret);
-    const accessToken = await getSAPToken(
-      tenant.authenticationUrl,
-      tenant.clientId,
-      decryptedClientSecret
-    );
+    let authHeader: string;
+    try {
+      authHeader = await getAuthHeaderForTenant(tenant);
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : "Auth credentials not configured" };
+    }
 
     // Sync iFlows - First get runtime artifacts for status
     const iflowsUrl = `${tenant.tenantUrl}/api/v1/IntegrationRuntimeArtifacts`;
     const iflowsResponse = await fetch(iflowsUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": authHeader,
         "Accept": "application/json",
       },
     });
@@ -715,7 +803,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
     const packagesResponse = await fetch(packagesUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": authHeader,
         "Accept": "application/json",
       },
     });
@@ -732,7 +820,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
           const artifactsResponse = await fetch(artifactsUrl, {
             method: "GET",
             headers: {
-              "Authorization": `Bearer ${accessToken}`,
+              "Authorization": authHeader,
               "Accept": "application/json",
             },
           });
@@ -783,7 +871,7 @@ export async function syncTenantInternal(tenantId: string): Promise<ActionResult
     }
 
     // Sync executions
-    const executionResult = await syncTenantExecutions(tenantId, accessToken, tenant.tenantUrl, { silent: true });
+    const executionResult = await syncTenantExecutions(tenantId, authHeader, tenant.tenantUrl, { silent: true });
 
     // Update tenant
     await db.update(cpiTenants).set({
@@ -848,22 +936,11 @@ export async function syncTenantIFlows(
       return { success: false, error: "Tenant URL is not configured" };
     }
 
-    let accessToken: string;
-
-    // Get authentication token based on auth type
-    if (tenant.authType === "OAUTH") {
-      if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-        return { success: false, error: "OAuth credentials not configured" };
-      }
-
-      const decryptedClientSecret = await decrypt(tenant.clientSecret);
-      accessToken = await getSAPToken(
-        tenant.authenticationUrl,
-        tenant.clientId,
-        decryptedClientSecret
-      );
-    } else {
-      return { success: false, error: "Only OAuth authentication is currently supported" };
+    let authHeader: string;
+    try {
+      authHeader = await getAuthHeaderForTenant(tenant);
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : "Auth credentials not configured" };
     }
 
     // Fetch iFlows from SAP CPI - Runtime Artifacts for status
@@ -871,7 +948,7 @@ export async function syncTenantIFlows(
     const iflowsResponse = await fetch(iflowsUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": authHeader,
         "Accept": "application/json",
       },
     });
@@ -895,7 +972,7 @@ export async function syncTenantIFlows(
       const packagesResponse = await fetch(packagesUrl, {
         method: "GET",
         headers: {
-          "Authorization": `Bearer ${accessToken}`,
+          "Authorization": authHeader,
           "Accept": "application/json",
         },
       });
@@ -911,7 +988,7 @@ export async function syncTenantIFlows(
             const artifactsResponse = await fetch(artifactsUrl, {
               method: "GET",
               headers: {
-                "Authorization": `Bearer ${accessToken}`,
+                "Authorization": authHeader,
                 "Accept": "application/json",
               },
             });
@@ -991,7 +1068,7 @@ export async function syncTenantIFlows(
       console.time('Execution sync');
       const executionResult = await syncTenantExecutions(
         tenantId,
-        accessToken,
+        authHeader,
         tenant.tenantUrl,
         { silent: false }
       );

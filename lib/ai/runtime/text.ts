@@ -84,6 +84,9 @@ export async function runText(request: AITextRequest): Promise<AITextResponse> {
       model,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
+      ...(request.jsonMode
+        ? { response_format: { type: "json_object" as const } }
+        : {}),
       messages: [
         ...(request.system ? [{ role: "system" as const, content: request.system }] : []),
         { role: "user" as const, content: request.prompt },

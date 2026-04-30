@@ -256,36 +256,41 @@ export async function getAllMessageLogs(
             return { success: false, error: "You don't have access to this tenant" };
         }
 
-        // Check OAuth credentials
-        if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-            return { success: false, error: "OAuth credentials not configured for this tenant" };
+        // Validate credentials and create client
+        let client: ReturnType<typeof createSAPCPIClient>;
+
+        if (tenant.authType === "OAUTH") {
+            if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+                return { success: false, error: "OAuth credentials not configured for this tenant" };
+            }
+            let accessToken = getCachedToken(tenant.id);
+            if (!accessToken) {
+                const decryptedClientSecret = await decrypt(tenant.clientSecret);
+                accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+                cacheToken(tenant.id, accessToken);
+            }
+            client = createSAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "OAUTH",
+                clientId: tenant.clientId,
+                clientSecret: tenant.clientSecret,
+                tokenUrl: tenant.authenticationUrl,
+            });
+            (client as any).accessToken = accessToken;
+            (client as any).tokenExpiry = Date.now() + 3600000;
+        } else if (tenant.authType === "BASIC_AUTH") {
+            if (!tenant.username || !tenant.password) {
+                return { success: false, error: "Basic Auth credentials not configured for this tenant" };
+            }
+            client = createSAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "BASIC_AUTH",
+                username: tenant.username,
+                password: tenant.password,
+            });
+        } else {
+            return { success: false, error: "Unsupported authentication type" };
         }
-
-        // Get or refresh token
-        let accessToken = getCachedToken(tenant.id);
-
-        if (!accessToken) {
-            const decryptedClientSecret = await decrypt(tenant.clientSecret);
-            accessToken = await getSAPToken(
-                tenant.authenticationUrl,
-                tenant.clientId,
-                decryptedClientSecret
-            );
-            cacheToken(tenant.id, accessToken);
-        }
-
-        // Create SAP CPI client
-        const client = createSAPCPIClient({
-            tenantUrl: tenant.tenantUrl,
-            authType: "OAUTH",
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret, // Will be decrypted by client
-            tokenUrl: tenant.authenticationUrl,
-        });
-
-        // Override the token since we already have it
-        (client as any).accessToken = accessToken;
-        (client as any).tokenExpiry = Date.now() + 3600000; // 1 hour
 
         // Build filter params
         const filterParams: any = {
@@ -418,35 +423,41 @@ export async function getMessageLogDetail(
             return { success: false, error: "You don't have access to this tenant" };
         }
 
-        // Check OAuth credentials
-        if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-            return { success: false, error: "OAuth credentials not configured" };
+        // Validate credentials and create client
+        let client: ReturnType<typeof createSAPCPIClient>;
+
+        if (tenant.authType === "OAUTH") {
+            if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+                return { success: false, error: "OAuth credentials not configured" };
+            }
+            let accessToken = getCachedToken(tenant.id);
+            if (!accessToken) {
+                const decryptedClientSecret = await decrypt(tenant.clientSecret);
+                accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+                cacheToken(tenant.id, accessToken);
+            }
+            client = createSAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "OAUTH",
+                clientId: tenant.clientId,
+                clientSecret: tenant.clientSecret,
+                tokenUrl: tenant.authenticationUrl,
+            });
+            (client as any).accessToken = accessToken;
+            (client as any).tokenExpiry = Date.now() + 3600000;
+        } else if (tenant.authType === "BASIC_AUTH") {
+            if (!tenant.username || !tenant.password) {
+                return { success: false, error: "Basic Auth credentials not configured" };
+            }
+            client = createSAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "BASIC_AUTH",
+                username: tenant.username,
+                password: tenant.password,
+            });
+        } else {
+            return { success: false, error: "Unsupported authentication type" };
         }
-
-        // Get token
-        let accessToken = getCachedToken(tenant.id);
-
-        if (!accessToken) {
-            const decryptedClientSecret = await decrypt(tenant.clientSecret);
-            accessToken = await getSAPToken(
-                tenant.authenticationUrl,
-                tenant.clientId,
-                decryptedClientSecret
-            );
-            cacheToken(tenant.id, accessToken);
-        }
-
-        // Create client
-        const client = createSAPCPIClient({
-            tenantUrl: tenant.tenantUrl,
-            authType: "OAUTH",
-            clientId: tenant.clientId,
-            clientSecret: tenant.clientSecret,
-            tokenUrl: tenant.authenticationUrl,
-        });
-
-        (client as any).accessToken = accessToken;
-        (client as any).tokenExpiry = Date.now() + 3600000;
 
         // Fetch all details in parallel
         const [logDetails, runSteps, attachments, errorInfo, errorText] = await Promise.all([
@@ -532,21 +543,28 @@ export async function getIFlowsForFilter(
                 return { success: false, error: "Access denied" };
             }
 
-            if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-                return { success: false, error: "OAuth credentials not configured" };
-            }
-
-            const decryptedClientSecret = await decrypt(tenant.clientSecret);
-
-            // Get or refresh token
-            let accessToken = getCachedToken(tenant.id);
-            if (!accessToken) {
-                accessToken = await getSAPToken(
-                    tenant.authenticationUrl,
-                    tenant.clientId,
-                    decryptedClientSecret
-                );
-                cacheToken(tenant.id, accessToken);
+            // Build auth header
+            let authHeader: string;
+            if (tenant.authType === "OAUTH") {
+                if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+                    return { success: false, error: "OAuth credentials not configured" };
+                }
+                let accessToken = getCachedToken(tenant.id);
+                if (!accessToken) {
+                    const decryptedClientSecret = await decrypt(tenant.clientSecret);
+                    accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+                    cacheToken(tenant.id, accessToken);
+                }
+                authHeader = `Bearer ${accessToken}`;
+            } else if (tenant.authType === "BASIC_AUTH") {
+                if (!tenant.username || !tenant.password) {
+                    return { success: false, error: "Basic Auth credentials not configured" };
+                }
+                let password: string;
+                try { password = await decrypt(tenant.password); } catch { password = tenant.password; }
+                authHeader = `Basic ${Buffer.from(`${tenant.username}:${password}`).toString("base64")}`;
+            } else {
+                return { success: false, error: "Unsupported authentication type" };
             }
 
             // Fetch iFlows for specific package from SAP CPI
@@ -554,7 +572,7 @@ export async function getIFlowsForFilter(
             const response = await fetch(`${tenant.tenantUrl}${endpoint}`, {
                 method: "GET",
                 headers: {
-                    "Authorization": `Bearer ${accessToken}`,
+                    "Authorization": authHeader,
                     "Accept": "application/json",
                 },
             });
@@ -638,21 +656,28 @@ export async function getPackagesForFilter(
             return { success: false, error: "Access denied" };
         }
 
-        if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-            return { success: false, error: "OAuth credentials not configured" };
-        }
-
-        const decryptedClientSecret = await decrypt(tenant.clientSecret);
-
-        // Get or refresh token
-        let accessToken = getCachedToken(tenant.id);
-        if (!accessToken) {
-            accessToken = await getSAPToken(
-                tenant.authenticationUrl,
-                tenant.clientId,
-                decryptedClientSecret
-            );
-            cacheToken(tenant.id, accessToken);
+        // Build auth header
+        let authHeader: string;
+        if (tenant.authType === "OAUTH") {
+            if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+                return { success: false, error: "OAuth credentials not configured" };
+            }
+            let accessToken = getCachedToken(tenant.id);
+            if (!accessToken) {
+                const decryptedClientSecret = await decrypt(tenant.clientSecret);
+                accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+                cacheToken(tenant.id, accessToken);
+            }
+            authHeader = `Bearer ${accessToken}`;
+        } else if (tenant.authType === "BASIC_AUTH") {
+            if (!tenant.username || !tenant.password) {
+                return { success: false, error: "Basic Auth credentials not configured" };
+            }
+            let password: string;
+            try { password = await decrypt(tenant.password); } catch { password = tenant.password; }
+            authHeader = `Basic ${Buffer.from(`${tenant.username}:${password}`).toString("base64")}`;
+        } else {
+            return { success: false, error: "Unsupported authentication type" };
         }
 
         // Fetch packages from SAP CPI
@@ -660,7 +685,7 @@ export async function getPackagesForFilter(
         const response = await fetch(`${tenant.tenantUrl}${endpoint}`, {
             method: "GET",
             headers: {
-                "Authorization": `Bearer ${accessToken}`,
+                "Authorization": authHeader,
                 "Accept": "application/json",
             },
         });
@@ -879,35 +904,41 @@ export async function diagnoseMessageLogError(
             });
         }
 
-        // Fetch message details from SAP CPI
-        if (tenant.authType !== "OAUTH" || !tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
-            return { success: false, error: "OAuth credentials not configured" };
+        // Validate credentials and create client
+        let client: ReturnType<typeof createSAPCPIClient>;
+
+        if (tenant.authType === "OAUTH") {
+            if (!tenant.authenticationUrl || !tenant.clientId || !tenant.clientSecret) {
+                return { success: false, error: "OAuth credentials not configured" };
+            }
+            let accessToken = getCachedToken(tenant.id);
+            if (!accessToken) {
+                const decryptedClientSecret = await decrypt(tenant.clientSecret);
+                accessToken = await getSAPToken(tenant.authenticationUrl, tenant.clientId, decryptedClientSecret);
+                cacheToken(tenant.id, accessToken);
+            }
+            client = createSAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "OAUTH",
+                clientId: tenant.clientId!,
+                clientSecret: tenant.clientSecret!,
+                tokenUrl: tenant.authenticationUrl!,
+            });
+            (client as any).accessToken = accessToken;
+            (client as any).tokenExpiry = Date.now() + 3600000;
+        } else if (tenant.authType === "BASIC_AUTH") {
+            if (!tenant.username || !tenant.password) {
+                return { success: false, error: "Basic Auth credentials not configured" };
+            }
+            client = createSAPCPIClient({
+                tenantUrl: tenant.tenantUrl,
+                authType: "BASIC_AUTH",
+                username: tenant.username,
+                password: tenant.password,
+            });
+        } else {
+            return { success: false, error: "Unsupported authentication type" };
         }
-
-        const decryptedClientSecret = await decrypt(tenant.clientSecret);
-
-        // Get or refresh token
-        let accessToken = getCachedToken(tenant.id);
-        if (!accessToken) {
-            accessToken = await getSAPToken(
-                tenant.authenticationUrl,
-                tenant.clientId,
-                decryptedClientSecret
-            );
-            cacheToken(tenant.id, accessToken);
-        }
-
-        // Fetch error details from SAP CPI
-        const client = createSAPCPIClient({
-            tenantUrl: tenant.tenantUrl,
-            authType: "OAUTH",
-            clientId: tenant.clientId!,
-            clientSecret: tenant.clientSecret!,
-            tokenUrl: tenant.authenticationUrl!,
-        });
-
-        (client as any).accessToken = accessToken;
-        (client as any).tokenExpiry = Date.now() + 3600000;
 
         // Get error information
         let errorDetails = errorMessage || "";

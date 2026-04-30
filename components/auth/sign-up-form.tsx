@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/components/auth/auth-provider";
 import { AuthBrandPanel } from "@/components/auth/auth-brand-panel";
+import { authClient } from "@/lib/auth/client";
 import { cn } from "@/lib/utils";
 import { Cloud } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
@@ -44,17 +45,14 @@ export function SignUpForm() {
     setIsLoading(true);
 
     try {
-      // Let the API route handle Supabase user creation + Prisma user + sign-in
-      const res = await fetch("/api/auth/sign-up", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name }),
+      const { error: signUpError } = await authClient.signUp.email({
+        email: email.toLowerCase().trim(),
+        password,
+        name: name.trim() || email.split("@")[0],
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Registration failed");
+      if (signUpError) {
+        setError(signUpError.message ?? "Registration failed");
         return;
       }
 
@@ -178,14 +176,7 @@ export function SignUpForm() {
           Sign In
         </Link>
 
-        <AuthBrandPanel
-          testimonial={{
-            quote:
-              "Setting up CPI Connect was incredibly smooth. Within hours, we had full visibility into our CPI landscape.",
-            author: "Emma Williams",
-            title: "Senior Developer, Tech Innovations Ltd",
-          }}
-        />
+        <AuthBrandPanel />
 
         <div className="lg:p-8">
           <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">

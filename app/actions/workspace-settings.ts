@@ -1,5 +1,12 @@
 "use server";
 
+/**
+ * @deprecated These workspace-settings actions are legacy wrappers around the
+ * CPI tenant system. Use `app/actions/tenant.ts` and `app/actions/tenant-members.ts`
+ * directly instead. This file is kept for backward compatibility and will be
+ * removed in a future cleanup pass.
+ */
+
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { cpiTenants, tenantMembers } from "@/lib/db/schema";
@@ -18,7 +25,9 @@ import {
  * Get the current user's default workspace with their role
  * Note: In the new tenant-based architecture, this returns the user's primary tenant
  */
-export async function getCurrentWorkspace(): Promise<ActionResult<WorkspaceWithRole>> {
+export async function getCurrentWorkspace(): Promise<
+  ActionResult<WorkspaceWithRole>
+> {
   try {
     const user = await getCurrentUser();
 
@@ -60,7 +69,7 @@ export async function getCurrentWorkspace(): Promise<ActionResult<WorkspaceWithR
  * Note: In new architecture, this updates a tenant
  */
 export async function updateWorkspace(
-  input: UpdateWorkspaceInput
+  input: UpdateWorkspaceInput,
 ): Promise<ActionResult<WorkspaceWithRole>> {
   try {
     const currentUser = await getCurrentUser();
@@ -102,10 +111,14 @@ export async function updateWorkspace(
     }
 
     // Update tenant
-    const [updatedTenant] = await db.update(cpiTenants).set({
-      name: validatedData.name,
-      slug: validatedData.slug,
-    }).where(eq(cpiTenants.id, validatedData.id)).returning();
+    const [updatedTenant] = await db
+      .update(cpiTenants)
+      .set({
+        name: validatedData.name,
+        slug: validatedData.slug,
+      })
+      .where(eq(cpiTenants.id, validatedData.id))
+      .returning();
 
     // Revalidate paths
     revalidatePath("/dashboard/settings");
@@ -137,7 +150,7 @@ export async function updateWorkspace(
  * Note: In new architecture, this creates a tenant
  */
 export async function createUserWorkspace(
-  input: CreateWorkspaceInput
+  input: CreateWorkspaceInput,
 ): Promise<ActionResult<WorkspaceWithRole>> {
   try {
     const currentUser = await getCurrentUser();
@@ -163,20 +176,23 @@ export async function createUserWorkspace(
 
     // Create tenant with user as owner in a transaction
     const tenant = await db.transaction(async (tx) => {
-      const [newTenant] = await tx.insert(cpiTenants).values({
+      const [newTenant] = await tx
+        .insert(cpiTenants)
+        .values({
           name: validatedData.name,
           tenantUrl: `https://${validatedData.slug}.example.com`, // Placeholder URL
           slug: validatedData.slug,
           image: validatedData.image || undefined,
           authType: "OAUTH",
           status: "ACTIVE",
-      }).returning();
+        })
+        .returning();
 
       // Add current user as OWNER
       await tx.insert(tenantMembers).values({
-          userId: currentUser.id,
-          tenantId: newTenant.id,
-          role: "OWNER",
+        userId: currentUser.id,
+        tenantId: newTenant.id,
+        role: "OWNER",
       });
 
       return newTenant;

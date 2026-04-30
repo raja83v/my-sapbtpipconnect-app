@@ -4,3 +4,6 @@ export { IFlowConfigurationTab } from "./iflow-configuration-tab";
 export { IFlowResourcesTab } from "./iflow-resources-tab";
 export { IFlowAnalyticsTab } from "./iflow-analytics-tab";
 export { IFlowMessageLogsTab } from "./iflow-message-logs-tab";
+export { IFlowEndpointsTab } from "./iflow-endpoints-tab";
+export { IFlowTestTab } from "./iflow-test-tab";
+export { IFlowTraceTab } from "./iflow-trace-tab";

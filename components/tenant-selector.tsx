@@ -34,16 +34,20 @@ interface TenantSelectorProps {
   currentTenantId: string | null;
 }
 
-export function TenantSelector({ tenants, currentTenantId }: TenantSelectorProps) {
+export function TenantSelector({
+  tenants,
+  currentTenantId,
+}: TenantSelectorProps) {
   const { isMobile } = useSidebar();
   const router = useRouter();
   const { setCurrentTenantId } = useTenant();
   const [selectedTenantId, setSelectedTenantId] = React.useState<string | null>(
-    currentTenantId || (tenants.length > 0 ? tenants[0].id : null)
+    currentTenantId || (tenants.length > 0 ? tenants[0].id : null),
   );
   const [isUpdating, setIsUpdating] = React.useState(false);
 
-  const selectedTenant = tenants.find((t) => t.id === selectedTenantId) || tenants[0];
+  const selectedTenant =
+    tenants.find((t) => t.id === selectedTenantId) || tenants[0];
 
   const handleTenantChange = async (tenantId: string) => {
     if (tenantId === selectedTenantId) return;
@@ -152,9 +156,13 @@ export function TenantSelector({ tenants, currentTenantId }: TenantSelectorProps
                 <span
                   className={cn(
                     "size-2 rounded-full",
-                    tenant.isConnected ? "bg-green-500" : "bg-muted"
+                    tenant.isConnected ? "bg-green-500" : "bg-muted",
                   )}
+                  aria-hidden="true"
                 />
+                <span className="sr-only">
+                  {tenant.isConnected ? "Connected" : "Not connected"}
+                </span>
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
@@ -167,7 +175,9 @@ export function TenantSelector({ tenants, currentTenantId }: TenantSelectorProps
               <div className="flex size-6 items-center justify-center rounded-md border bg-background">
                 <span className="text-sm font-medium">+</span>
               </div>
-              <div className="font-medium text-muted-foreground">Add tenant</div>
+              <div className="font-medium text-muted-foreground">
+                Add tenant
+              </div>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

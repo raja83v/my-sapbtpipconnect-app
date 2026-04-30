@@ -1,0 +1,21 @@
+﻿pnpm : Decryption error details: Error: Invalid encrypted data format 
+(expected format: iv:ciphertext)
+At line:1 char:1
++ pnpm tsx scripts/_tmp_probe_logconfig.ts 2>&1 | Out-File -FilePath sc ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Decryption erro... iv:ciphertext) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    at decrypt (C:\Users\rvelayuthanp\Documents\Projects\droid\my-sapcpipconnec
+t-app\lib\encryption.ts:134:13)
+    at process.processTicksAndRejections 
+(node:internal/process/task_queues:105:5)
+    at async tryDec (C:\Users\rvelayuthanp\Documents\Projects\droid\my-sapcpipc
+onnect-app\scripts\_tmp_probe_logconfig.ts:9:16)
+    at async main (C:\Users\rvelayuthanp\Documents\Projects\droid\my-sapcpipcon
+nect-app\scripts\_tmp_probe_logconfig.ts:27:15)
+iflow: splunkLoggingTEST
+metadata status 200 len 184374
+ALL EntitySets: 0
+

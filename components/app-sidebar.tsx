@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import {
+  IconApi,
   IconChartBar,
   IconCloud,
   IconDashboard,
@@ -42,6 +43,11 @@ const data = {
       title: "iFlows",
       url: "/dashboard/iflows",
       icon: IconRoute,
+    },
+    {
+      title: "APIs",
+      url: "/dashboard/apis",
+      icon: IconApi,
     },
     {
       title: "Message Logs",

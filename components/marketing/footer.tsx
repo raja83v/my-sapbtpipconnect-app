@@ -6,10 +6,6 @@ const links = [
     group: "Product",
     items: [
       {
-        title: "Features",
-        href: "#features",
-      },
-      {
         title: "Pricing",
         href: "/#pricing",
       },
@@ -17,22 +13,22 @@ const links = [
         title: "Documentation",
         href: "/help",
       },
+      {
+        title: "Blog",
+        href: "/blog",
+      },
     ],
   },
   {
     group: "Company",
     items: [
       {
-        title: "About",
-        href: "#",
+        title: "Team",
+        href: "/team",
       },
       {
-        title: "Licence",
-        href: "#",
-      },
-      {
-        title: "Privacy",
-        href: "#",
+        title: "GitHub",
+        href: siteConfig.links.github,
       },
     ],
   },

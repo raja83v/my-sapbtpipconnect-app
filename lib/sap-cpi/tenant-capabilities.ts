@@ -1,18 +1,20 @@
 /**
  * Tenant Capabilities
- * 
+ *
  * Fetches and caches what a SAP CPI tenant supports:
  * - Available adapter types
  * - Runtime version
  * - Security materials
  * - Supported features
- * 
+ * - APIM availability
+ *
  * Used by the Architect Agent to only propose components the tenant can handle,
  * and by the Validator Agent to check compatibility.
  */
 
 import type { SAPCPIClient } from './client';
 import type { TenantCapabilities } from '@/lib/ai/orchestrator/pipeline-state';
+import { createSAPAPIMClient } from './apim-client';
 
 /**
  * Known SAP CPI adapter types. When we can't fetch live from the tenant,
@@ -83,6 +85,8 @@ export async function fetchTenantCapabilities(
     runtimeVersion: 'unknown',
     supportedFeatures: [...DEFAULT_FEATURES],
     securityMaterials: [],
+    apimEnabled: false,
+    apimProxyCount: 0,
     fetchedAt: Date.now(),
   };
 
@@ -114,6 +118,15 @@ export async function fetchTenantCapabilities(
     capabilities.securityMaterials = materials;
   } catch (err) {
     console.warn('[TenantCapabilities] Could not fetch security materials:', err);
+  }
+
+  try {
+    // Try to detect APIM availability on this tenant
+    const apimInfo = await tryDetectAPIM(sapCpiClient);
+    capabilities.apimEnabled = apimInfo.available;
+    capabilities.apimProxyCount = apimInfo.proxyCount;
+  } catch (err) {
+    console.warn('[TenantCapabilities] Could not detect APIM, assuming not available:', err);
   }
 
   return capabilities;
@@ -178,6 +191,56 @@ async function tryGetSecurityMaterials(
 }
 
 /**
+ * Detect whether SAP API Management (APIM) is available on this tenant.
+ * APIM shares the same BTP subaccount credentials as CPI but uses a different
+ * API path: /apiportal/api/1.0/Management.svc
+ *
+ * Returns availability flag and proxy count (0 if not available).
+ */
+async function tryDetectAPIM(
+  client: SAPCPIClient
+): Promise<{ available: boolean; proxyCount: number }> {
+  try {
+    // Extract the tenant URL from the CPI client credentials
+    const tenantUrl = (client as unknown as { credentials: { tenantUrl: string } }).credentials.tenantUrl;
+
+    if (!tenantUrl) {
+      return { available: false, proxyCount: 0 };
+    }
+
+    // Create a lightweight APIM client using the same credentials
+    const apimClient = createSAPAPIMClient({
+      tenantUrl,
+      authType: 'OAUTH',
+      // Credentials will be pulled from the CPI client's auth mechanism
+      // by sharing the same token via the getAuthHeader method
+      clientId: (client as any).credentials?.clientId,
+      clientSecret: (client as any).credentials?.clientSecret,
+      tokenUrl: (client as any).credentials?.tokenUrl,
+    });
+
+    // Inject the existing access token if available to avoid a second OAuth call
+    const existingToken = (client as any).accessToken;
+    if (existingToken) {
+      (apimClient as any).accessToken = existingToken;
+      (apimClient as any).tokenExpiry = (client as any).tokenExpiry;
+    }
+
+    // Silence per-request logs and 404s — APIM probe is best-effort.
+    (apimClient as unknown as { silent: boolean }).silent = true;
+
+    // Probe the APIM management endpoint with a minimal query
+    const result = await apimClient.getAPIProxies({ top: 1 });
+    const proxyCount = result.count ?? result.results.length;
+
+    return { available: true, proxyCount };
+  } catch {
+    // APIM not available or not configured on this tenant
+    return { available: false, proxyCount: 0 };
+  }
+}
+
+/**
  * Create a minimal capabilities object when we can't connect to the tenant.
  * Still allows the pipeline to proceed with default assumptions.
  */
@@ -187,6 +250,8 @@ export function getDefaultCapabilities(): TenantCapabilities {
     runtimeVersion: 'unknown',
     supportedFeatures: [...DEFAULT_FEATURES],
     securityMaterials: [],
+    apimEnabled: false,
+    apimProxyCount: 0,
     fetchedAt: Date.now(),
   };
 }

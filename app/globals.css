@@ -122,6 +122,24 @@
 }
 
 /*
+  Reduced-motion: honour the user's system preference.
+  Disable CSS animations and transitions for users who have
+  requested reduced motion (e.g. due to vestibular disorders).
+  Tailwind's animate-* utilities use these keyframes so this
+  stops animate-spin, animate-pulse, animate-bounce, etc.
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
   Radix UI ScrollArea Fix:
   Radix UI's ScrollArea internally wraps children in a div with
   `display: table; min-width: 100%`. CSS table layout computes its width
@@ -145,36 +163,41 @@
        preventing containers from growing wider than their parent */
     word-break: break-word;
   }
-  
+
   .prose pre {
     max-width: 100%;
     overflow-x: auto;
   }
-  
+
   .prose code {
     overflow-wrap: break-word;
     word-wrap: break-word;
     word-break: break-word;
   }
-  
-  .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+
+  .prose h1,
+  .prose h2,
+  .prose h3,
+  .prose h4,
+  .prose h5,
+  .prose h6 {
     overflow-wrap: break-word;
     word-wrap: break-word;
     word-break: break-word;
   }
-  
+
   .prose p {
     overflow-wrap: break-word;
     word-wrap: break-word;
     word-break: break-word;
   }
-  
+
   /* Ensure mermaid diagrams scale properly */
   .prose svg {
     max-width: 100% !important;
     height: auto !important;
   }
-  
+
   /* Prevent tables from overflowing */
   .prose table {
     display: block;

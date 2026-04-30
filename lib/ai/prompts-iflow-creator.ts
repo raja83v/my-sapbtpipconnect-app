@@ -567,6 +567,14 @@ Respond with a valid JSON object matching this comprehensive structure:
       "description": "string (what this subprocess does)"
     }
   ],
+  // STEP TYPE RULES (applies to BOTH localProcesses[].steps[] AND exceptionSubprocesses[].steps[]):
+  //   ALLOWED step.type values: "script" | "mapping" | "contentModifier" | "converter" | "xmlValidator"
+  //   FORBIDDEN as step.type:   "adapter", "requestReply", "router", "multicast", "splitter", "aggregator"
+  //   - Adapters live ONLY in the top-level "adapters" array.
+  //   - Synchronous external calls live ONLY in the top-level "requestReplies" array; inside a local/exception
+  //     subprocess, model the call by adding a "script" or "contentModifier" step that prepares headers, then
+  //     reference the top-level requestReply via the main flow rather than nesting it.
+  //   - Routers/multicasts/splitters/aggregators live ONLY in their dedicated top-level arrays.
   
   "flowDiagram": [
     {
@@ -678,16 +686,17 @@ Respond with a valid JSON object matching this comprehensive structure:
 ## JSON Output Requirements
 
 CRITICAL: Your response must be valid, parseable JSON:
-- Use double quotes for ALL strings, including strings inside Groovy/JavaScript code
-- For scriptContent: Avoid complex regex patterns with multiple backslashes
-- For scriptContent: Use ESCAPED double quotes for Groovy method string arguments: contains(\\\\":\\\\") not contains(":")
-- For scriptContent: NEVER put unescaped double quotes inside method call arguments — they break JSON parsing
-- Escape special characters properly: \\\\ for backslash, \\n for newline, \\\\" for quotes inside strings
-- Do NOT use single quotes anywhere in JSON values
-- Do NOT include comments in the JSON
-- Do NOT wrap the JSON in markdown code blocks
-- Ensure all brackets and braces are properly closed
-- Keep scripts simple - complex transformations should describe the logic, not implement complex regex
+- Use double quotes for ALL JSON keys and string values.
+- Inside Groovy/JavaScript code embedded in scriptContent, ALWAYS prefer SINGLE QUOTES for string literals — Groovy and JavaScript both accept single quotes, and this avoids the need to escape every quote and prevents JSON parse failures. Example:
+    GOOD: "scriptContent": "def code = message.getHeaders().get('CamelHttpResponseCode')"
+    BAD:  "scriptContent": "def code = message.getHeaders().get(\\"CamelHttpResponseCode\\")"
+- If you must use a double quote inside scriptContent (e.g. inside a Groovy GString or XML literal), escape it as \\".
+- Avoid complex regex patterns with multiple backslashes inside scriptContent.
+- Escape special characters properly inside JSON strings: \\ for backslash, \n for newline, \t for tab.
+- Do NOT include comments in the JSON.
+- Do NOT wrap the JSON in markdown code blocks.
+- Ensure all brackets and braces are properly closed.
+- Keep scripts focused and small — describe complex transformations rather than emitting massive scripts inline.
 
 ${catalogPatterns && catalogPatterns.length > 0 ? buildCatalogReferencePrompt(catalogPatterns) : ''}
 
