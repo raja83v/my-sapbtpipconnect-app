@@ -16,10 +16,8 @@ check_var() {
 }
 
 check_var DATABASE_URL
-check_var NEXT_PUBLIC_SUPABASE_URL
-check_var NEXT_PUBLIC_SUPABASE_ANON_KEY
-check_var SUPABASE_SERVICE_ROLE_KEY
 check_var ENCRYPTION_KEY
+check_var BETTER_AUTH_SECRET
 check_var NEXT_PUBLIC_APP_URL
 
 if [ -n "$MISSING" ]; then
@@ -31,9 +29,7 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-echo "[1/2] Running database migrations..."
-npx prisma migrate deploy
-echo "       Migrations complete."
-
-echo "[2/2] Starting CPI Connect server..."
+# Drizzle migrations are executed automatically by instrumentation.ts on
+# server startup (see lib/db/migrate.ts). No external migrate step required.
+echo "[1/1] Starting CPI Connect server..."
 exec node server.js

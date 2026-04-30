@@ -7,7 +7,7 @@
 # Usage:
 #   bash docker/setup.sh
 #
-# Prerequisites: docker, docker compose, openssl, node
+# Prerequisites: docker, docker compose, openssl
 # =============================================================================
 set -euo pipefail
 
@@ -24,36 +24,15 @@ echo ""
 # ── Check prerequisites ──────────────────────────────────────────────────
 command -v docker >/dev/null 2>&1 || { echo "ERROR: docker is required. Install from https://docs.docker.com/get-docker/"; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl is required."; exit 1; }
-command -v node >/dev/null 2>&1 || { echo "ERROR: node is required for JWT key generation."; exit 1; }
 
 # ── Generate secrets ─────────────────────────────────────────────────────
 echo "[1/4] Generating secrets..."
 
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 ENCRYPTION_KEY=$(openssl rand -base64 32)
+BETTER_AUTH_SECRET=$(openssl rand -hex 32)
 CRON_SECRET=$(openssl rand -hex 16)
 LITELLM_MASTER_KEY="sk-$(openssl rand -hex 20)"
-SUPABASE_JWT_SECRET=$(openssl rand -hex 32)
-
-# Generate Supabase ANON key
-ANON_KEY=$(node -e "
-const crypto = require('crypto');
-const h = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
-const now = Math.floor(Date.now()/1000);
-const p = Buffer.from(JSON.stringify({role:'anon',iss:'supabase',iat:now,exp:now+315360000})).toString('base64url');
-const s = crypto.createHmac('sha256','$SUPABASE_JWT_SECRET').update(h+'.'+p).digest('base64url');
-console.log(h+'.'+p+'.'+s);
-")
-
-# Generate Supabase SERVICE_ROLE key
-SERVICE_KEY=$(node -e "
-const crypto = require('crypto');
-const h = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
-const now = Math.floor(Date.now()/1000);
-const p = Buffer.from(JSON.stringify({role:'service_role',iss:'supabase',iat:now,exp:now+315360000})).toString('base64url');
-const s = crypto.createHmac('sha256','$SUPABASE_JWT_SECRET').update(h+'.'+p).digest('base64url');
-console.log(h+'.'+p+'.'+s);
-")
 
 echo "       Secrets generated."
 
@@ -76,14 +55,9 @@ cat > .env <<EOF
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_DB=cpiconnect
 
-# ── Supabase ─────────────────────────────────────────────────────────────
-SUPABASE_JWT_SECRET=$SUPABASE_JWT_SECRET
-NEXT_PUBLIC_SUPABASE_URL=http://localhost:8000
-NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY
-
 # ── Encryption & Auth ────────────────────────────────────────────────────
 ENCRYPTION_KEY=$ENCRYPTION_KEY
+BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
 CRON_SECRET=$CRON_SECRET
 
 # ── Application ──────────────────────────────────────────────────────────
@@ -92,10 +66,8 @@ NEXT_PUBLIC_DEPLOYMENT_MODE=self-hosted
 
 # ── Ports ────────────────────────────────────────────────────────────────
 APP_PORT=3000
-SUPABASE_PORT=8000
-STUDIO_PORT=3100
 LITELLM_PORT=4000
-DB_PORT=5433
+DB_PORT=5432
 
 # ── AI Provider (LiteLLM Proxy) ─────────────────────────────────────────
 AI_PROVIDER=llmlite
@@ -119,10 +91,8 @@ echo "       .env written."
 echo "[3/4] Configuration summary:"
 echo ""
 echo "  App URL:        http://localhost:3000"
-echo "  Supabase API:   http://localhost:8000"
-echo "  Supabase Studio: http://localhost:3100"
 echo "  LiteLLM Proxy:  http://localhost:4000"
-echo "  PostgreSQL:     localhost:5433"
+echo "  PostgreSQL:     localhost:5432"
 echo ""
 echo "  IMPORTANT: Edit docker/litellm-config.yaml to configure your AI models."
 echo "  IMPORTANT: Set at least one LLM API key in .env (OPENAI_API_KEY, etc.)"
@@ -130,7 +100,7 @@ echo ""
 
 # ── Start the stack ──────────────────────────────────────────────────────
 echo "[4/4] Starting CPI Connect..."
-docker compose -f docker-compose.selfhost.yml up -d
+docker compose up -d --build
 
 echo ""
 echo "============================================="
@@ -138,9 +108,9 @@ echo "  CPI Connect is starting!"
 echo "============================================="
 echo ""
 echo "  Wait 30-60 seconds for all services to initialize."
-echo "  Then open: http://localhost:3000/setup"
-echo "  to create your admin account."
+echo "  Then open: http://localhost:3000"
+echo "  to create your admin account (the first user becomes admin)."
 echo ""
-echo "  View logs:  docker compose -f docker-compose.selfhost.yml logs -f app"
-echo "  Stop:       docker compose -f docker-compose.selfhost.yml down"
+echo "  View logs:  docker compose logs -f app"
+echo "  Stop:       docker compose down"
 echo ""

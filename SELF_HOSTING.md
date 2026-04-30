@@ -1,6 +1,6 @@
 # Self-Hosting CPI Connect
 
-Deploy CPI Connect on your own infrastructure in minutes. Everything runs in Docker — no external services required.
+Deploy CPI Connect on your own infrastructure in minutes. The full stack is just three services — PostgreSQL, the Next.js app (with Better-Auth running in-process), and an optional LiteLLM proxy for AI features. Everything runs in Docker — no external services required.
 
 ---
 
@@ -24,10 +24,10 @@ Deploy CPI Connect on your own infrastructure in minutes. Everything runs in Doc
 |----------------------|--------------|
 | Docker Engine        | 24+          |
 | Docker Compose       | v2           |
-| RAM                  | 4 GB         |
-| Disk                 | 20 GB        |
+| RAM                  | 2 GB         |
+| Disk                 | 10 GB        |
 | OS                   | Linux (recommended), macOS, Windows with WSL2 |
-| Open ports           | 3000, 8000, 4000 (configurable)  |
+| Open ports           | 3000, 4000, 5432 (configurable)  |
 
 ---
 
@@ -45,10 +45,10 @@ bash docker/setup.sh
 ```
 
 The script does the following:
-- Checks Docker, openssl, and node are installed
-- Generates all secrets (database password, encryption key, JWT secret, Supabase keys, LiteLLM key)
+- Checks Docker and openssl are installed
+- Generates all secrets (database password, encryption key, Better-Auth secret, LiteLLM key, cron secret)
 - Writes a complete `.env` file
-- Starts all services via `docker compose -f docker-compose.selfhost.yml up -d`
+- Starts all services via `docker compose up -d --build`
 
 Once complete, open **http://localhost:3000** — you'll be redirected to the sign-in page. The first user to register becomes **admin**.
 
@@ -56,14 +56,11 @@ Once complete, open **http://localhost:3000** — you'll be redirected to the si
 
 | Service              | Image                                    | Port  | Purpose                         |
 |----------------------|------------------------------------------|-------|---------------------------------|
-| **app**              | `raja83v/cpiconnect:latest`              | 3000  | CPI Connect application         |
-| **supabase-kong**    | `kong:3.7`                               | 8000  | Supabase API gateway            |
-| **litellm**          | `ghcr.io/berriai/litellm:main-latest`    | 4000  | AI model proxy                  |
-| **supabase-studio**  | `supabase/studio:20240422-5cf8f30`       | 3100  | Database admin UI               |
-| **supabase-db**      | `supabase/postgres:15.8.1.060`           | 5433  | PostgreSQL database             |
-| **supabase-auth**    | `supabase/gotrue:v2.158.1`               | —     | Authentication (internal)       |
-| **supabase-rest**    | `postgrest/postgrest:v12.2.3`            | —     | REST API (internal)             |
-| **supabase-meta**    | `supabase/postgres-meta:v0.83.2`         | —     | Metadata API (internal)         |
+| **app**              | Built from `Dockerfile`                  | 3000  | Next.js app + Better-Auth (in-process) |
+| **db**               | `postgres:16-alpine`                     | 5432  | PostgreSQL database             |
+| **litellm** *(opt.)* | `ghcr.io/berriai/litellm:main-latest`    | 4000  | AI model proxy                  |
+
+> The application's authentication runs inside the Next.js process via [Better-Auth](https://better-auth.com/) — there is no separate auth container.
 
 ---
 
@@ -82,14 +79,17 @@ cp .env.example .env
 ### 2. Generate secrets
 
 ```bash
-# Generate Supabase JWT secret and keys
-bash docker/generate-supabase-keys.sh
-
-# Generate an encryption key
+# Generate an encryption key (for SAP credentials at rest)
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+# Generate a Better-Auth signing secret
+openssl rand -hex 32
 
 # Generate a database password
 openssl rand -hex 24
+
+# Generate a cron secret (optional)
+openssl rand -hex 16
 ```
 
 ### 3. Edit `.env`
@@ -98,25 +98,26 @@ Fill in the generated values:
 
 ```dotenv
 POSTGRES_PASSWORD=<generated-password>
-SUPABASE_JWT_SECRET=<from-generate-supabase-keys.sh>
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<from-generate-supabase-keys.sh>
-SUPABASE_SERVICE_ROLE_KEY=<from-generate-supabase-keys.sh>
 ENCRYPTION_KEY=<generated-encryption-key>
+BETTER_AUTH_SECRET=<generated-better-auth-secret>
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_DEPLOYMENT_MODE=self-hosted
 ```
 
 ### 4. Start the stack
 
 ```bash
-docker compose -f docker-compose.selfhost.yml up -d
+docker compose up -d --build
 ```
 
 ### 5. Verify
 
 ```bash
-docker compose -f docker-compose.selfhost.yml ps
+docker compose ps
 curl http://localhost:3000/api/health
 ```
+
+Drizzle migrations run automatically on container startup via `docker/entrypoint.sh`.
 
 ---
 
@@ -129,30 +130,30 @@ All variables are set in your `.env` file. See `.env.example` for the complete l
 | Variable                           | Description                                      |
 |------------------------------------|--------------------------------------------------|
 | `POSTGRES_PASSWORD`                | PostgreSQL password                              |
-| `SUPABASE_JWT_SECRET`              | JWT secret for Supabase auth                     |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY`    | Supabase anonymous key (derived from JWT secret) |
-| `SUPABASE_SERVICE_ROLE_KEY`        | Supabase service role key (derived from JWT secret) |
-| `ENCRYPTION_KEY`                   | AES-256 key for SAP CPI credential encryption   |
+| `ENCRYPTION_KEY`                   | AES-256 key (base64) for SAP CPI credential encryption |
+| `BETTER_AUTH_SECRET`               | High-entropy signing secret for Better-Auth sessions |
 | `NEXT_PUBLIC_APP_URL`              | Public URL of your instance                      |
 
 ### Optional Variables
 
 | Variable                           | Default      | Description                              |
-|------------------------------------|-------------|------------------------------------------|
-| `AI_PROVIDER`                      | `llmlite`   | AI provider (`llmlite` or `google`)      |
-| `LITELLM_MASTER_KEY`              | auto-generated | LiteLLM API key                        |
-| `OPENAI_API_KEY`                   | —            | OpenAI key (passed to LiteLLM)          |
-| `ANTHROPIC_API_KEY`                | —            | Anthropic key (passed to LiteLLM)       |
-| `GOOGLE_API_KEY`                   | —            | Google Gemini key (passed to LiteLLM)   |
-| `SELF_HOSTED_AI_CALLS_LIMIT`       | unlimited    | Max AI calls per month                  |
-| `SELF_HOSTED_MAX_TENANTS`          | unlimited    | Max SAP CPI tenants                     |
-| `SELF_HOSTED_MAX_IFLOWS`           | unlimited    | Max iFlows                              |
-| `SELF_HOSTED_MAX_MEMBERS`          | unlimited    | Max team members                        |
-| `APP_PORT`                         | `3000`       | App port                                |
-| `SUPABASE_PORT`                    | `8000`       | Supabase API gateway port               |
-| `LITELLM_PORT`                     | `4000`       | LiteLLM proxy port                      |
-| `STUDIO_PORT`                      | `3100`       | Supabase Studio port                    |
-| `DB_PORT`                          | `5433`       | PostgreSQL direct access port           |
+|------------------------------------|--------------|------------------------------------------|
+| `NEXT_PUBLIC_DEPLOYMENT_MODE`      | `self-hosted` | `self-hosted` or `cloud` (marketing-only) |
+| `AI_PROVIDER`                      | `llmlite`    | AI provider (`llmlite` or `google`)      |
+| `LITELLM_MASTER_KEY`               | auto-generated | LiteLLM API key                        |
+| `OPENAI_API_KEY`                   | —            | OpenAI key (passed to LiteLLM)           |
+| `ANTHROPIC_API_KEY`                | —            | Anthropic key (passed to LiteLLM)        |
+| `GOOGLE_API_KEY`                   | —            | Google Gemini key (passed to LiteLLM)    |
+| `CRON_SECRET`                      | —            | Protects `/api/cron/*` trigger endpoints |
+| `SELF_HOSTED_AI_CALLS_LIMIT`       | unlimited    | Max AI calls per month                   |
+| `SELF_HOSTED_MAX_TENANTS`          | unlimited    | Max SAP CPI tenants                      |
+| `SELF_HOSTED_MAX_IFLOWS`           | unlimited    | Max iFlows                               |
+| `SELF_HOSTED_MAX_MEMBERS`          | unlimited    | Max team members                         |
+| `APP_PORT`                         | `3000`       | App port                                 |
+| `LITELLM_PORT`                     | `4000`       | LiteLLM proxy port                       |
+| `DB_PORT`                          | `5432`       | PostgreSQL direct access port            |
+
+> **Local dev (no Docker):** when running `pnpm dev` directly, you can leave `DATABASE_URL` unset — the app auto-spawns an [`embedded-postgres`](https://www.npmjs.com/package/embedded-postgres) cluster under `.data/db/` on port `5435`. Inside Docker Compose, `DATABASE_URL` is set automatically and points at the `db` service.
 
 ---
 
@@ -221,7 +222,7 @@ model_list:
 After editing, restart LiteLLM:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml restart litellm
+docker compose restart litellm
 ```
 
 ---
@@ -231,15 +232,13 @@ docker compose -f docker-compose.selfhost.yml restart litellm
 | Port  | Service           | Configurable via   |
 |-------|-------------------|--------------------|
 | 3000  | CPI Connect App   | `APP_PORT`         |
-| 8000  | Supabase API      | `SUPABASE_PORT`    |
 | 4000  | LiteLLM Proxy     | `LITELLM_PORT`     |
-| 3100  | Supabase Studio   | `STUDIO_PORT`      |
-| 5433  | PostgreSQL        | `DB_PORT`          |
+| 5432  | PostgreSQL        | `DB_PORT`          |
 
 To change ports, update the variable in `.env` and restart:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml up -d
+docker compose up -d
 ```
 
 ---
@@ -247,12 +246,12 @@ docker compose -f docker-compose.selfhost.yml up -d
 ## Updating
 
 ```bash
-# Pull the latest images
-docker compose -f docker-compose.selfhost.yml pull
-
-# Restart (database migrations run automatically on startup)
-docker compose -f docker-compose.selfhost.yml up -d
+# Pull the latest code and rebuild
+git pull
+docker compose up -d --build
 ```
+
+Drizzle migrations run automatically on startup.
 
 ---
 
@@ -262,8 +261,7 @@ docker compose -f docker-compose.selfhost.yml up -d
 
 ```bash
 # Database dump
-docker exec -t $(docker compose -f docker-compose.selfhost.yml ps -q supabase-db) \
-  pg_dumpall -c -U postgres > backup_$(date +%F).sql
+docker compose exec -T db pg_dump -U cpiconnect cpiconnect > backup_$(date +%F).sql
 
 # Backup .env (contains your secrets)
 cp .env .env.backup
@@ -273,15 +271,13 @@ cp .env .env.backup
 
 ```bash
 # Stop the app (keep DB running)
-docker compose -f docker-compose.selfhost.yml stop app
+docker compose stop app
 
 # Restore database
-cat backup_2025-01-15.sql | docker exec -i \
-  $(docker compose -f docker-compose.selfhost.yml ps -q supabase-db) \
-  psql -U postgres
+cat backup_2026-01-15.sql | docker compose exec -T db psql -U cpiconnect cpiconnect
 
 # Restart
-docker compose -f docker-compose.selfhost.yml up -d
+docker compose up -d
 ```
 
 ---
@@ -299,7 +295,7 @@ Expected response:
 {
   "status": "ok",
   "deployment_mode": "self-hosted",
-  "timestamp": "2025-01-15T10:00:00.000Z"
+  "timestamp": "2026-01-15T10:00:00.000Z"
 }
 ```
 
@@ -307,23 +303,24 @@ Expected response:
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| App returns 503 | Database not ready | Wait for health checks; check `docker compose logs supabase-db` |
-| `invalid JWT` errors | Supabase keys don't match JWT secret | Regenerate keys: `bash docker/generate-supabase-keys.sh` and update `.env` |
-| LiteLLM returns errors | No API key configured | Set at least one provider key in `.env` and restart |
-| Port already in use | Another service on that port | Change the port in `.env` (e.g., `APP_PORT=3001`) |
-| Login fails | GoTrue not ready | Check `docker compose logs supabase-auth` |
-| Migrations fail on start | Database schema conflict | Check `docker compose logs app` for details |
+| App returns 503 on startup | Database not ready | Wait for the `db` health check; check `docker compose logs db` |
+| `Missing required env: BETTER_AUTH_SECRET` | Secret not set | Generate with `openssl rand -hex 32` and add to `.env`, then restart |
+| `Missing required env: ENCRYPTION_KEY` | Encryption key not set | Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+| LiteLLM returns errors | No API key configured | Set at least one provider key in `.env` and restart `litellm` |
+| Port already in use | Another service on that port | Change the port in `.env` (e.g., `APP_PORT=3001`) and `docker compose up -d` |
+| Migrations fail on start | Database schema conflict | Check `docker compose logs app` for details; fix or drop the conflicting tables |
+| Cannot sign in after restore | `BETTER_AUTH_SECRET` was rotated | Existing session cookies are now invalid — clear cookies and sign in again |
 
 ### View Logs
 
 ```bash
 # All services
-docker compose -f docker-compose.selfhost.yml logs -f
+docker compose logs -f
 
 # Specific service
-docker compose -f docker-compose.selfhost.yml logs -f app
-docker compose -f docker-compose.selfhost.yml logs -f supabase-auth
-docker compose -f docker-compose.selfhost.yml logs -f litellm
+docker compose logs -f app
+docker compose logs -f db
+docker compose logs -f litellm
 ```
 
 ### Reset Everything
@@ -331,7 +328,7 @@ docker compose -f docker-compose.selfhost.yml logs -f litellm
 > **Warning:** This deletes all data.
 
 ```bash
-docker compose -f docker-compose.selfhost.yml down -v
+docker compose down -v
 # Re-run setup
 bash docker/setup.sh
 ```
