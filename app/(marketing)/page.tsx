@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 
 import { Container } from "@/components/marketing/container";
+import { ProductTour } from "@/components/marketing/product-tour";
 import { siteConfig } from "@/lib/config";
 import { isCloudMode } from "@/lib/deployment";
 
@@ -250,6 +251,9 @@ export default function Home() {
           </div>
         </Container>
       </section>
+
+      {/* Product Tour Section */}
+      <ProductTour />
 
       {/* Why CPI Connect Section */}
       <section id="why-cpi-connect" className="py-12 sm:py-16 bg-muted/50">

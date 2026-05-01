@@ -1,9 +1,84 @@
 import EmbeddedPostgres from "embedded-postgres";
 import path from "path";
 import fs from "fs";
+import { execSync } from "child_process";
+import { logger } from "@/lib/logger";
 
 let embeddedInstance: EmbeddedPostgres | null = null;
 let isStarted = false;
+
+/**
+ * Check whether a process with the given PID is currently alive.
+ */
+function isProcessAlive(pid: number): boolean {
+  if (!pid || Number.isNaN(pid)) return false;
+  try {
+    // Signal 0 is a no-op probe; throws if the process doesn't exist
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect and clean up an orphaned embedded-postgres cluster left behind
+ * when the parent Node process was killed without a graceful shutdown.
+ *
+ * Looks at `postmaster.pid` in the data dir: if the recorded PID is dead
+ * (or belongs to a stale cluster), remove the lock file and forcibly kill
+ * any orphan postgres workers still listening on the configured port so
+ * the next start can re-use it.
+ */
+function cleanupStalePostgres(dataDir: string, port: number): void {
+  const pidFile = path.join(dataDir, "postmaster.pid");
+  if (!fs.existsSync(pidFile)) return;
+
+  let postmasterPid = 0;
+  try {
+    const firstLine = fs.readFileSync(pidFile, "utf8").split("\n")[0]?.trim();
+    postmasterPid = parseInt(firstLine || "0", 10);
+  } catch {
+    // unreadable — treat as stale
+  }
+
+  const stale = !postmasterPid || !isProcessAlive(postmasterPid);
+  if (!stale) return;
+
+  logger.debug(
+    `[embedded-postgres] Found stale postmaster.pid (pid=${postmasterPid}); cleaning up`,
+  );
+
+  // Kill any orphan postgres.exe workers that may still be holding the port.
+  // embedded-postgres spawns child workers (io_worker, etc.) that can outlive
+  // the parent if the Node process was SIGKILLed.
+  try {
+    if (process.platform === "win32") {
+      execSync(
+        `wmic process where "name='postgres.exe' and commandline like '%%${dataDir.replace(/\\/g, "\\\\").replace(/'/g, "''")}%%'" call terminate`,
+        { stdio: "ignore" },
+      );
+    } else {
+      execSync(`pkill -f "postgres.*${dataDir}" || true`, { stdio: "ignore" });
+    }
+  } catch {
+    // best-effort
+  }
+
+  try {
+    fs.unlinkSync(pidFile);
+  } catch {
+    // ignore — embedded-postgres may also clean it up
+  }
+
+  // Also remove unix socket lock file if present (no-op on Windows)
+  try {
+    const sockLock = path.join(dataDir, `.s.PGSQL.${port}.lock`);
+    if (fs.existsSync(sockLock)) fs.unlinkSync(sockLock);
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * Get the data directory for embedded postgres.
@@ -67,16 +142,19 @@ export async function ensureDatabase(): Promise<string> {
   const dataDir = getDataDir();
   const preferredPort = parseInt(process.env.EMBEDDED_PG_PORT || "5435", 10);
 
-  console.log("[embedded-postgres] Starting embedded PostgreSQL...");
-  console.log(`[embedded-postgres] Data directory: ${dataDir}`);
+  logger.debug("[embedded-postgres] Starting embedded PostgreSQL...");
+  logger.debug(`[embedded-postgres] Data directory: ${dataDir}`);
 
   // Ensure data directory exists
   fs.mkdirSync(dataDir, { recursive: true });
 
+  // Clean up any stale postmaster.pid / orphan workers from a prior crash
+  cleanupStalePostgres(dataDir, preferredPort);
+
   // Find available port
   const port = await findFreePort(preferredPort);
   if (port !== preferredPort) {
-    console.log(`[embedded-postgres] Port ${preferredPort} busy, using ${port}`);
+    logger.debug(`[embedded-postgres] Port ${preferredPort} busy, using ${port}`);
   }
 
   embeddedInstance = new EmbeddedPostgres({
@@ -86,13 +164,13 @@ export async function ensureDatabase(): Promise<string> {
     port,
     persistent: true,
     initdbFlags: ["--encoding=UTF8", "--locale=C", "--lc-messages=C"],
-    onLog: (msg: string) => {
+    onLog: (msg: unknown) => {
       if (process.env.EMBEDDED_PG_VERBOSE === "true") {
-        console.log(`[embedded-postgres] ${msg}`);
+        logger.debug(`[embedded-postgres] ${String(msg)}`);
       }
     },
-    onError: (msg: string) => {
-      console.error(`[embedded-postgres] ERROR: ${msg}`);
+    onError: (msg: unknown) => {
+      logger.error(`[embedded-postgres] ERROR: ${String(msg)}`);
     },
   });
 
@@ -100,7 +178,7 @@ export async function ensureDatabase(): Promise<string> {
     // Check if cluster already exists
     const pgVersionFile = path.join(dataDir, "PG_VERSION");
     if (!fs.existsSync(pgVersionFile)) {
-      console.log("[embedded-postgres] Initialising new database cluster...");
+      logger.debug("[embedded-postgres] Initialising new database cluster...");
       await embeddedInstance.initialise();
     }
 
@@ -116,10 +194,10 @@ export async function ensureDatabase(): Promise<string> {
     const connectionString = buildConnectionString(port);
     process.env.DATABASE_URL = connectionString;
 
-    console.log(`[embedded-postgres] Ready on port ${port}`);
+    logger.debug(`[embedded-postgres] Ready on port ${port}`);
     return connectionString;
   } catch (error) {
-    console.error("[embedded-postgres] Failed to start:", error);
+    logger.error("[embedded-postgres] Failed to start:", error);
     throw error;
   }
 }
@@ -135,7 +213,7 @@ async function ensureAppDatabase(port: number): Promise<void> {
     const result = await sql`SELECT 1 FROM pg_database WHERE datname = 'app'`;
     if (result.length === 0) {
       await sql`CREATE DATABASE app ENCODING 'UTF8'`;
-      console.log("[embedded-postgres] Created 'app' database");
+      logger.debug("[embedded-postgres] Created 'app' database");
     }
   } finally {
     await sql.end();
@@ -147,7 +225,7 @@ async function ensureAppDatabase(port: number): Promise<void> {
  */
 export async function stopEmbeddedPostgres(): Promise<void> {
   if (embeddedInstance && isStarted) {
-    console.log("[embedded-postgres] Shutting down...");
+    logger.debug("[embedded-postgres] Shutting down...");
     try {
       await embeddedInstance.stop();
     } catch {
@@ -158,11 +236,32 @@ export async function stopEmbeddedPostgres(): Promise<void> {
   }
 }
 
-// Register shutdown handlers
+// Register shutdown handlers. We must await stop() before exiting so that
+// embedded-postgres can send `pg_ctl stop -m fast` and reap its workers —
+// otherwise orphan postgres.exe processes keep the port bound.
 if (typeof process !== "undefined") {
-  const shutdown = () => {
-    stopEmbeddedPostgres().catch(console.error);
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      await stopEmbeddedPostgres();
+    } catch (err) {
+      logger.error("Failed to stop embedded postgres", err);
+    } finally {
+      // Re-raise default behaviour so the parent (e.g. pnpm/Next.js) exits
+      // with the expected code.
+      process.exit(signal === "SIGINT" ? 130 : 0);
+    }
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGHUP", () => void shutdown("SIGHUP"));
+  // Windows: Ctrl+Break
+  process.once("SIGBREAK" as NodeJS.Signals, () => void shutdown("SIGBREAK"));
+  // Best-effort sync stop on uncaught fatal errors
+  process.on("uncaughtException", (err) => {
+    logger.error("uncaughtException; stopping embedded postgres", err);
+    void shutdown("uncaughtException");
+  });
 }

@@ -14,6 +14,8 @@ slug: what-is-cpi-connect
 
 CPI Connect is an **open-source observability and AI co-pilot platform for SAP Cloud Platform Integration**. You self-host it next to your CPI tenants and get one place to monitor iFlows, debug failures, design new integrations, and document the ones already in production.
 
+![CPI Connect dashboard — at a glance health for every connected tenant](/screenshots/dashboard.png)
+
 It is licensed under **AGPL-3.0** and there is no SaaS edition. Everything ships in the repo.
 
 <Note variant="info">
@@ -25,12 +27,29 @@ It is licensed under **AGPL-3.0** and there is no SaaS edition. Everything ships
 ## What can I do with CPI Connect?
 
 - **Monitor iFlows in real time** — execution counts, failure rates, latency, and the last *N* messages with full payload inspection.
+
+  ![iFlow workspace with execution history](/screenshots/iflows.png)
+
 - **Diagnose failures with AI** — point an LLM at a failed Message Processing Log and get a grounded root-cause explanation, not a hallucination.
+
+  ![AI Agents workspace](/screenshots/ai-agents.png)
+
 - **Generate iFlows from a brief** — describe what you need (sender system, target, mapping, error handling) and the planner / specialist agents emit a working `.iflw`.
 - **Edit iFlows in the Studio** — visual editor that round-trips with SAP-compatible BPMN2.
 - **Document iFlows automatically** — produce a 13-section `.docx` (with TOC, tables, code blocks, Mermaid diagrams) per iFlow.
 - **Inspect API Management** — proxies, traffic, error breakdowns, and message-level details for the APIM add-on.
+
+  ![APIs dashboard](/screenshots/apis.png)
+
 - **Use it from your editor** — the bundled MCP server exposes the same capabilities to any MCP-aware AI assistant (Claude, Cursor, Copilot, …).
+
+## Unified message logs and analytics
+
+Every CPI and APIM message lands in the same searchable timeline, and the analytics workspace turns those events into trends you can act on.
+
+![Message logs across CPI and APIM](/screenshots/message-logs.png)
+
+![Analytics dashboard with trends and success rates](/screenshots/analytics.png)
 
 ## Who uses CPI Connect?
 

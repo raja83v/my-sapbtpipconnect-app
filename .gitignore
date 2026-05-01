@@ -29,6 +29,21 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+debug.log
+*.log
+
+# editor / agent state
+.kilo/
+.claude/
+
+# in-progress design docs (not shipped)
+plans/
+
+# scratch
+scripts/_tmp_*
+
+# embedded postgres data dir (do not commit cluster state)
+.data/
 
 # env files (can opt-in for committing if needed)
 .env*
