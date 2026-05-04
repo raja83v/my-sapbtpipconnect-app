@@ -36,6 +36,10 @@ debug.log
 .kilo/
 .claude/
 
+# Symphony runtime state
+symphony-workspaces/
+symphony-logs/
+
 # in-progress design docs (not shipped)
 plans/
 

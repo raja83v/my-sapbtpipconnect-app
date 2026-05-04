@@ -134,6 +134,21 @@ export function cleanAIJson(rawText: string): string {
     return `"scriptContent": "${fixed}"`;
   });
 
+  // 11: Final safety net — escape any remaining unescaped quotes inside JSON
+  // string values (e.g. Groovy literals like `props.get("RETRY_COUNT")` that
+  // the regexes above missed because too many similar patterns share a line).
+  // The state machine is parse-state aware so it cannot break already-valid
+  // structural quotes.
+  try {
+    const candidate = fixUnescapedQuotesStateMachine(json);
+    // Only adopt it if it parses; otherwise the original output goes through
+    // to the agent-level repair pipeline.
+    JSON.parse(candidate);
+    json = candidate;
+  } catch {
+    // leave json as-is; downstream repair will handle it
+  }
+
   return json;
 }
 

@@ -20,7 +20,12 @@ import type {
 } from '../pipeline-state';
 import { createIFlowDesignPrompt, IFLOW_CREATOR_SYSTEM_PROMPT } from '@/lib/ai/prompts-iflow-creator';
 import type { IFlowDescription, IFlowDesign } from '@/components/ai/v2/specialized/iflow-creator/types';
-import { cleanAIJson, fixUnescapedQuotesStateMachine, tryFixAtPosition } from '../utils/json-cleaner';
+import {
+  cleanAIJson,
+  fixUnescapedQuotesStateMachine,
+  parseAIJson,
+  tryFixAtPosition,
+} from '../utils/json-cleaner';
 import { runText } from '@/lib/ai/runtime/text';
 
 // ============================================================================
@@ -258,6 +263,17 @@ function buildIntegratorSection(
 // ============================================================================
 
 function parseDesignResponse(text: string): IFlowDesign {
+  // Step 0: Try the deterministic cascade first. It runs the state-machine
+  // quote fixer on the freshly-extracted root JSON BEFORE any aggressive
+  // regex munging, which correctly recovers Groovy strings like
+  // `props.get("RETRY_COUNT")` that the regex pipeline can miss when many
+  // similar patterns appear in one scriptContent value.
+  try {
+    return parseAIJson<IFlowDesign>(text);
+  } catch {
+    // Fall through to the legacy repair pipeline below.
+  }
+
   // Step 1: Clean & extract JSON from the raw AI text
   let json = cleanAIJson(text);
 
