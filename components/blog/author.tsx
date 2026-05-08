@@ -43,14 +43,7 @@ export default function Author({
       className="rounded-full transition-all group-hover:brightness-90"
     />
   ) : updatedAt ? (
-    <div className="flex items-center space-x-3">
-      <BlurImage
-        src={authors[username].image}
-        alt={authors[username].name}
-        width={36}
-        height={36}
-        className="rounded-full"
-      />
+    <div className="flex items-center">
       <div className="flex flex-col">
         <p className="text-sm text-warm-white/80">
           Written by {authors[username].name}

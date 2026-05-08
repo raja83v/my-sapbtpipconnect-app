@@ -66,7 +66,7 @@ export async function runText(request: AITextRequest): Promise<AITextResponse> {
       system: request.system,
       prompt: request.prompt,
       temperature: request.temperature,
-      maxTokens: request.maxTokens,
+      maxOutputTokens: request.maxTokens,
     });
     return {
       text: result.text,

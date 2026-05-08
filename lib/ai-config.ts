@@ -245,7 +245,7 @@ export async function testAIConnection(
         await generateText({
           model: anthropic(model || "claude-sonnet-4-20250514"),
           prompt: "Say hi",
-          maxTokens: 5,
+          maxOutputTokens: 5,
         });
         return { success: true };
       }
@@ -257,7 +257,7 @@ export async function testAIConnection(
         await generateText({
           model: google(model || "gemini-2.5-flash"),
           prompt: "Say hi",
-          maxTokens: 5,
+          maxOutputTokens: 5,
         });
         return { success: true };
       }

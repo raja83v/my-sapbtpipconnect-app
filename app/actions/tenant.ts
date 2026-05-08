@@ -18,6 +18,36 @@ const EXECUTION_SYNC_CONFIG = {
   batchSize: 50,
 };
 
+type SAPMessageProcessingLog = {
+  LogStart?: unknown;
+  LogEnd?: unknown;
+  Status?: string;
+  MessageGuid?: string;
+  MessageId?: string;
+  IntegrationFlowName?: string;
+  IntegrationArtifact?: {
+    Id?: string;
+    Type?: string;
+  };
+  Sender?: string;
+  Receiver?: string;
+  ErrorMessage?: string | null;
+};
+
+type ExecutionLogInsert = {
+  messageId: string;
+  status: "COMPLETED" | "FAILED" | "PROCESSING" | "RETRY" | "SKIPPED";
+  startTime: Date;
+  endTime: Date | null;
+  duration: number | null;
+  sender?: string;
+  receiver?: string;
+  interfaceType?: string;
+  errorMessage?: string;
+  errorCategory: "SYSTEM" | "NETWORK" | "MAPPING" | "SECURITY" | "TIMEOUT" | "BUSINESS_LOGIC" | "UNKNOWN" | null;
+  iFlowId: string;
+};
+
 export interface TenantWithRole {
   id: string;
   name: string;
@@ -573,10 +603,11 @@ export async function syncTenantExecutions(
   const {
     daysBack = EXECUTION_SYNC_CONFIG.daysToSync,
     silent = false,
-    maxLogs = 500
+    maxLogs = 5000
   } = options;
 
   let totalSynced = 0;
+  void silent;
 
   try {
     // Get all iFlows for this tenant
@@ -612,37 +643,69 @@ export async function syncTenantExecutions(
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - daysBack);
 
-    // Fetch ALL message logs in ONE API call
-    const logsUrl = `${tenantUrl}/api/v1/MessageProcessingLogs?$format=json&$orderby=LogEnd desc&$top=${maxLogs}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000);
-
-    const logsResponse = await fetch(logsUrl, {
-      method: "GET",
-      headers: {
-        "Authorization": authHeader,
-        "Accept": "application/json",
-      },
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!logsResponse.ok) {
-      const errorText = await logsResponse.text().catch(() => "Unknown error");
-      return { synced: 0, errors: 1 };
+    if (maxLogs <= 0) {
+      return { synced: 0, errors: 0 };
     }
 
-    const logsData = await logsResponse.json();
-    const allLogs = logsData.d?.results || [];
+    const now = new Date();
+    const firstDay = new Date(Date.UTC(
+      sinceDate.getUTCFullYear(),
+      sinceDate.getUTCMonth(),
+      sinceDate.getUTCDate(),
+    ));
+    const pageSize = Math.min(500, maxLogs);
+    const allLogs: SAPMessageProcessingLog[] = [];
+
+    for (const dayStart = new Date(firstDay); dayStart < now; dayStart.setUTCDate(dayStart.getUTCDate() + 1)) {
+      const dayEnd = new Date(dayStart);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+
+      const fromDateStr = dayStart.toISOString().split(".")[0];
+      const toDateStr = (dayEnd < now ? dayEnd : now).toISOString().split(".")[0];
+      const filterQuery = `LogStart ge datetime'${fromDateStr}' and LogStart lt datetime'${toDateStr}'`;
+      let fetchedForDay = 0;
+
+      for (let skip = 0; skip < maxLogs; skip += pageSize) {
+        const top = Math.min(pageSize, maxLogs - fetchedForDay);
+        const logsUrl = `${tenantUrl}/api/v1/MessageProcessingLogs?$format=json&$orderby=LogStart desc&$filter=${encodeURIComponent(filterQuery)}&$top=${top}&$skip=${skip}`;
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+        const logsResponse = await fetch(logsUrl, {
+          method: "GET",
+          headers: {
+            "Authorization": authHeader,
+            "Accept": "application/json",
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!logsResponse.ok) {
+          return { synced: totalSynced, errors: 1 };
+        }
+
+        const logsData = (await logsResponse.json()) as {
+          d?: { results?: SAPMessageProcessingLog[] };
+        };
+        const pageLogs = logsData.d?.results || [];
+        allLogs.push(...pageLogs);
+        fetchedForDay += pageLogs.length;
+
+        if (pageLogs.length < top || fetchedForDay >= maxLogs) {
+          break;
+        }
+      }
+    }
 
     if (allLogs.length === 0) {
       return { synced: 0, errors: 0 };
     }
 
     // Helper to parse SAP OData date format
-    const parseSAPDate = (dateValue: any): Date | null => {
+    const parseSAPDate = (dateValue: unknown): Date | null => {
       if (!dateValue) return null;
       if (typeof dateValue === 'string') {
         const odataMatch = dateValue.match(/\/Date\((\d+)\)\//);
@@ -655,7 +718,7 @@ export async function syncTenantExecutions(
     };
 
     // Process and filter logs
-    const logsToInsert: any[] = [];
+    const logsToInsert: ExecutionLogInsert[] = [];
     const iFlowLastExecuted = new Map<string, Date>();
 
     for (const log of allLogs) {
@@ -676,7 +739,7 @@ export async function syncTenantExecutions(
 
       logsToInsert.push({
         messageId,
-        status: mapExecutionStatus(log.Status),
+        status: mapExecutionStatus(log.Status ?? ""),
         startTime,
         endTime,
         duration,
@@ -684,7 +747,7 @@ export async function syncTenantExecutions(
         receiver: log.Receiver || undefined,
         interfaceType: log.IntegrationArtifact?.Type || undefined,
         errorMessage: log.Status?.toUpperCase() === "FAILED" ? (log.ErrorMessage || "Error occurred") : undefined,
-        errorCategory: log.Status?.toUpperCase() === "FAILED" ? categorizeError(log.ErrorMessage) : undefined,
+        errorCategory: log.Status?.toUpperCase() === "FAILED" ? categorizeError(log.ErrorMessage ?? null) : null,
         iFlowId: iflowMatch.id,
       });
 

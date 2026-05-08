@@ -61,7 +61,7 @@
     "@tabler/icons-react": "^3.35.0",
     "@tanstack/react-table": "^8.21.3",
     "adm-zip": "^0.5.16",
-    "ai": "^5.0.102",
+    "ai": "^6.0.0",
     "better-auth": "^1.6.9",
     "bpmn-js": "^17.11.1",
     "bpmn-moddle": "^9.0.1",

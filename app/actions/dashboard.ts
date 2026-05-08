@@ -246,6 +246,27 @@ export async function getDashboardData(): Promise<ActionResult<DashboardData>> {
     const iFlowMap = new Map(allIFlowIds.map((i) => [i.id, i]));
     const tenantMap = new Map(filteredMemberships.map((m) => [m.tenantId, m.tenant.name]));
 
+    // Populate execution trend map for last 7 days
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const trendExecs = allIFlowIds.length > 0
+      ? await db.select({
+          startTime: iFlowExecutions.startTime,
+          status: iFlowExecutions.status,
+        }).from(iFlowExecutions)
+          .where(and(
+            inArray(iFlowExecutions.iFlowId, allIFlowIds.map((i) => i.id)),
+            gte(iFlowExecutions.startTime, sevenDaysAgo),
+          ))
+      : [];
+
+    for (const exec of trendExecs) {
+      const dateStr = exec.startTime.toISOString().split("T")[0];
+      const entry = executionTrendMap.get(dateStr) ?? { success: 0, failed: 0 };
+      if (exec.status === "COMPLETED") entry.success++;
+      else if (exec.status === "FAILED") entry.failed++;
+      executionTrendMap.set(dateStr, entry);
+    }
+
     const recentExecs = allIFlowIds.length > 0
       ? await db.select().from(iFlowExecutions)
           .where(inArray(iFlowExecutions.iFlowId, allIFlowIds.map((i) => i.id)))
