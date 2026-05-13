@@ -742,11 +742,15 @@ async function cacheFailedMessages(
             if (existing) continue;
 
             // Cache the failed execution
+            const startMs = parseSAPDate(log.logStart);
+            const endMs = log.logEnd ? parseSAPDate(log.logEnd) : null;
+            if (!startMs) continue; // Skip if we can't parse the start time
+
             await db.insert(iFlowExecutions).values({
                 messageId: log.messageGuid,
                 status: "FAILED",
-                startTime: new Date(log.logStart),
-                endTime: log.logEnd ? new Date(log.logEnd) : undefined,
+                startTime: new Date(startMs),
+                endTime: endMs ? new Date(endMs) : undefined,
                 duration: log.duration || undefined,
                 sender: log.sender || undefined,
                 receiver: log.receiver || undefined,
