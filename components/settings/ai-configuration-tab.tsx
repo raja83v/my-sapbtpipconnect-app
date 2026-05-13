@@ -38,7 +38,6 @@ interface ProviderOption {
   description: string;
   recommended?: boolean;
   requiresBaseUrl: boolean;
-  models: { value: string; label: string; recommended?: boolean }[];
 }
 
 const providers: ProviderOption[] = [
@@ -48,47 +47,24 @@ const providers: ProviderOption[] = [
     description: "OpenAI-compatible proxy supporting 100+ models.",
     recommended: true,
     requiresBaseUrl: true,
-    models: [
-      { value: "gpt-4.1-mini", label: "GPT-4.1 Mini", recommended: true },
-      { value: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
-      { value: "gpt-4.1", label: "GPT-4.1" },
-      { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-      { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-    ],
   },
   {
     id: "openai",
     label: "OpenAI",
     description: "Direct OpenAI API.",
     requiresBaseUrl: false,
-    models: [
-      { value: "gpt-4.1-mini", label: "GPT-4.1 Mini", recommended: true },
-      { value: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
-      { value: "gpt-4.1", label: "GPT-4.1" },
-      { value: "o4-mini", label: "o4-mini" },
-    ],
   },
   {
     id: "claude",
     label: "Claude (Anthropic)",
     description: "Direct Anthropic API.",
     requiresBaseUrl: false,
-    models: [
-      { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4", recommended: true },
-      { value: "claude-opus-4-20250514", label: "Claude Opus 4" },
-      { value: "claude-haiku-4-20250514", label: "Claude Haiku 4" },
-    ],
   },
   {
     id: "gemini",
     label: "Gemini (Google)",
     description: "Google AI SDK.",
     requiresBaseUrl: false,
-    models: [
-      { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash", recommended: true },
-      { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-      { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
-    ],
   },
 ];
 
@@ -118,8 +94,8 @@ export function AIConfigurationTab() {
   const [fetchedModels, setFetchedModels] = useState<{ value: string; label: string }[] | null>(null);
 
   const provider = providers.find((p) => p.id === selectedProvider);
-  // For LiteLLM, only show models after a successful test; other providers use their known model lists
-  const availableModels = fetchedModels || (provider && !provider.requiresBaseUrl ? provider.models : []);
+  // Models are always fetched dynamically after a successful "Test Connection"
+  const availableModels: { value: string; label: string }[] = fetchedModels || [];
 
   useEffect(() => {
     async function loadConfig() {
@@ -155,15 +131,7 @@ export function AIConfigurationTab() {
     setBaseUrl("");
     setTestResult(null);
     setFetchedModels(null);
-    // For providers with known model lists, pre-select the recommended model
-    // For LiteLLM (requiresBaseUrl), leave empty until test fetches models
-    const p = providers.find((pr) => pr.id === id);
-    if (p && !p.requiresBaseUrl) {
-      const defaultModel = p.models.find((m) => m.recommended)?.value || p.models[0]?.value || "";
-      setSelectedModel(defaultModel);
-    } else {
-      setSelectedModel("");
-    }
+    setSelectedModel("");
   };
 
   const handleTest = async () => {
@@ -382,11 +350,11 @@ export function AIConfigurationTab() {
                 <p className="text-xs text-muted-foreground">
                   {fetchedModels.length} model{fetchedModels.length !== 1 ? "s" : ""} available from your provider
                 </p>
-              ) : provider.requiresBaseUrl ? (
+              ) : (
                 <p className="text-xs text-muted-foreground">
-                  Click &ldquo;Test&rdquo; to fetch available models
+                  Enter your API key and click &ldquo;Test&rdquo; to fetch available models
                 </p>
-              ) : null}
+              )}
             </div>
 
             {/* Test + Actions */}

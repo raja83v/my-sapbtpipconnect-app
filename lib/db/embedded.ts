@@ -178,7 +178,18 @@ export async function ensureDatabase(): Promise<string> {
     // Check if cluster already exists
     const pgVersionFile = path.join(dataDir, "PG_VERSION");
     if (!fs.existsSync(pgVersionFile)) {
-      logger.debug("[embedded-postgres] Initialising new database cluster...");
+      // If the data directory exists but has no PG_VERSION, it's a stale/corrupt
+      // cluster. Remove its contents so initdb can start fresh.
+      const entries = fs.readdirSync(dataDir);
+      if (entries.length > 0) {
+        logger.debug(
+          "[embedded-postgres] Data directory exists but has no PG_VERSION; cleaning stale cluster…",
+        );
+        fs.rmSync(dataDir, { recursive: true, force: true });
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+
+      logger.debug("[embedded-postgres] Initialising new database cluster…");
       await embeddedInstance.initialise();
     }
 
@@ -197,8 +208,14 @@ export async function ensureDatabase(): Promise<string> {
     logger.debug(`[embedded-postgres] Ready on port ${port}`);
     return connectionString;
   } catch (error) {
-    logger.error("[embedded-postgres] Failed to start:", error);
-    throw error;
+    // embedded-postgres rejects with a plain string, not an Error object.
+    // Wrap it so downstream code can safely access .message / .stack.
+    const wrapped =
+      error instanceof Error
+        ? error
+        : new Error(typeof error === "string" ? error : String(error));
+    logger.error("[embedded-postgres] Failed to start:", wrapped);
+    throw wrapped;
   }
 }
 
