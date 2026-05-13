@@ -801,6 +801,10 @@ export function OnboardingFlowCpi({ userName, userEmail }: OnboardingFlowProps) 
                     <p>✓ Ready to monitor iFlows</p>
                     <p>✓ Real-time alerts enabled</p>
                   </div>
+                  <div className="flex items-center gap-2 ml-8 pt-1 text-xs text-muted-foreground">
+                    <IconLoader2 className="h-3 w-3 animate-spin" />
+                    <span>Syncing your iFlows and execution data…</span>
+                  </div>
                 </div>
 
                 <Button asChild size="lg" className="w-full">

@@ -280,6 +280,8 @@ export async function saveTenantConfig(data: OnboardingData) {
 
 /**
  * Mark onboarding as complete. Called after the AI config step (or skip).
+ * Also triggers an initial data sync for the user's default tenant so the
+ * dashboard has data ready when they first land on it.
  */
 export async function finalizeOnboarding() {
   try {
@@ -301,6 +303,29 @@ export async function finalizeOnboarding() {
         completedAt: new Date().toISOString(),
       },
     }).where(eq(users.id, currentUser.id));
+
+    // Fire-and-forget: trigger initial sync for the user's tenant so the
+    // dashboard has data when they first visit it. We don't await this —
+    // the sync runs in the background while the user sees the success screen.
+    const defaultTenantId = user?.defaultTenantId || currentUser.defaultTenantId;
+    if (defaultTenantId) {
+      import("./tenant")
+        .then(({ syncTenantIFlows }) =>
+          syncTenantIFlows(defaultTenantId, { syncExecutions: true }),
+        )
+        .then((result) => {
+          if (result.success) {
+            console.log(
+              `[Onboarding] Initial sync completed: ${result.data?.count} iFlows, ${result.data?.executionsSynced} executions`,
+            );
+          } else {
+            console.warn("[Onboarding] Initial sync failed:", result.error);
+          }
+        })
+        .catch((err) => {
+          console.warn("[Onboarding] Initial sync error:", err);
+        });
+    }
 
     return { success: true };
   } catch (error) {
