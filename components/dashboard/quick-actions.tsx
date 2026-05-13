@@ -78,12 +78,19 @@ export function QuickActions({ tenantIds = [] }: QuickActionsProps) {
       let totalExecutions = 0;
       
       for (const tenantId of tenantIds) {
-        const result = await syncTenantIFlows(tenantId, { syncExecutions: true });
-        if (result.success && result.data) {
-          successCount++;
-          totalExecutions += result.data.executionsSynced || 0;
+        try {
+          const result = await syncTenantIFlows(tenantId, { syncExecutions: true });
+          if (result.success && result.data) {
+            successCount++;
+            totalExecutions += result.data.executionsSynced || 0;
+          }
+        } catch (err) {
+          console.warn(`[Sync] Tenant ${tenantId} failed:`, err);
         }
       }
+
+      // Always stop the spinner before refreshing
+      setIsSyncing(false);
 
       if (successCount > 0) {
         toast.success("Sync completed", {
@@ -97,11 +104,10 @@ export function QuickActions({ tenantIds = [] }: QuickActionsProps) {
         });
       }
     } catch (error) {
+      setIsSyncing(false);
       toast.error("Sync error", {
         description: error instanceof Error ? error.message : "Failed to sync",
       });
-    } finally {
-      setIsSyncing(false);
     }
   };
 
